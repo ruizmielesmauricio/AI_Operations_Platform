@@ -7,6 +7,28 @@ Author:
 Last Updated:
 
 ---
+## Document Contract
+
+**Purpose**
+Defines the company's principles and decision-making framework.
+
+**Audience**
+- Founder
+- Employees
+- Investors
+- Engineers
+
+**Out of Scope**
+- Product features
+- Technical implementation
+- Pricing
+- Infrastructure
+- Deployment
+
+**Related Documents**
+- 01_Project_Vision.md
+- 12_Architecture_Decision_Log.md
+---
 
 # Executive Summary (TL;DR)
 
