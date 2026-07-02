@@ -1,0 +1,94 @@
+# Document Title
+
+Version:
+Status:
+Phase:
+Author:
+Last Updated:
+
+---
+
+# Executive Summary (TL;DR)
+
+*A two-minute explanation for anyone.*
+
+---
+
+# Problem Statement
+
+What problem are we solving?
+
+---
+
+# Business Perspective
+
+Why does this matter to our customers?
+
+---
+
+# Customer Perspective
+
+How does this improve the customer's business?
+
+---
+
+# Technical Perspective
+
+How will we build it?
+
+---
+
+# Commercial Perspective
+
+Why is this commercially viable?
+
+---
+
+# Architecture
+
+(Diagrams if applicable)
+
+---
+
+# Current Decisions
+
+What have we decided?
+
+---
+
+# Why This Decision?
+
+Decision:
+Reason:
+Alternatives Considered:
+Future Review Criteria:
+
+---
+
+# Risks
+
+Known risks and mitigation strategies.
+
+---
+
+# Future Improvements
+
+Version 2+
+Long-term evolution.
+
+---
+
+# Related Documents
+
+Links to other design documents.
+
+---
+
+  Questions still open
+
+  ---
+
+# Revision History
+
+| Version | Date | Changes |
+|----------|------|----------|
