@@ -1,12 +1,14 @@
 # 01_Project_Vision.md
 
-**Version:** 0.1 (Draft)
-**Status:** Draft
-**Phase:** Phase 1 – Company Foundation
-**Author:** Founder & CTO
-**Last Updated:** TBD
+| **Variable** | **Value** |
+| **Version:** | 0.1 (Draft) |
+| **Status:** | Draft |
+| **Phase:** | Phase 1 – Company Foundation |
+| **Author:** | Founder & CTO |
+| **Last Updated:** | TBD |
 
 ---
+
 
 # Document Contract
 
