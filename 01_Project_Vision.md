@@ -1,12 +1,13 @@
 # 01_Project_Vision.md
 
-| **Variable** | **Value** |
-| **Version:** | 0.1 (Draft) |
-| **Status:** | Draft |
-| **Phase:** | Phase 1 – Company Foundation |
-| **Author:** | Founder & CTO |
-| **Last Updated:** | TBD |
 
+| **Field** | **Value** |
+|----------|-----------|
+| **Version** | 0.1 (Draft) |
+| **Status** | Draft |
+| **Phase** | Phase 1 – Company Foundation |
+| **Author** | Founder & CTO |
+| **Last Updated** | TBD |
 ---
 
 
