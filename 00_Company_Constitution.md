@@ -412,6 +412,17 @@ Every important decision will be classified using one of the following categorie
 | **Product Decision (PD)**       | Features, workflows, UX, product capabilities                  |
 | **Engineering Decision (ED)**   | Coding standards, testing, deployment, development practices   |
 
+## Status of Decisions
+| Status      | Meaning                      |
+| ----------- | ---------------------------- |
+| Proposed    | Under discussion             |
+| Draft       | Being documented             |
+| Accepted    | Official company decision    |
+| Implemented | Already built                |
+| Superseded  | Replaced by a newer decision |
+| Rejected    | Considered but not adopted   |
+| Deprecated  | No longer recommended        |
+
 ---
 
 # Feature Acceptance Rule
@@ -442,3 +453,4 @@ If it achieves none of these objectives, it should not be built.
 | Version | Date | Changes                                   |
 | ------- | ---- | ----------------------------------------- |
 | 1.0     | TBD  | Initial Company Constitution established. |
+| 1.1     | TBD  | Added status decisions to the file. |
