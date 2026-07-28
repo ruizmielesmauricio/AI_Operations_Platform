@@ -204,8 +204,27 @@ Separate the platform into specialised engines.
 Accepted
 
 ---
+## ADR-004: 
+**Decision**
+
+Use Neon for PostgreSQL + Supabase Auth (auth-only) as the identity provider.
+
+**Status**
+
+Accepted
+
+---
+## ADR-004: 
+
+Stripe for billing — supports cards + SEPA Direct Debit, customer choice at checkout.
 
 # Engineering Decisions (ED)
+
+**Status**
+
+Accepted
+
+---
 
 ## ED-001
 
