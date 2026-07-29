@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -86,7 +86,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | BD-002 | Build a reusable multi-industry platform rather than a bike-shop-only application | Accepted | gov BD-002 |
 | BD-003 | Company tagline: *"AI: Helping small businesses make enterprise decisions."* | Accepted | gov BD-003 |
 | BD-004 | Validate the product with real customers before completing the full commercial launch process | Accepted | tech BD-002 |
-| BD-005 | **Set the working reference price at €80 per month per business** | **Accepted** | supersedes tech BD-001 (€79, Proposed) |
+| BD-005 | **Set the current subscription price at €80 per month per business** | **Accepted** | supersedes tech BD-001 (€79, Proposed) |
 | BD-006 | Position the product as a complement to the customer's existing POS, not a replacement | Accepted | new |
 
 ---
@@ -154,19 +154,11 @@ The former governance register has been renamed to this canonical `12_Decision_R
 
 ---
 
-# Downstream Updates Required by BD-005 (€80 Price)
+# BD-005 Consistency Status (€80 Price)
 
-The following files still reference **€79** and must be updated:
+€80 per month per business is the accepted current subscription price. The former €79 planning assumption is superseded and must not be used in governance documents, revenue calculations, financial modelling, or customer-facing pricing.
 
-- [ ] `docs/technical/02_Business_Model.md` — "Initial Commercial Model" section
-- [ ] `docs/technical/11_ADRs.md` — delete or mark Superseded (replaced by this file)
-
-Already using €80 correctly:
-
-- [x] `docs/governance/08_Cost_Analysis.md`
-- [x] `docs/governance/09_Business_Model.md`
-- [x] Customer pitch one-pager
-- [x] Internal founder one-pager
+Customer discovery and pilot evidence may inform a future pricing decision, but they do not make BD-005 provisional. Any later change must be recorded as a new accepted decision that explicitly supersedes BD-005.
 
 ---
 
@@ -202,3 +194,4 @@ What evidence would cause this decision to be revisited?
 |---------|------|---------|
 | 1.0 | 29/07/2026 | Merged `11_ADRs.md` and the former `12_Architecture_Decision_Log.md` into one canonical register; renamed it `12_Decision_Register.md`; resolved duplicate ADR-004; set price to €80 (BD-005); added ADR-015 through ADR-018 and ED-005 through ED-008. |
 | 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
+| 1.2 | 30/07/2026 | Clarified BD-005 as the accepted current subscription price of €80/month and removed obsolete €79 update actions. |
