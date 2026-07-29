@@ -44,14 +44,14 @@ This document intentionally does **not** define:
 * Alternative pricing tiers, discounts, and future price changes (see `09_Business_Model.md`)
 * Revenue forecasting (see `09_Business_Model.md`)
 * Detailed infrastructure configuration (see `07_Deployment_Guide.md`)
-* Cost-control engineering rules (see `07_Cost_Strategy.md`, detailed set)
+* Cost-control engineering rules (see `08_Cost_Analysis.md`, detailed set)
 
 ---
 
 ## Related Documents
 
-* 02_Business_Model.md
-* 07_Cost_Strategy.md (detailed set)
+* 09_Business_Model.md
+* 08_Cost_Analysis.md (detailed set)
 * 07_Deployment_Guide.md
 * 09_Business_Model.md
 * 15_Customer_Discovery.md
@@ -139,7 +139,7 @@ These don't target bike shops specifically, but a technically confident owner co
 
 ## Cost Categories
 
-Per `07_Cost_Strategy.md`, cost is split into fixed infrastructure cost (largely independent of customer count at small scale) and variable cost per customer (mainly AI usage and storage).
+Per `08_Cost_Analysis.md`, cost is split into fixed infrastructure cost (largely independent of customer count at small scale) and variable cost per customer (mainly AI usage and storage).
 
 ## Estimated Fixed Monthly Cost (Pilot Stage, ~1-10 customers)
 
@@ -160,7 +160,7 @@ Per `07_Cost_Strategy.md`, cost is split into fixed infrastructure cost (largely
 | Item | Estimated Cost per Customer (EUR) | Notes |
 |---|---|---|
 | Stripe processing fees | ~1.5%-2.5% of subscription value + fixed fee | Applies only to paying customers; varies by card vs. SEPA |
-| AI usage (via OpenRouter-routed models) | €0.50-€3.00 | Depends heavily on plan limits (`05_AI_Strategy.md` cost controls) and model routing decisions (`05_AI_Architecture.md`) |
+| AI usage (via OpenRouter-routed models) | €0.50-€3.00 | Depends heavily on plan limits (`05_AI_Architecture.md` cost controls) and model routing decisions (`05_AI_Architecture.md`) |
 | Incremental storage | <€0.50 | Uploads are temporary by default; normalized data is small relative to object storage |
 | Incremental database load | <€1 | Shared Neon instance absorbs this at low customer counts |
 | **Estimated variable total** | **~€2-€6 per paying customer, plus card/SEPA fees** | To be validated against real pilot usage |
@@ -184,7 +184,7 @@ Fixed costs (~€15-€110/month total) are shared across all customers, so gros
 ## Cost Stage Progression
 
 * **Prototype (Phase 2):** Near-zero cost; free tiers, no production billing, single founder testing.
-* **Pilot (Phase 3-4):** Costs as estimated above; 3-5 pilot businesses per `10_Roadmap.md`, likely at reduced or waived pricing during validation.
+* **Pilot (Phase 3-4):** Costs as estimated above; 3-5 pilot businesses per `11_Development_Roadmap.md`, likely at reduced or waived pricing during validation.
 * **Early Production (Phase 6+):** Fixed costs may need to move off free tiers (Sentry, Resend, Neon) as usage grows; this is the point at which real cost-per-customer data should replace these estimates.
 
 ---
@@ -209,14 +209,14 @@ The variable cost structure (AI usage as the dominant variable cost) is precisel
 
 # Commercial Perspective
 
-At current estimates, gross margin per customer is high once past pilot scale, which supports the founder-led, low-fixed-cost model described in `07_Cost_Strategy.md`. The main commercial risk is not infrastructure cost — it is customer acquisition cost and willingness to pay, which this document cannot validate and which `15_Customer_Discovery.md` interviews must address directly.
+At current estimates, gross margin per customer is high once past pilot scale, which supports the founder-led, low-fixed-cost model described in `08_Cost_Analysis.md`. The main commercial risk is not infrastructure cost — it is customer acquisition cost and willingness to pay, which this document cannot validate and which `15_Customer_Discovery.md` interviews must address directly.
 
 ---
 
 # Current Decisions
 
 * Set the current subscription price at €80/month per business (BD-005, Accepted).
-* Treat AI usage as the primary variable cost to actively manage per customer (Accepted, consistent with `07_Cost_Strategy.md`).
+* Treat AI usage as the primary variable cost to actively manage per customer (Accepted, consistent with `08_Cost_Analysis.md`).
 * Treat this competitive analysis as based on public pricing pages, to be revisited after direct competitor trials and customer interviews (Accepted).
 
 ---
@@ -236,7 +236,7 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 # Risks
 
 * Competitor pricing pages change frequently and may already be out of date by the time this is read; treat as directional, not exact.
-* Actual AI cost per customer could exceed estimates if usage patterns (e.g., long conversational sessions) are heavier than assumed — mitigated by the usage controls and caching strategy in `05_AI_Strategy.md`.
+* Actual AI cost per customer could exceed estimates if usage patterns (e.g., long conversational sessions) are heavier than assumed — mitigated by the usage controls and caching strategy in `05_AI_Architecture.md`.
 * Owners may resist a second subscription regardless of price, if they don't yet trust AI-driven recommendations — this is a customer discovery risk, not a cost risk, and is tracked in `15_Customer_Discovery.md`.
 
 ---
@@ -245,7 +245,7 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 
 * Replace estimated infrastructure and AI costs with real pilot-phase measurements once Phase 3/4 begins.
 * Conduct direct trials of at least two or three competitor products (not just marketing pages) to validate the feature gap analysis first-hand.
-* Track cost per customer as a live metric (per `07_Cost_Strategy.md`'s Cost Review Metrics) rather than relying on this document's estimates past the pilot stage.
+* Track cost per customer as a live metric (per `08_Cost_Analysis.md`'s Cost Review Metrics) rather than relying on this document's estimates past the pilot stage.
 
 ---
 
@@ -253,7 +253,7 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 
 * What is real customer willingness to pay €80/month alongside an existing POS subscription?
 * How much AI usage does a typical owner actually generate per month, and does it match the estimated €0.50-€3.00 range?
-* Should pilot customers pay a reduced rate, or use the product free during validation, per `10_Roadmap.md`'s Phase 3/4 guidance?
+* Should pilot customers pay a reduced rate, or use the product free during validation, per `11_Development_Roadmap.md`'s Phase 3/4 guidance?
 
 ---
 
