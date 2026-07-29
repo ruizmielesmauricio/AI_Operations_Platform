@@ -14,7 +14,7 @@
 
 This document has two parts. First, it maps the competitive landscape in Ireland and internationally — what independent bike shops currently pay for software, and what that software does and does not do — so the company's positioning and pricing are grounded in evidence rather than assumption. Second, it estimates the platform's own operating cost per customer, based on the architecture and deployment model already defined in this repository.
 
-Together, these two halves answer the question a founder must answer before committing to €80/month: *is there room for that price in the market, and does the business make money at it?*
+Together, these two halves test the accepted €80/month price against two questions: *is there room for that price in the market, and does the business make money at it?*
 
 ---
 
