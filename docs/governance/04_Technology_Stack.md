@@ -65,7 +65,7 @@ The stack is chosen to be boring, replaceable, and cheap — not impressive. Eve
 | Frontend | Next.js, React, TypeScript | Standard framework, no proprietary hosting requirement |
 | Backend | FastAPI, Python | Runs on any container host |
 | Database | PostgreSQL (Neon or Supabase) | Standard SQL, exportable, swappable provider |
-| Auth | Supabase Auth (auth-only) | Decoupled from the database provider (ADR-004) |
+| Auth | Supabase Auth (auth-only) | Decoupled from the database provider (ADR-013) |
 | Object Storage | Cloudflare R2 | S3-compatible; replaceable by any S3-compatible provider |
 | Billing | Stripe | Industry standard; webhook-driven, not deeply coupled to app logic |
 | AI | Internal gateway, routed via OpenRouter | AI-agnostic by design (see `05_AI_Architecture.md`) |
@@ -85,7 +85,7 @@ Chosen because Python has the strongest ecosystem for the data, analytics, and f
 
 ## Database — PostgreSQL
 
-Chosen as the single system of record because it is mature, portable, supports Row Level Security, and avoids the cost and complexity of a data warehouse before one is justified. Per ADR-004, PostgreSQL hosting (Neon) is deliberately decoupled from authentication (Supabase Auth), so no single vendor holds both the data and the identity layer.
+Chosen as the single system of record because it is mature, portable, supports Row Level Security, and avoids the cost and complexity of a data warehouse before one is justified. Per ADR-013, PostgreSQL hosting (Neon) is deliberately decoupled from authentication (Supabase Auth), so no single vendor holds both the data and the identity layer.
 
 ## Object Storage — Cloudflare R2
 
@@ -93,7 +93,7 @@ Chosen for its S3-compatible API and low egress cost. Because the interface is a
 
 ## Billing — Stripe
 
-Chosen for its maturity and support for both card and SEPA Direct Debit, giving EU customers payment method choice at checkout (ADR-004, billing).
+Chosen for its maturity and support for both card and SEPA Direct Debit, giving EU customers payment method choice at checkout (ADR-011).
 
 ## AI — Internal Gateway, Routed via OpenRouter
 
@@ -133,7 +133,7 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 
 * Use Next.js/React/TypeScript for the frontend (Accepted — ADR-004 in `11_ADRs.md`).
 * Use FastAPI/Python for the backend (Accepted — ADR-005).
-* Use PostgreSQL, with Neon for hosting and Supabase for auth only (Accepted — ADR-004 in `12_Architecture_Decision_Log.md`).
+* Use PostgreSQL, with Neon for hosting and Supabase for auth only (Accepted — ADR-013 in `12_Decision_Register.md`).
 * Use Cloudflare R2 for object storage (Accepted, per `08_Tech_Stack.md`).
 * Use Stripe for billing, supporting cards and SEPA Direct Debit (Accepted).
 * Avoid AWS-specific services and Kubernetes until scale justifies them (Accepted — ADR-009).
