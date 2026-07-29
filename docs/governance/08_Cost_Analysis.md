@@ -41,7 +41,7 @@ Together, these two halves answer the question a founder must answer before comm
 
 This document intentionally does **not** define:
 
-* Final production pricing (see `09_Business_Model.md`)
+* Alternative pricing tiers, discounts, and future price changes (see `09_Business_Model.md`)
 * Revenue forecasting (see `09_Business_Model.md`)
 * Detailed infrastructure configuration (see `07_Deployment_Guide.md`)
 * Cost-control engineering rules (see `07_Cost_Strategy.md`, detailed set)
@@ -131,7 +131,7 @@ These don't target bike shops specifically, but a technically confident owner co
 * Our AI layer explains calculated findings; it does not require the owner to build dashboards or ask an AI to interpret raw exports.
 * Our core is explicitly designed to extend to other verticals (`02_Operational_Domains.md`, `06_Database_Design.md`) without becoming a generic, undifferentiated BI tool.
 
-**Caveat, stated for balance:** this analysis is based on publicly available marketing/pricing pages, not direct trials of each competitor, and pricing changes frequently (most sources above are dated within the last 12 months). It should be revisited before final pricing commitments and cross-checked against `15_Customer_Discovery.md` interview findings, since owners' actual willingness to pay for a second subscription alongside their existing POS is not yet validated with real conversations.
+**Caveat, stated for balance:** this analysis is based on publicly available marketing/pricing pages, not direct trials of each competitor, and pricing changes frequently (most sources above are dated within the last 12 months). It should be revisited as market evidence develops and cross-checked against `15_Customer_Discovery.md` interview findings. €80/month is the accepted current price, while owners' actual willingness to pay for a second subscription alongside their existing POS remains an important commercial validation question.
 
 ---
 
@@ -215,7 +215,7 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 
 # Current Decisions
 
-* Position pricing below premium POS tiers and mid-tier general BI tools, at €80/month (Proposed — pending pilot validation).
+* Set the current subscription price at €80/month per business (BD-005, Accepted).
 * Treat AI usage as the primary variable cost to actively manage per customer (Accepted, consistent with `07_Cost_Strategy.md`).
 * Treat this competitive analysis as based on public pricing pages, to be revisited after direct competitor trials and customer interviews (Accepted).
 
@@ -223,13 +223,13 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 
 # Why This Decision?
 
-**Decision:** Set a working reference price of €80/month, positioned as a complement to (not a replacement for) the shop's existing POS/EPOS system.
+**Decision:** Set the current subscription price at €80/month per business, positioned as a complement to (not a replacement for) the shop's existing POS/EPOS system.
 
 **Reason:** Competitor pricing shows a real gap between basic EPOS reporting and expensive/generic BI tools that this price point sits inside, while the estimated cost structure supports healthy gross margin at that price.
 
 **Alternatives Considered:** Pricing below €50/month to undercut basic EPOS tiers was considered, but rejected for now because it risks signalling "another cheap add-on" rather than a serious decision-support tool, and doesn't match the value described in `01_Product_Vision.md`. Pricing above €150/month (near premium POS tiers) was also considered and rejected as too high before the product's value is proven to a first paying cohort.
 
-**Future Review Criteria:** Revisit once `15_Customer_Discovery.md` interviews report actual willingness-to-pay data, and once real AI/infrastructure usage from the pilot phase replaces these estimates.
+**Future Review Criteria:** €80/month remains the current price. Review future pricing, packaging, or discounts only when `15_Customer_Discovery.md` interviews provide willingness-to-pay evidence or real pilot costs materially change the unit economics.
 
 ---
 
@@ -262,3 +262,4 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; competitive landscape and cost estimate based on public pricing research. |
+| 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price and aligned pricing language with BD-005. |
