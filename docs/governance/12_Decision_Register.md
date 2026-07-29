@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -100,6 +100,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-003 | Workshop/Production Operations is part of Version 1 | Accepted | gov PD-002 |
 | PD-004 | Every feature must save time, save money, reduce operational risk, or improve decisions | Accepted | gov PD-003 |
 | PD-005 | Begin with CSV and Excel uploads before building POS integrations | Accepted | tech PD-003 |
+| PD-006 | Do not require customers to use a predefined import template; the platform performs schema detection and normalisation | Accepted | from `10_Product_Requirements.md` |
 
 ---
 
@@ -140,6 +141,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ED-006 | No AI provider or router SDK may be referenced outside `backend/app/ai/` | Accepted | from `05_AI_Architecture.md` |
 | ED-007 | Every business formula requires unit tests before the feature is considered complete | Accepted | from `06_Development_Rules.md` |
 | ED-008 | Tenant isolation must be covered by dedicated integration tests | Accepted | from `06_Development_Rules.md` |
+| ED-009 | AI may suggest column mappings but must not clean, validate, transform, or deduplicate customer data | Accepted | from `10_Product_Requirements.md` |
 
 ---
 
@@ -199,3 +201,4 @@ What evidence would cause this decision to be revisited?
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 29/07/2026 | Merged `11_ADRs.md` and the former `12_Architecture_Decision_Log.md` into one canonical register; renamed it `12_Decision_Register.md`; resolved duplicate ADR-004; set price to €80 (BD-005); added ADR-015 through ADR-018 and ED-005 through ED-008. |
+| 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
