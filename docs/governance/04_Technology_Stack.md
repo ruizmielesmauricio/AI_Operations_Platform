@@ -1,10 +1,10 @@
 # 04_Technology_Stack.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -64,9 +64,9 @@ The stack is chosen to be boring, replaceable, and cheap — not impressive. Eve
 |---|---|---|
 | Frontend | Next.js, React, TypeScript | Standard framework, no proprietary hosting requirement |
 | Backend | FastAPI, Python | Runs on any container host |
-| Database | PostgreSQL (Neon or Supabase) | Standard SQL, exportable, swappable provider |
+| Database | PostgreSQL hosted on Neon | Standard SQL, exportable, and independent from the authentication provider |
 | Auth | Supabase Auth (auth-only) | Decoupled from the database provider (ADR-013) |
-| Object Storage | Cloudflare R2 | S3-compatible; replaceable by any S3-compatible provider |
+| Object Storage | Cloudflare R2 | Temporary uploaded files and generated file objects; S3-compatible and replaceable |
 | Billing | Stripe | Industry standard; webhook-driven, not deeply coupled to app logic |
 | AI | Internal gateway, routed via OpenRouter | AI-agnostic by design (see `05_AI_Architecture.md`) |
 | Hosting | Low-cost VPS or managed container host | No AWS-specific services |
@@ -87,9 +87,13 @@ Chosen because Python has the strongest ecosystem for the data, analytics, and f
 
 Chosen as the single system of record because it is mature, portable, supports Row Level Security, and avoids the cost and complexity of a data warehouse before one is justified. Per ADR-013, PostgreSQL hosting (Neon) is deliberately decoupled from authentication (Supabase Auth), so no single vendor holds both the data and the identity layer.
 
+## Authentication — Supabase Auth
+
+Chosen for user signup, login, password resets, and session management. Supabase is used for identity only; Supabase Database and Supabase Storage are not part of the accepted architecture.
+
 ## Object Storage — Cloudflare R2
 
-Chosen for its S3-compatible API and low egress cost. Because the interface is a standard, any other S3-compatible provider can replace it without an application rewrite.
+Chosen for temporary uploaded files and other file objects, not structured application data. Its S3-compatible API and low egress cost keep it portable; any other S3-compatible provider can replace it without an application rewrite. The PostgreSQL database remains in Neon.
 
 ## Billing — Stripe
 
@@ -134,7 +138,7 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 * Use Next.js/React/TypeScript for the frontend (Accepted — ADR-004 in `12_Decision_Register.md`).
 * Use FastAPI/Python for the backend (Accepted — ADR-005).
 * Use PostgreSQL, with Neon for hosting and Supabase for auth only (Accepted — ADR-013 in `12_Decision_Register.md`).
-* Use Cloudflare R2 for object storage (Accepted, per `08_Tech_Stack.md`).
+* Use Cloudflare R2 for object/file storage; it does not store the PostgreSQL database (Accepted — ADR-017).
 * Use Stripe for billing, supporting cards and SEPA Direct Debit (Accepted).
 * Avoid AWS-specific services and Kubernetes until scale justifies them (Accepted — ADR-009).
 
@@ -178,3 +182,4 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial governance-level draft, summarising `08_Tech_Stack.md`. |
+| 0.2 | 30/07/2026 | Clarified Neon as the sole PostgreSQL host, Supabase as authentication only, and Cloudflare R2 as object/file storage rather than a database. |
