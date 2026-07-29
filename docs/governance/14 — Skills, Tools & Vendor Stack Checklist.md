@@ -1,6 +1,6 @@
 # 14 — Skills, Tools & Vendor Stack Checklist
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1–2 (Documentation → Prototype)
 **Related Documents:** 03_Architecture.md, 04_Database.md, 05_AI_Strategy.md, 06_Development_Rules.md, 08_Tech_Stack.md, 10_Roadmap.md
@@ -24,8 +24,9 @@ Nothing below is legal or financial advice — for company registration, tax, an
 |---|---|---|---|
 | Database design & architecture | Multi-tenant schema, `business_id` scoping, migrations | PostgreSQL + ERD tool (dbdiagram.io, drawSQL, or `pgModeler`) | Design schema in dbdiagram.io first; implement via SQLAlchemy models + Alembic migrations in `backend/app/models` |
 | PostgreSQL | System of record | `psql`, pgAdmin or TablePlus (GUI) | `brew install postgresql` (Mac) / Docker image `postgres:16` for local dev |
-| Supabase | Auth (per ADR-013), optional storage | `supabase-py`, `@supabase/supabase-js`, Supabase CLI | `pip install supabase --break-system-packages`; `npm install @supabase/supabase-js`; `supabase init` for local dev stack |
-| Neon | Managed Postgres (per ADR-013) | Neon CLI, `psycopg2`/`asyncpg` | Create project at neon.tech; connection string goes in `.env`, never in code |
+| Supabase Auth | Authentication only: signup, login, password resets, and sessions (ADR-013). Supabase Database and Supabase Storage are not used. | `supabase-py`, `@supabase/supabase-js` | `pip install supabase --break-system-packages`; `npm install @supabase/supabase-js` |
+| Neon | Managed PostgreSQL and the system of record (ADR-013) | Neon CLI, `psycopg2`/`asyncpg` | Create project at neon.tech; connection string goes in `.env`, never in code |
+| Cloudflare R2 | Temporary object/file storage for uploads and generated file objects—not the PostgreSQL database (ADR-017) | S3-compatible client such as `boto3` or AWS SDK for JavaScript | Configure an R2 bucket and S3-compatible credentials in environment secrets; delete uploaded source files after successful ingestion |
 | Node.js | Runtime for Next.js frontend | Node 20 LTS via `nvm` | `nvm install --lts`; `npx create-next-app@latest` |
 | Python | Backend, analytics, AI orchestration | Python 3.12, `venv` or `poetry` | `python -m venv .venv`; `pip install fastapi uvicorn sqlalchemy alembic pydantic --break-system-packages` |
 | FastAPI | REST API layer | `fastapi`, `uvicorn` | Included above |
@@ -128,3 +129,4 @@ Given you're still in Phase 1–2 (documentation → prototype), the highest-lev
 | Version | Date | Changes |
 |---|---|---|
 | 0.1 | 2026-07-29 | Initial skills/tools checklist created. |
+| 0.2 | 2026-07-30 | Removed Supabase Storage, confirmed Supabase Auth only, Neon PostgreSQL as the system of record, and Cloudflare R2 as object/file storage rather than a database. |
