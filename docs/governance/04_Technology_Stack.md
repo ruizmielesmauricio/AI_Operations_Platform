@@ -14,7 +14,7 @@
 
 This document records, at a governance level, what technology the company has chosen and why each choice serves the Company Constitution — specifically the principles of low operating cost, portability, and avoiding vendor lock-in.
 
-It does not repeat the tool-by-tool implementation detail already captured in `08_Tech_Stack.md`. Instead, it explains the reasoning a founder, investor, or new hire needs in order to understand why this stack was chosen over the alternatives.
+It records the selected technology categories and explains why they serve the platform's governance principles. Implementation and deployment procedures are maintained in `07_Deployment_Guide.md`.
 
 ---
 
@@ -40,10 +40,10 @@ It does not repeat the tool-by-tool implementation detail already captured in `0
 
 This document intentionally does **not** define:
 
-* Library versions, configuration, or code-level detail (see `08_Tech_Stack.md`)
+* Library versions, configuration, or code-level detail (implementation documentation)
 * Deployment steps (see `07_Deployment_Guide.md`)
-* Database schema (see `04_Database.md` / `06_Database_Design.md`)
-* AI provider routing detail (see `05_AI_Architecture.md`, `05_AI_Strategy.md`)
+* Database schema (see `06_Database_Design.md`)
+* AI provider routing detail (see `05_AI_Architecture.md`, `05_AI_Architecture.md`)
 
 ---
 
@@ -51,7 +51,7 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 03_System_Architecture.md
-* 08_Tech_Stack.md (detailed set)
+* 04_Technology_Stack.md (detailed set)
 * 12_Decision_Register.md
 
 ---
@@ -123,13 +123,13 @@ Customers never see the stack directly, but they benefit from it: EU-capable hos
 
 # Technical Perspective
 
-No business module should import a vendor SDK directly except at the narrow boundary layers already defined in `03_Architecture.md` (repositories for the database, the AI Provider Gateway for AI, a payment service module for Stripe). This is what keeps the categories above genuinely replaceable rather than replaceable in theory only.
+No business module should import a vendor SDK directly except at the narrow boundary layers already defined in `03_System_Architecture.md` (repositories for the database, the AI Provider Gateway for AI, a payment service module for Stripe). This is what keeps the categories above genuinely replaceable rather than replaceable in theory only.
 
 ---
 
 # Commercial Perspective
 
-A low fixed-cost, vendor-flexible stack directly supports the unit economics goals in `07_Cost_Strategy.md` / `08_Cost_Analysis.md` and keeps gross margin defensible at low customer counts.
+A low fixed-cost, vendor-flexible stack directly supports the unit economics goals in `08_Cost_Analysis.md` and keeps gross margin defensible at low customer counts.
 
 ---
 
@@ -152,13 +152,13 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 
 **Alternatives Considered:** An all-in-one platform (e.g., a single vendor providing database, auth, storage, and functions together) was considered for speed of initial development, but rejected because it increases lock-in risk exactly where the Company Constitution says to avoid it.
 
-**Future Review Criteria:** Revisit any category if a vendor's pricing, reliability, or terms change materially, or if usage scale genuinely requires a more specialised service (per the Scaling Path in `03_Architecture.md`).
+**Future Review Criteria:** Revisit any category if a vendor's pricing, reliability, or terms change materially, or if usage scale genuinely requires a more specialised service (per the Scaling Path in `03_System_Architecture.md`).
 
 ---
 
 # Risks
 
-* Assembling several best-of-breed services (rather than one platform) increases integration surface area. Mitigation: keep every vendor behind a narrow internal boundary (repository, gateway, or adapter) as already required by `06_Development_Rules.md`.
+* Assembling several best-of-breed services (rather than one platform) increases integration surface area. Mitigation: keep every vendor behind a narrow internal boundary (repository, gateway, or adapter) as already required by `12_Decision_Register.md`.
 * Some categories (Neon, Supabase, R2) are still relatively young companies compared to hyperscalers. Mitigation: standard, portable APIs (SQL, S3) mean migration is possible if needed.
 
 ---
@@ -166,7 +166,7 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 # Future Improvements
 
 * Formalise the outstanding stack ADRs (background job library, monitoring stack) once Phase 2 prototype work makes a specific choice necessary.
-* Add a lightweight "vendor risk review" step to the Cost Decision Rule in `07_Cost_Strategy.md` / `08_Cost_Analysis.md` so vendor concentration is checked, not just cost.
+* Add a lightweight "vendor risk review" step to the Cost Decision Rule in `08_Cost_Analysis.md` so vendor concentration is checked, not just cost.
 
 ---
 
@@ -181,5 +181,5 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.1 | TBD | Initial governance-level draft, summarising `08_Tech_Stack.md`. |
+| 0.1 | TBD | Initial governance-level technology-stack draft. |
 | 0.2 | 30/07/2026 | Clarified Neon as the sole PostgreSQL host, Supabase as authentication only, and Cloudflare R2 as object/file storage rather than a database. |
