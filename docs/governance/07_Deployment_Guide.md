@@ -167,13 +167,13 @@ Deployment must stop automatically if any prior step fails (per `06_Development_
 
 **How it connects:** Both the FastAPI API and the background worker connect directly to Neon over an encrypted connection, using pooled connections. Neither the web app nor the browser ever connects to Neon directly.
 
-**Why hosted separately from the VPS:** Managed backups, point-in-time recovery, and branching for development are handled by Neon rather than the founder manually managing database backups on a VPS (ADR-004 in `12_Architecture_Decision_Log.md`).
+**Why hosted separately from the VPS:** Managed backups, point-in-time recovery, and branching for development are handled by Neon rather than the founder manually managing database backups on a VPS (ADR-013 in `12_Decision_Register.md`).
 
 ## Supabase Auth
 
 **Role:** Authentication only — issues and manages user sessions.
 
-**How it connects:** The Next.js web app initiates authentication via Supabase Auth. The resulting session token is sent with every request to the FastAPI API, which verifies it before resolving business membership and permissions. Supabase's database and storage products are explicitly **not** used — only its Auth product — to keep authentication decoupled from the data layer (ADR-004).
+**How it connects:** The Next.js web app initiates authentication via Supabase Auth. The resulting session token is sent with every request to the FastAPI API, which verifies it before resolving business membership and permissions. Supabase's database and storage products are explicitly **not** used — only its Auth product — to keep authentication decoupled from the data layer (ADR-013).
 
 ## Cloudflare R2
 
@@ -326,8 +326,8 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 * Deploy via Docker containers to a low-cost VPS, optionally managed through Coolify (Accepted, per `08_Tech_Stack.md`).
 * Use GitHub Actions for CI/CD, with deployment blocked on test failure (Accepted, per `06_Development_Rules.md`).
-* Host PostgreSQL on Neon rather than self-managed on the VPS (Accepted — ADR-004).
-* Use Supabase strictly for Auth, not database or storage (Accepted — ADR-004).
+* Host PostgreSQL on Neon rather than self-managed on the VPS (Accepted — ADR-013).
+* Use Supabase strictly for Auth, not database or storage (Accepted — ADR-013).
 * Avoid AWS-specific services and Kubernetes at this stage (Accepted — ADR-009).
 
 ---
