@@ -16,7 +16,7 @@ This document defines the system architecture at the level a founder, investor, 
 
 It summarises the architecture, states the governing principles behind key structural choices, and records the current thinking on AI provider routing, including the planned use of OpenRouter.
 
-Full implementation-level detail (component responsibilities, deployment topology, upload/import flow, failure handling) lives in `03_Architecture.md` and is not repeated here.
+Deployment operations are governed by `07_Deployment_Guide.md`; database structure and product behaviour are governed by `06_Database_Design.md` and `10_Product_Requirements.md`.
 
 ---
 
@@ -43,11 +43,11 @@ Full implementation-level detail (component responsibilities, deployment topolog
 
 This document intentionally does **not** define:
 
-* Component-by-component responsibilities (see `03_Architecture.md`)
-* Database schema (see `04_Database.md` / `06_Database_Design.md`)
+* Deployment and operational procedures (see `07_Deployment_Guide.md`)
+* Database schema (see `06_Database_Design.md`)
 * Deployment steps (see `07_Deployment_Guide.md`)
 * Technology selection rationale by tool (see `04_Technology_Stack.md`)
-* AI prompt design or cost controls (see `05_AI_Strategy.md` / `05_AI_Architecture.md`)
+* AI prompt design or cost controls (see `05_AI_Architecture.md`)
 
 ---
 
@@ -55,8 +55,8 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
-* 03_Architecture.md (detailed set)
-* 05_AI_Strategy.md
+* 03_System_Architecture.md (detailed set)
+* 05_AI_Architecture.md
 * 12_Decision_Register.md
 
 ---
@@ -90,7 +90,7 @@ The platform must be:
 * Independent of AWS-specific services
 * Suitable for EU customer data
 
-(Full detail: `03_Architecture.md`, "Architectural Goals")
+(Full detail: `03_System_Architecture.md`, "Architectural Goals")
 
 ---
 
@@ -128,7 +128,7 @@ Browser Charts             AI Explanation Layer
               User Dashboard
 ```
 
-Component-level responsibility (frontend, API, database, object storage, worker, Redis, billing, email, monitoring) is documented in `03_Architecture.md`.
+Component-level responsibility (frontend, API, database, object storage, worker, Redis, billing, email, monitoring) is documented in `03_System_Architecture.md`.
 
 ---
 
@@ -136,7 +136,7 @@ Component-level responsibility (frontend, API, database, object storage, worker,
 
 A shared PostgreSQL database with tenant-scoped rows is used initially, defended in depth through authentication, membership lookup, application authorization, query scoping, and (where supported) Row Level Security.
 
-(Full detail: `03_Architecture.md`, "Multi-Tenant Architecture")
+(Full detail: `03_System_Architecture.md`, "Multi-Tenant Architecture")
 
 ---
 
@@ -144,7 +144,7 @@ A shared PostgreSQL database with tenant-scoped rows is used initially, defended
 
 ## Governing Principle
 
-Per the Company Constitution (Principle 6, AI-Agnostic Architecture) and ADR-006 / ED-006, no business module may call an AI provider's SDK directly. All AI requests pass through a single internal **AI Provider Gateway** (`05_AI_Strategy.md`), which is responsible for provider selection, prompt construction, output validation, and cost tracking.
+Per the Company Constitution (Principle 6, AI-Agnostic Architecture) and ADR-006 / ED-006, no business module may call an AI provider's SDK directly. All AI requests pass through a single internal **AI Provider Gateway** (`05_AI_Architecture.md`), which is responsible for provider selection, prompt construction, output validation, and cost tracking.
 
 ## Planned Use of OpenRouter
 
@@ -152,14 +152,14 @@ The platform is planning to use **OpenRouter** as the routing layer behind the A
 
 **Why this fits the existing strategy:**
 
-* OpenRouter sits behind the internal `AIProvider` interface already defined in `05_AI_Strategy.md` — it does not replace that interface, it becomes one implementation of it. Business modules continue to depend only on the internal interface.
+* OpenRouter sits behind the internal `AIProvider` interface already defined in `05_AI_Architecture.md` — it does not replace that interface, it becomes one implementation of it. Business modules continue to depend only on the internal interface.
 * It allows the gateway to select the cheapest model that still meets an approved quality bar for a given task, rather than committing to one vendor's pricing.
 * It allows filtering or preferring models that meet EU regulatory and data-handling requirements, which supports the "EU infrastructure where practical" and "Privacy by Design" principles in `01_Product_Vision.md`.
 * Because routing logic lives inside the gateway rather than in business code, the specific routing service (OpenRouter or an alternative) can be swapped later without touching Retail Operations, Workshop Operations, or Financial Performance modules.
 
 **Selection criteria for any model routed through this layer** (to be formalised as an ADR once thresholds are tested against real usage):
 
-* Cost per request, weighted against the cost strategy in `07_Cost_Strategy.md` / `08_Cost_Analysis.md`
+* Cost per request, weighted against the cost strategy in `08_Cost_Analysis.md`
 * Compliance with applicable EU regulation and data-processing terms
 * A minimum quality/reliability threshold, so that low-cost model selection does not come at the expense of hallucinated or unreliable explanations — directly serving the "Never Hallucinate Numbers" principle in `01_Product_Vision.md`
 * Latency, for responsiveness in the dashboard AI explanation layer
@@ -169,7 +169,7 @@ The platform is planning to use **OpenRouter** as the routing layer behind the A
 
 * AI still only explains calculated output; it never performs the calculation itself (Business Logic First still holds regardless of which model or router is used).
 * Output validation, redaction, and usage logging in the AI Provider Gateway still apply uniformly to any model reached through OpenRouter.
-* This is a routing/provider decision, not a relaxation of the AI Prohibitions list in `05_AI_Strategy.md`.
+* This is a routing/provider decision, not a relaxation of the AI Prohibitions list in `05_AI_Architecture.md`.
 
 **Status:** Proposed — pending a dedicated ADR once cost and quality thresholds are tested with pilot usage.
 
@@ -189,7 +189,7 @@ Customers should never notice which model answered their question — only that 
 
 # Technical Perspective
 
-The AI Provider Gateway remains the only place a provider SDK (or router SDK, such as OpenRouter's) is referenced in the codebase. This preserves the layering described in `03_Architecture.md`:
+The AI Provider Gateway remains the only place a provider SDK (or router SDK, such as OpenRouter's) is referenced in the codebase. This preserves the layering described in `03_System_Architecture.md`:
 
 ```text
 Business Modules -> AI Provider Gateway -> (OpenRouter or direct provider) -> Model
@@ -199,7 +199,7 @@ Business Modules -> AI Provider Gateway -> (OpenRouter or direct provider) -> Mo
 
 # Commercial Perspective
 
-Provider routing directly supports the Cost Strategy goal of keeping "AI as a small portion of the cost per customer" (`02_Business_Model.md`, `07_Cost_Strategy.md`) by allowing continuous cost optimisation without re-engineering the product every time model pricing changes.
+Provider routing directly supports the Cost Strategy goal of keeping "AI as a small portion of the cost per customer" (`09_Business_Model.md`, `08_Cost_Analysis.md`) by allowing continuous cost optimisation without re-engineering the product every time model pricing changes.
 
 ---
 
@@ -225,13 +225,13 @@ Provider routing directly supports the Cost Strategy goal of keeping "AI as a sm
 # Risks
 
 * Relying on a third-party router introduces a dependency; mitigation is that the router sits behind the internal interface and can be replaced.
-* "Cheapest model that meets a quality threshold" requires the threshold to be defined and tested, or cost optimisation could quietly degrade explanation quality. Mitigation: this must be paired with the output validation rules already defined in `05_AI_Strategy.md` before OpenRouter routing is enabled in production.
+* "Cheapest model that meets a quality threshold" requires the threshold to be defined and tested, or cost optimisation could quietly degrade explanation quality. Mitigation: this must be paired with the output validation rules already defined in `05_AI_Architecture.md` before OpenRouter routing is enabled in production.
 
 ---
 
 # Future Improvements
 
-* Define the specific quality threshold and evaluation test set referenced in `05_AI_Strategy.md`'s "Model Evaluation" section, then formalise OpenRouter as an ADR.
+* Define the specific quality threshold and evaluation test set referenced in `05_AI_Architecture.md`'s "Model Evaluation" section, then formalise OpenRouter as an ADR.
 * Track per-model cost and hallucination-rate metrics once pilot usage begins, to validate the routing strategy with evidence.
 
 ---
