@@ -54,7 +54,7 @@ This document intentionally does **not** define:
 ## Related Documents
 
 * 10_Product_Requirements.md
-* 10_Roadmap.md (technical set)
+* 11_Development_Roadmap.md (technical set)
 * 15_Customer_Discovery.md
 * 12_Decision_Register.md
 
@@ -108,9 +108,9 @@ The most important sequencing decision: **customer discovery comes before seriou
 
 **Outstanding housekeeping:**
 
-- [ ] Delete or supersede `11_ADRs.md` and old `12_Architecture_Decision_Log.md`
+- [x] Consolidate the former decision registers into `12_Decision_Register.md`
 - [ ] Update `01_Product_Vision.md` to remove the import-template guidance (superseded by PD-006)
-- [ ] Update `04_Database.md` and `09_Product_Modules.md` if ADR-016 is accepted
+- [ ] Update `06_Database_Design.md` and `10_Product_Requirements.md` if ADR-016 is accepted
 - [ ] Generate remaining individual decision files in `docs/decisions/`
 
 ---
