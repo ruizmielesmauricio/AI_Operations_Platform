@@ -69,7 +69,7 @@ These topics are documented separately.
 * 02_Operational_Domains.md
 * 03_System_Architecture.md
 * 09_Business_Model.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
