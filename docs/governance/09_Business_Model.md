@@ -12,7 +12,7 @@
 
 ## Purpose
 
-This document validates the business model described in `02_Business_Model.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, documents the accepted €80/month price and tests its commercial viability, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
+This document validates the business model described in `09_Business_Model.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, documents the accepted €80/month price and tests its commercial viability, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
 
 This document does not invent confidence that doesn't exist yet — every revenue forecast and conversion estimate below is a planning assumption, not a commitment or prediction. The current subscription price itself is fixed at €80/month under BD-005.
 
@@ -41,18 +41,18 @@ This document intentionally does **not** define:
 
 * Competitor identification or feature comparison (see `08_Cost_Analysis.md`)
 * Infrastructure/operating cost estimates (see `08_Cost_Analysis.md`)
-* Legal, tax, or company registration matters (see `10_Roadmap.md`, Phase 5)
+* Legal, tax, or company registration matters (see `11_Development_Roadmap.md`, Phase 5)
 * Detailed customer interview questions (see `15_Customer_Discovery.md`)
 
 ---
 
 ## Related Documents
 
-* 02_Business_Model.md (detailed set)
+* 09_Business_Model.md (detailed set)
 * 08_Cost_Analysis.md
-* 10_Roadmap.md
+* 11_Development_Roadmap.md
 * 15_Customer_Discovery.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
@@ -85,9 +85,9 @@ What is **not yet validated** is customer demand: no interviews have been comple
 | €80/month is affordable relative to existing software spend | Sits below premium POS tiers ($179-$339), above basic EPOS entry tiers (€30-€135), comparable to mid-tier general BI tools | Validated by pricing comparison, **not yet validated by actual willingness to pay** |
 | A dedicated, explainable analytics layer is a real gap | No competitor combines retail+workshop domain modelling with deterministic calculation and AI explanation | Validated by feature gap analysis |
 | Owners will adopt a second subscription alongside their POS | Not yet tested with real owners | **Not validated — this is the single biggest open risk** |
-| Bicycle shops are a good validation market before expanding | Combines retail, inventory, seasonal demand, and workshop operations in one accessible segment (`00_Project_Overview.md`) | Reasoned, not yet evidenced |
+| Bicycle shops are a good validation market before expanding | Combines retail, inventory, seasonal demand, and workshop operations in one accessible segment (`01_Project_Vision.md`) | Reasoned, not yet evidenced |
 
-**Overall assessment:** the model is well-supported on the supply side (there is room in the market, the price is reasonable, the gap is real) but entirely unvalidated on the demand side (no evidence yet that owners will actually buy it). This is expected at this stage of the roadmap — Phase 1 (`10_Roadmap.md`) is documentation and decisions, Phase 2 is customer discovery — but it means every number in Part 2 below is a scenario, not a forecast in the normal sense.
+**Overall assessment:** the model is well-supported on the supply side (there is room in the market, the price is reasonable, the gap is real) but entirely unvalidated on the demand side (no evidence yet that owners will actually buy it). This is expected at this stage of the roadmap — Phase 1 (`11_Development_Roadmap.md`) is documentation and decisions, Phase 2 is customer discovery — but it means every number in Part 2 below is a scenario, not a forecast in the normal sense.
 
 ---
 
@@ -99,15 +99,15 @@ Based on `08_Cost_Analysis.md`:
 
 * It is **higher** than basic Irish EPOS tiers (€30-€135/month), which is appropriate since this product is additive to (not a replacement for) that spend.
 * It is **lower** than premium bike-shop-specific POS tiers ($179-$339/month) and most mid-to-upper general BI tools ($159-$600/month), which supports easy justification as "much cheaper than a BI platform, more useful than my POS's built-in reports."
-* It is a **single flat tier** initially, which matches the Pricing Principles in `02_Business_Model.md` ("pricing should be understandable... avoid pricing that requires users to estimate technical consumption").
+* It is a **single flat tier** initially, which matches the Pricing Principles in `09_Business_Model.md` ("pricing should be understandable... avoid pricing that requires users to estimate technical consumption").
 
 ## What Pricing Validation Still Requires
 
-Per `02_Business_Model.md`'s Customer Validation section, the founder still needs to:
+Per `09_Business_Model.md`'s Customer Validation section, the founder still needs to:
 
 * Directly ask bike shop owners what they currently spend on software and what an extra €80/month would need to deliver to be worth it.
 * Test whether a lower introductory/pilot price is needed to get the first cohort through the door, versus charging full price from day one.
-* Confirm whether annual billing (at a discount, per `02_Business_Model.md`) changes willingness to commit.
+* Confirm whether annual billing (at a discount, per `09_Business_Model.md`) changes willingness to commit.
 
 **This validation has not yet happened** and is tracked as an open item below and in `15_Customer_Discovery.md`.
 
@@ -122,7 +122,7 @@ These forecasts are **scenario planning exercises**, not predictions. They exist
 ## Shared Assumptions
 
 * Price: €80/month per business (flat), no tiering assumed yet.
-* Per `10_Roadmap.md`, Phase 3/4 recruits 3-5 pilot businesses; pilots may run at a reduced rate or free during validation, not full price.
+* Per `11_Development_Roadmap.md`, Phase 3/4 recruits 3-5 pilot businesses; pilots may run at a reduced rate or free during validation, not full price.
 * Paid conversion is assumed to begin only after pilot validation (Phase 4 → Phase 6), not from month 1.
 * No paid marketing spend is assumed in this early window — acquisition is assumed to be founder-led outreach and pilot referrals.
 * Churn is not modelled in the 6-month window (too early for meaningful churn data) but is included as a simple assumption in the 12-month window.
@@ -138,7 +138,7 @@ These forecasts are **scenario planning exercises**, not predictions. They exist
 | 6 | 2 pilot, 1 full-price conversion (€80) | 4 pilot, 2 full-price conversions (€160) | 5 pilot, 3 full-price conversions (€240) |
 | **MRR at Month 6** | **~€80** | **~€160** | **~€240** |
 
-**Reading this table:** in every scenario, the first six months are dominated by pilot activity, not revenue — this matches `10_Roadmap.md`'s own sequencing (Phase 3-4 before Phase 6 launch). Meaningful MRR is not expected in month 6 under any realistic scenario; the table exists to make that explicit rather than to imply otherwise.
+**Reading this table:** in every scenario, the first six months are dominated by pilot activity, not revenue — this matches `11_Development_Roadmap.md`'s own sequencing (Phase 3-4 before Phase 6 launch). Meaningful MRR is not expected in month 6 under any realistic scenario; the table exists to make that explicit rather than to imply otherwise.
 
 ## Twelve-Month Scenario Table
 
@@ -148,14 +148,14 @@ These forecasts are **scenario planning exercises**, not predictions. They exist
 | Base | Public launch (Phase 6) around month 7-8; ~2 new paying customers per month post-launch, ~5% monthly churn | ~12-15 | ~€960-€1,200 |
 | Optimistic | Public launch around month 6-7; ~3-4 new paying customers per month, low early churn (~2-3%) | ~20-25 | ~€1,600-€2,000 |
 
-**Reading this table:** even the optimistic scenario produces modest absolute revenue (~€1,600-€2,000 MRR) by month 12 — this is consistent with a single-founder, single-segment, pre-product-market-fit business, not a growth-stage SaaS company. This is intentional: the roadmap explicitly sequences validation before scale (`10_Roadmap.md`, Milestone Gates), and this forecast should not be read as a target to hit, but as a planning range to test the model against.
+**Reading this table:** even the optimistic scenario produces modest absolute revenue (~€1,600-€2,000 MRR) by month 12 — this is consistent with a single-founder, single-segment, pre-product-market-fit business, not a growth-stage SaaS company. This is intentional: the roadmap explicitly sequences validation before scale (`11_Development_Roadmap.md`, Milestone Gates), and this forecast should not be read as a target to hit, but as a planning range to test the model against.
 
 ## What Would Change These Numbers Materially
 
-* A faster or slower Phase 3-4 pilot process (`10_Roadmap.md`) shifts the whole timeline left or right.
+* A faster or slower Phase 3-4 pilot process (`11_Development_Roadmap.md`) shifts the whole timeline left or right.
 * Whether pilot customers are charged at all during validation (open question, `08_Cost_Analysis.md`).
 * Real churn once customers experience a full billing cycle — assumed conservatively above, not measured.
-* Whether expansion beyond bike shops (`02_Business_Model.md`'s Future Segments) is pulled forward, which is out of scope for this 12-month forecast.
+* Whether expansion beyond bike shops (`09_Business_Model.md`'s Future Segments) is pulled forward, which is out of scope for this 12-month forecast.
 
 ---
 
@@ -163,9 +163,9 @@ These forecasts are **scenario planning exercises**, not predictions. They exist
 
 | Review Point | Trigger | What Gets Re-Validated |
 |---|---|---|
-| After customer discovery interviews (Phase 1 in `10_Roadmap.md` / `15_Customer_Discovery.md`) | 15-20 interviews completed | Willingness to pay, price sensitivity, most valuable module — replaces Part 2's assumptions with real data |
+| After customer discovery interviews (Phase 1 in `11_Development_Roadmap.md` / `15_Customer_Discovery.md`) | 15-20 interviews completed | Willingness to pay, price sensitivity, most valuable module — replaces Part 2's assumptions with real data |
 | After pilot recruitment | 3-5 pilot businesses signed | Actual pilot pricing decision (reduced/free vs. full price), onboarding effort, time-to-first-value |
-| After pilot phase (Gate C, `10_Roadmap.md`) | Pilots complete a full usage cycle | Real conversion rate from pilot to paying, real churn signal, real support cost per customer |
+| After pilot phase (Gate C, `11_Development_Roadmap.md`) | Pilots complete a full usage cycle | Real conversion rate from pilot to paying, real churn signal, real support cost per customer |
 | At public launch (Phase 6) | Billing activated | First real MRR figure — replaces every number in Part 3's tables |
 | Quarterly thereafter | Ongoing | Cost per customer (`08_Cost_Analysis.md`), gross margin, MRR growth rate, churn, against the scenarios above |
 
@@ -187,7 +187,7 @@ Customers are not part of a forecast — they are part of a discovery process. T
 
 # Technical Perspective
 
-Nothing in this document requires new engineering work; it depends on the platform being able to report real usage, billing, and churn data once live, per the `ai_usage`, `subscriptions`, and `audit_events` tables described in `04_Database.md`, so that the Review Plan above can actually be executed with real data rather than estimates.
+Nothing in this document requires new engineering work; it depends on the platform being able to report real usage, billing, and churn data once live, per the `ai_usage`, `subscriptions`, and `audit_events` tables described in `06_Database_Design.md`, so that the Review Plan above can actually be executed with real data rather than estimates.
 
 ---
 
@@ -201,7 +201,7 @@ The most commercially important output of this document is not the revenue numbe
 
 * Set the current subscription price at €80/month per business; this supersedes the former €79 planning assumption (BD-005, Accepted).
 * Treat all revenue figures in this document as scenario planning, not forecasts to be relied upon for financial commitments (Accepted).
-* Sequence paying revenue after pilot validation, not from month 1 (Accepted, consistent with `10_Roadmap.md`).
+* Sequence paying revenue after pilot validation, not from month 1 (Accepted, consistent with `11_Development_Roadmap.md`).
 
 ---
 
