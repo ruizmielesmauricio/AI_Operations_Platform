@@ -53,7 +53,7 @@ This document intentionally does **not** define:
 * 03_System_Architecture.md
 * 05_AI_Strategy.md (detailed set)
 * 07_Cost_Strategy.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
