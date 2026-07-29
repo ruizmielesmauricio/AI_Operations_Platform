@@ -3,7 +3,7 @@
 **Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1–2 (Documentation → Prototype)
-**Related Documents:** 03_Architecture.md, 04_Database.md, 05_AI_Strategy.md, 06_Development_Rules.md, 08_Tech_Stack.md, 10_Roadmap.md
+**Related Documents:** 03_System_Architecture.md, 04_Technology_Stack.md, 05_AI_Architecture.md, 06_Database_Design.md, 10_Product_Requirements.md, 11_Development_Roadmap.md, 12_Decision_Register.md
 
 ---
 
@@ -38,7 +38,7 @@ Nothing below is legal or financial advice — for company registration, tax, an
 
 | Area | Why | Tool | Install |
 |---|---|---|---|
-| Forecasting (seasonal averages → exponential smoothing → ML) | Revenue/demand forecasts (09_Product_Modules.md) | `statsmodels`, `pandas`, `numpy` | `pip install pandas numpy statsmodels scikit-learn` |
+| Forecasting (seasonal averages → exponential smoothing → ML) | Revenue/demand forecasts (10_Product_Requirements.md) | `statsmodels`, `pandas`, `numpy` | `pip install pandas numpy statsmodels scikit-learn` |
 | Anomaly / classification | Return-rate spikes, findings engine | `scikit-learn`, `xgboost` (only when justified) | `pip install scikit-learn xgboost` |
 | Data cleaning / normalization | Import pipeline | `pandas` | Included above |
 | Model evaluation discipline | Prevent silent forecast drift | Fixed test-case suite + calculation versioning (already in your Dev Rules) | No install — a practice, not a package |
@@ -56,7 +56,7 @@ These are competencies you need access to — via yourself learning, a part-time
 
 | Area | What's actually needed | Typical source |
 |---|---|---|
-| Financial modelling / unit economics | MRR, CAC, gross margin per customer (already scaffolded in 07_Cost_Strategy.md) | You + a spreadsheet/BI tool; a part-time bookkeeper later |
+| Financial modelling / unit economics | MRR, CAC, gross margin per customer (already scaffolded in 08_Cost_Analysis.md) | You + a spreadsheet/BI tool; a part-time bookkeeper later |
 | Irish company registration | Company Registration Office (CRO) filing, director duties, share structure | Solicitor or formation agent (e.g. an Irish company formation service) |
 | Tax & Revenue setup | VAT registration, Corporation Tax, payroll if hiring | Irish accountant (mention "Revenue Online Service" — ROS — but a professional should file it) |
 | Contracts & Terms of Service | SaaS terms, DPA, refund policy | Solicitor, or a reviewed SaaS legal template as a starting draft |
@@ -86,10 +86,10 @@ These are competencies you need access to — via yourself learning, a part-time
 |---|---|---|---|
 | Web app security fundamentals | Injection, auth, tenant isolation bugs are existential for a multi-tenant SaaS | OWASP Top 10 as a checklist | Free — OWASP Cheat Sheet Series (reference, not installed) |
 | Dependency vulnerability scanning | Catch known CVEs in packages | GitHub Dependabot, `pip-audit` | Enable Dependabot in repo settings; `pip install pip-audit` |
-| Secrets management | No secrets in source control (per 06_Development_Rules.md) | `.env` + GitHub Actions secrets, or a vault later | `.gitignore` your `.env`; use repo "Secrets" in GitHub settings |
+| Secrets management | No secrets in source control (per 12_Decision_Register.md) | `.env` + GitHub Actions secrets, or a vault later | `.gitignore` your `.env`; use repo "Secrets" in GitHub settings |
 | Error tracking | Catch production bugs without exposing customer data | Sentry | `pip install sentry-sdk`; `npm install @sentry/nextjs` |
 | Row Level Security | Defense-in-depth for tenant isolation | Postgres native RLS policies | Written as SQL in migrations, no separate install |
-| GDPR technical controls | Data minimization, deletion, audit trail | Retention jobs + audit_events table (already scoped in 04_Database.md) | Implementation work, not a package |
+| GDPR technical controls | Data minimization, deletion, audit trail | Retention jobs + audit_events table (already scoped in 06_Database_Design.md) | Implementation work, not a package |
 
 ---
 
@@ -99,10 +99,10 @@ This project already has these Anthropic-provided skills available: `docx`, `pdf
 
 For a project like this, it's worth building a few **custom project-specific skills** so that future Claude Code / Claude sessions apply your conventions automatically instead of me re-deriving them each time. Good candidates:
 
-1. **`bikeshop-schema`** — encodes your tenant model, naming conventions (`business_id` scoping), canonical entities, and import-provenance fields from `04_Database.md`, so any future schema/migration work follows the same pattern automatically.
-2. **`ai-gateway-conventions`** — encodes the structured-input/output contract from `05_AI_Strategy.md` (the JSON packet shape, prohibited AI uses, validation rules) so any AI feature I help build calls the gateway correctly and never free-hands a number.
+1. **`bikeshop-schema`** — encodes your tenant model, naming conventions (`business_id` scoping), canonical entities, and import-provenance fields from `06_Database_Design.md`, so any future schema/migration work follows the same pattern automatically.
+2. **`ai-gateway-conventions`** — encodes the structured-input/output contract from `05_AI_Architecture.md` (the JSON packet shape, prohibited AI uses, validation rules) so any AI feature I help build calls the gateway correctly and never free-hands a number.
 3. **`adr-writer`** — encodes your ADR/BD/PD/ED template and status values from `12_Decision_Register.md`, so decision docs come out consistently formatted without you re-pasting the template each time.
-4. **`ui-design-system`** — encodes your Tailwind/shadcn/ECharts choices and dashboard layout principles from `01_Product_Vision.md` and `09_Product_Modules.md`, so generated frontend code matches your intended look rather than generic defaults.
+4. **`ui-design-system`** — encodes your Tailwind/shadcn/ECharts choices and dashboard layout principles from `01_Product_Vision.md` and `10_Product_Requirements.md`, so generated frontend code matches your intended look rather than generic defaults.
 
 **How to actually create these:** I'd use the `skill-creator` meta-skill to scaffold each one — it structures a `SKILL.md` with the right triggers and format. Once created, where they live depends on where you're working:
 
