@@ -69,7 +69,7 @@ All AI requests pass through a single internal gateway. The company plans to rou
 
 > AI explains. Application code calculates.
 
-This is ADR-002 in `12_Architecture_Decision_Log.md` and the Core Rule in `05_AI_Strategy.md`. Every other decision in this document exists to protect that rule.
+This is ADR-007 in `12_Decision_Register.md` and the Core Rule in `05_AI_Strategy.md`. Every other decision in this document exists to protect that rule.
 
 ---
 
@@ -99,7 +99,7 @@ This is ADR-002 in `12_Architecture_Decision_Log.md` and the Core Rule in `05_AI
 
 ## Why Provider Independence Matters
 
-Per the Company Constitution (Principle 6) and ADR-006/ADR-001, no business feature may depend on a single AI vendor. This protects the company from price increases, capability changes, or availability problems with any one provider, and keeps the door open to better or cheaper models as they emerge.
+Per the Company Constitution (Principle 6) and ADR-006/ED-006, no business feature may depend on a single AI vendor. This protects the company from price increases, capability changes, or availability problems with any one provider, and keeps the door open to better or cheaper models as they emerge.
 
 ## Planned Architecture
 
@@ -164,8 +164,8 @@ A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Ac
 
 # Current Decisions
 
-* AI explains; it never calculates (Accepted — ADR-002).
-* All AI requests pass through one internal gateway; no business module calls a provider SDK directly (Accepted — ADR-006, ADR-001).
+* AI explains; it never calculates (Accepted — ADR-007).
+* All AI requests pass through one internal gateway; no business module calls a provider SDK directly (Accepted — ADR-006, ED-006).
 * The platform plans to route AI requests through OpenRouter for cost, compliance, and quality-threshold-aware model selection (Proposed — pending ADR and defined quality threshold).
 
 ---
