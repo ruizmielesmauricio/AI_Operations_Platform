@@ -100,7 +100,7 @@ For a project like this, it's worth building a few **custom project-specific ski
 
 1. **`bikeshop-schema`** — encodes your tenant model, naming conventions (`business_id` scoping), canonical entities, and import-provenance fields from `04_Database.md`, so any future schema/migration work follows the same pattern automatically.
 2. **`ai-gateway-conventions`** — encodes the structured-input/output contract from `05_AI_Strategy.md` (the JSON packet shape, prohibited AI uses, validation rules) so any AI feature I help build calls the gateway correctly and never free-hands a number.
-3. **`adr-writer`** — encodes your ADR/BD/PD/ED template and status values from `11_ADRs.md` / `12_Architecture_Decision_Log.md`, so decision docs come out consistently formatted without you re-pasting the template each time.
+3. **`adr-writer`** — encodes your ADR/BD/PD/ED template and status values from `12_Decision_Register.md`, so decision docs come out consistently formatted without you re-pasting the template each time.
 4. **`ui-design-system`** — encodes your Tailwind/shadcn/ECharts choices and dashboard layout principles from `01_Product_Vision.md` and `09_Product_Modules.md`, so generated frontend code matches your intended look rather than generic defaults.
 
 **How to actually create these:** I'd use the `skill-creator` meta-skill to scaffold each one — it structures a `SKILL.md` with the right triggers and format. Once created, where they live depends on where you're working:
