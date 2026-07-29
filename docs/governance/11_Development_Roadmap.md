@@ -108,7 +108,6 @@ The most important sequencing decision: **customer discovery comes before seriou
 
 **Outstanding housekeeping:**
 
-- [ ] Update `02_Business_Model.md` from €79 to €80
 - [ ] Delete or supersede `11_ADRs.md` and old `12_Architecture_Decision_Log.md`
 - [ ] Update `01_Product_Vision.md` to remove the import-template guidance (superseded by PD-006)
 - [ ] Update `04_Database.md` and `09_Product_Modules.md` if ADR-016 is accepted
@@ -130,7 +129,7 @@ The most important sequencing decision: **customer discovery comes before seriou
 | Sample data files collected | At least 5 real (anonymised) export files for schema-detection testing |
 | Pain point register populated | Top 10 pain points ranked by frequency and severity |
 | Assumptions scored | Every assumption in `15_Customer_Discovery.md` marked Validated / Not / Unsure |
-| Willingness-to-pay evidence gathered | Direct evidence on the €80/month assumption |
+| Willingness-to-pay evidence gathered | Test commercial response to the accepted €80/month price |
 | Module priority ranked | Which of the five domains customers actually value most |
 
 **Why sample data files matter more than they look:** PD-006 commits the platform to schema-agnostic ingestion. That is impossible to build or test without real, messy export files. Collecting these during interviews is the single highest-value technical output of Phase 1.
@@ -230,7 +229,7 @@ Proceed only when:
 | Data quality problems encountered | Real-world ingestion edge cases |
 | Willingness to continue paying | The commercial answer |
 
-**Outputs:** revised data model, onboarding, pricing, metrics, module priority, and support process — plus real numbers to replace the estimates in `08_Cost_Analysis.md` and `09_Business_Model.md`.
+**Outputs:** revised data model, onboarding, pricing evidence and any future pricing recommendation, metrics, module priority, and support process — plus real numbers to replace the estimates in `08_Cost_Analysis.md` and `09_Business_Model.md`. The current price remains €80/month unless a later accepted decision supersedes BD-005.
 
 ---
 
@@ -384,3 +383,4 @@ Revenue is not expected before Phase 6. The scenarios in `09_Business_Model.md` 
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft; structured for Jira epic mapping. |
+| 0.2 | 30/07/2026 | Removed the completed €79-to-€80 housekeeping item and clarified that pilots test the accepted €80/month price. |
