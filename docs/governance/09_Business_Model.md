@@ -58,7 +58,7 @@ This document intentionally does **not** define:
 
 # Executive Summary (TL;DR)
 
-The business model — a €80/month subscription for independent bike shops, sold as a complement to their existing POS rather than a replacement — is consistent with the competitive evidence gathered in `08_Cost_Analysis.md`. The price sits inside a defensible band, and the estimated cost structure supports strong gross margin.
+The business model — an €80/month subscription for independent bike shops, sold as a complement to their existing POS rather than a replacement — is consistent with the competitive evidence gathered in `08_Cost_Analysis.md`. The price sits inside a defensible band, and the estimated cost structure supports strong gross margin.
 
 What is **not yet validated** is customer demand: no interviews have been completed, no pilot has run, and no one has actually paid €80/month for this product. This document forecasts revenue under three scenarios — conservative, base, and optimistic — explicitly built on stated assumptions about interview-to-pilot-to-paying conversion, because no real conversion data exists yet. The review plan at the end defines exactly when and how these assumptions get replaced with evidence.
 
