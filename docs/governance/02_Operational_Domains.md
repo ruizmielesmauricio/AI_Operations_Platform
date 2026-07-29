@@ -60,7 +60,7 @@ This document intentionally does **not** define:
 * 09_Product_Modules.md (detailed set)
 * 04_Database.md
 * 05_AI_Strategy.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
@@ -80,12 +80,12 @@ Two earlier documents describe "five domains" using different names. Both are co
 
 | Source | Domain List | Level of Abstraction |
 |---|---|---|
-| `12_Architecture_Decision_Log.md` (PD-001) | Retail Operations, Workshop Operations, Financial Performance, Business Knowledge, AI Decision Support | Organisational / architectural grouping |
+| `12_Decision_Register.md` (PD-002) | Retail Operations, Workshop Operations, Financial Performance, Business Knowledge, AI Decision Support | Organisational / architectural grouping |
 | `09_Product_Modules.md` | Forecasting, Inventory Optimization, Profitability, Returns & Warranty, Repairs | Functional / analytical modules |
 
 **Resolution adopted in this document:**
 
-The PD-001 grouping is treated as the top-level operational structure, because it separates *what the business does* (Retail, Workshop, Financial Performance) from *how the platform supports it* (Business Knowledge, AI Decision Support). The `09_Product_Modules.md` list is not a competing taxonomy — its five modules are analytical functions that live **inside** the three business-facing domains:
+The PD-002 grouping is treated as the top-level operational structure, because it separates *what the business does* (Retail, Workshop, Financial Performance) from *how the platform supports it* (Business Knowledge, AI Decision Support). The `09_Product_Modules.md` list is not a competing taxonomy — its five modules are analytical functions that live **inside** the three business-facing domains:
 
 ```text
 Retail Operations
@@ -186,7 +186,7 @@ Financial Performance
 
 **Primary data required:** Structured findings and metrics produced by the other domains (never raw data, per `05_AI_Strategy.md`).
 
-**Note:** Per the Company Constitution (Principle 3, "Business Logic First") and ADR-002, this domain never generates numbers. It explains numbers that Retail Operations, Workshop Operations, and Financial Performance have already calculated.
+**Note:** Per the Company Constitution (Principle 3, "Business Logic First") and ADR-007, this domain never generates numbers. It explains numbers that Retail Operations, Workshop Operations, and Financial Performance have already calculated.
 
 ---
 
@@ -218,7 +218,7 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 # Why This Decision?
 
-**Decision:** Use PD-001's grouping as the top-level domain structure, with `09_Product_Modules.md`'s five modules nested inside it.
+**Decision:** Use PD-002's grouping as the top-level domain structure, with `09_Product_Modules.md`'s five modules nested inside it.
 
 **Reason:** Avoids maintaining two conflicting "five domains" lists across the repository, and matches how an owner actually experiences their business.
 
@@ -254,4 +254,4 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.1 | TBD | Initial draft; reconciled domain terminology between PD-001 and 09_Product_Modules.md. |
+| 0.1 | TBD | Initial draft; reconciled domain terminology between PD-002 and 09_Product_Modules.md. |
