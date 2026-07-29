@@ -16,7 +16,7 @@ This document explains, at a governance level, how the database is structured so
 
 It uses two concrete, different business types — an independent bike shop and a coffee shop that bakes its own goods — to demonstrate that the same core schema can support very different operational realities (repairing a bicycle vs. producing a batch of pastries) with little to no structural change.
 
-Full table-by-table schema detail remains in `04_Database.md` and is not repeated here.
+This document governs the data model. Table-by-table implementation detail must be maintained with the database migrations during development.
 
 ---
 
@@ -42,8 +42,8 @@ Full table-by-table schema detail remains in `04_Database.md` and is not repeate
 
 This document intentionally does **not** define:
 
-* Full table definitions, column lists, or data types (see `04_Database.md`)
-* Migration tooling or process (see `06_Development_Rules.md`)
+* Full table definitions, column lists, or data types (database migrations and implementation documentation)
+* Migration tooling or process (see `12_Decision_Register.md`)
 * Deployment or backup procedure (see `07_Deployment_Guide.md`)
 * Specific business template configuration files
 
@@ -53,9 +53,9 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
-* 04_Database.md (detailed set)
-* 09_Product_Modules.md
-* 12_Architecture_Decision_Log.md
+* 06_Database_Design.md (detailed set)
+* 10_Product_Requirements.md
+* 12_Decision_Register.md
 
 ---
 
@@ -86,7 +86,7 @@ Business Template Extensions (industry-specific configuration)
    coffee_shop:  recipes, recipe_ingredients, production_batches
 ```
 
-(Full detail on the core and canonical layers: `04_Database.md`.)
+(Full detail on the core and canonical layers: `06_Database_Design.md`.)
 
 ---
 
@@ -125,7 +125,7 @@ A coffee-shop template configures this as: input = ingredients, output = a quant
 
 This keeps `sales`, `sale_items`, `inventory_movements`, and `products` completely unchanged between the two business types — only the template-level configuration and a thin extension table differ.
 
-**Status:** Proposed. This generalises the "Repairs" section of `04_Database.md`'s Bicycle-Shop Template into a reusable canonical entity. It requires an update to `04_Database.md` and `09_Product_Modules.md` once accepted, since both currently describe repairs as bicycle-specific.
+**Status:** Proposed. This generalises the "Repairs" section of `06_Database_Design.md`'s Bicycle-Shop Template into a reusable canonical entity. It requires an update to `06_Database_Design.md` and `10_Product_Requirements.md` once accepted, since both currently describe repairs as bicycle-specific.
 
 ---
 
@@ -134,7 +134,7 @@ This keeps `sales`, `sale_items`, `inventory_movements`, and `products` complete
 Before adding a new table to support a new business type, ask:
 
 1. **Is this pattern likely to recur in other industries?** (e.g., production/consumption of inputs recurs in bakeries, garages, and florists — so it belongs in the canonical layer, not a one-off template table.)
-2. **Can this be modeled as configuration of an existing canonical entity**, rather than a new table? (Prefer extension tables and flexible attributes per `04_Database.md`'s modeling rules.)
+2. **Can this be modeled as configuration of an existing canonical entity**, rather than a new table? (Prefer extension tables and flexible attributes per `06_Database_Design.md`'s modeling rules.)
 3. **Does this entity introduce bicycle-specific (or any single-industry-specific) assumptions into a shared table?** If yes, it does not belong in the canonical layer — move it to a template extension.
 4. **Is there already a similar canonical entity this could extend, rather than duplicate?**
 
@@ -162,13 +162,13 @@ The Production Events pattern (or an equivalent generalisation) should be valida
 
 # Commercial Perspective
 
-Being able to support a new vertical primarily through configuration rather than schema and code changes is what makes the "Build Once, Scale Everywhere" principle (Company Constitution, Principle 8) commercially real rather than aspirational — it directly reduces the cost of expanding into automotive garages, pet shops, garden centres, and other future segments listed in `02_Business_Model.md`.
+Being able to support a new vertical primarily through configuration rather than schema and code changes is what makes the "Build Once, Scale Everywhere" principle (Company Constitution, Principle 8) commercially real rather than aspirational — it directly reduces the cost of expanding into automotive garages, pet shops, garden centres, and other future segments listed in `09_Business_Model.md`.
 
 ---
 
 # Current Decisions
 
-* Use a shared core, canonical operational entities, and business-template extensions as the three-layer database model (Accepted, per `04_Database.md` and ADR-002/ADR-012 in `11_ADRs.md`).
+* Use a shared core, canonical operational entities, and business-template extensions as the three-layer database model (Accepted, per ADR-002 and ADR-012 in `12_Decision_Register.md`).
 * Do not build industry-specific schemas as unrelated, parallel structures (Accepted, per Company Constitution Principle 8).
 * Generalise "repairs" and "recipes" into a shared canonical concept (provisionally "Production Events") rather than building each independently (Proposed).
 
@@ -180,7 +180,7 @@ Being able to support a new vertical primarily through configuration rather than
 
 **Reason:** Both are the same business pattern — inputs consumed, output produced and sold — and modelling them separately would violate the Industry-Flexible Core principle and create duplicate, inconsistent margin/cost logic.
 
-**Alternatives Considered:** Building "repairs" as a bicycle-specific table (as currently described in `04_Database.md`) and later building an entirely separate "recipes" table for coffee shops when that vertical is validated. Rejected because it was the exact anti-pattern the Company Constitution warns against ("Build Once, Scale Everywhere"), and would create duplicated profitability logic between the two.
+**Alternatives Considered:** Building "repairs" as a bicycle-specific table (as currently described in `06_Database_Design.md`) and later building an entirely separate "recipes" table for coffee shops when that vertical is validated. Rejected because it was the exact anti-pattern the Company Constitution warns against ("Build Once, Scale Everywhere"), and would create duplicated profitability logic between the two.
 
 **Future Review Criteria:** Revisit once a third, structurally different business type (e.g., a florist or garden centre) is scoped, to confirm the canonical model still holds without further special-casing.
 
@@ -189,13 +189,13 @@ Being able to support a new vertical primarily through configuration rather than
 # Risks
 
 * Generalising too early, before more than two business types exist, risks over-engineering a pattern that doesn't actually recur cleanly. Mitigation: keep the extension tables (`repairs`, `recipes`) genuinely thin and industry-specific, and only invest in the shared `production_events` layer once a second real customer segment (beyond bike shops) is being actively built.
-* Existing documentation (`04_Database.md`, `09_Product_Modules.md`) still describes repairs as bicycle-specific and will need updating once this generalisation is accepted, to avoid conflicting instructions across the repository (per `06_Development_Rules.md`'s Decision Documentation rule).
+* Existing documentation (`06_Database_Design.md`, `10_Product_Requirements.md`) still describes repairs as bicycle-specific and will need updating once this generalisation is accepted, to avoid conflicting instructions across the repository (per `12_Decision_Register.md`'s Decision Documentation rule).
 
 ---
 
 # Future Improvements
 
-* Update `04_Database.md`'s Bicycle-Shop Template section and `09_Product_Modules.md`'s Repairs module to reference the generalised production-event pattern once accepted.
+* Update `06_Database_Design.md`'s Bicycle-Shop Template section and `10_Product_Requirements.md`'s Repairs module to reference the generalised production-event pattern once accepted.
 * Add a coffee-shop/bakery business template definition once customer discovery validates that segment, following the same process used for the bicycle-shop template in `15_Customer_Discovery.md`.
 * Test the pattern against a third business type before finalising table names and structure in an ADR.
 
