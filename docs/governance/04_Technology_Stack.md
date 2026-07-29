@@ -52,7 +52,7 @@ This document intentionally does **not** define:
 * 00_Company_Constitution.md
 * 03_System_Architecture.md
 * 08_Tech_Stack.md (detailed set)
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
@@ -131,7 +131,7 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 
 # Current Decisions
 
-* Use Next.js/React/TypeScript for the frontend (Accepted — ADR-004 in `11_ADRs.md`).
+* Use Next.js/React/TypeScript for the frontend (Accepted — ADR-004 in `12_Decision_Register.md`).
 * Use FastAPI/Python for the backend (Accepted — ADR-005).
 * Use PostgreSQL, with Neon for hosting and Supabase for auth only (Accepted — ADR-013 in `12_Decision_Register.md`).
 * Use Cloudflare R2 for object storage (Accepted, per `08_Tech_Stack.md`).
