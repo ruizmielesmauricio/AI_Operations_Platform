@@ -41,8 +41,8 @@ It contains one significant product decision that **supersedes earlier documenta
 
 This document intentionally does **not** define:
 
-* Metric formulas (see `09_Product_Modules.md`)
-* Database schema (see `06_Database_Design.md`, `04_Database.md`)
+* Metric formulas (see `10_Product_Requirements.md`)
+* Database schema (see `06_Database_Design.md`, `06_Database_Design.md`)
 * Architecture (see `03_System_Architecture.md`)
 * Delivery sequencing (see `11_Development_Roadmap.md`)
 
@@ -92,7 +92,7 @@ They export whatever their POS, accounting system, or spreadsheet produces, and 
 Earlier documentation (`01_Product_Vision.md`, "Low-Friction Use") proposed providing a downloadable import template. That approach has three problems that make it unworkable in practice:
 
 1. **It assumes the customer has time.** A shop owner will not restructure a spreadsheet to match our column names. They will close the tab.
-2. **It assumes the customer has the skill.** Column mapping is a data task. Our target user explicitly does not want to do data tasks (`00_Project_Overview.md`, Target User).
+2. **It assumes the customer has the skill.** Column mapping is a data task. Our target user explicitly does not want to do data tasks (`01_Project_Vision.md`, Target User).
 3. **It does not scale across industries.** A template per business type means maintaining templates for bike shops, garages, cafés, pet shops, florists — a growing maintenance burden that fights the Industry-Flexible Core principle.
 
 If the customer has to do the data preparation, we have not removed the work — we have just moved it to the person least equipped to do it. The platform's value proposition is doing that work for them.
@@ -119,9 +119,9 @@ If the customer has to do the data preparation, we have not removed the work —
 
 There is a real tension here that must be handled carefully.
 
-`05_AI_Strategy.md` explicitly **prohibits** AI from validating files, cleaning data, and deduplicating records. Those prohibitions stand and are not weakened by this section.
+`05_AI_Architecture.md` explicitly **prohibits** AI from validating files, cleaning data, and deduplicating records. Those prohibitions stand and are not weakened by this section.
 
-However, `05_AI_Strategy.md` **permits** AI to classify intent and select from approved options. Suggesting which source column probably corresponds to which canonical field is a classification task, not a calculation.
+However, `05_AI_Architecture.md` **permits** AI to classify intent and select from approved options. Suggesting which source column probably corresponds to which canonical field is a classification task, not a calculation.
 
 The line the platform must hold:
 
@@ -238,7 +238,7 @@ Schema-agnostic ingestion is genuinely hard, and this document should not preten
 
 # Commercial Perspective
 
-Removing the template requirement removes the single largest onboarding drop-off risk, and directly supports the "Time to first value" metric in `10_Roadmap.md`'s Phase 4 validation.
+Removing the template requirement removes the single largest onboarding drop-off risk, and directly supports the "Time to first value" metric in `11_Development_Roadmap.md`'s Phase 4 validation.
 
 ---
 
