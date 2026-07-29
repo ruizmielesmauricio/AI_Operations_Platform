@@ -14,7 +14,7 @@
 
 This document explains, explicitly and end-to-end, how the platform is deployed: which external tools and services are used, what each one is responsible for, and how they connect to every other part of the system. It is written so that a single founder can deploy, operate, and troubleshoot the entire system without needing to hold the full picture in their head.
 
-It complements — rather than repeats — `03_Architecture.md` (system design) and `08_Tech_Stack.md` / `04_Technology_Stack.md` (tool selection rationale). This document answers the operational question: *given the architecture and the chosen stack, how does it actually get deployed and stay running?*
+It complements — rather than repeats — `03_System_Architecture.md` (system design) and `04_Technology_Stack.md` (tool selection rationale). This document answers the operational question: *given the architecture and the chosen stack, how does it actually get deployed and stay running?*
 
 ---
 
@@ -45,8 +45,8 @@ It complements — rather than repeats — `03_Architecture.md` (system design) 
 
 This document intentionally does **not** define:
 
-* Why each tool was chosen over alternatives (see `04_Technology_Stack.md` / `08_Tech_Stack.md`)
-* Database schema (see `04_Database.md` / `06_Database_Design.md`)
+* Why each tool was chosen over alternatives (see `04_Technology_Stack.md`)
+* Database schema (see `06_Database_Design.md`)
 * Application-level business logic
 * Pricing or cost rationale (see `08_Cost_Analysis.md`)
 
@@ -57,7 +57,7 @@ This document intentionally does **not** define:
 * 03_System_Architecture.md
 * 04_Technology_Stack.md
 * 05_AI_Architecture.md
-* 08_Tech_Stack.md (detailed set)
+* 04_Technology_Stack.md (detailed set)
 * 08_Cost_Analysis.md
 * 12_Decision_Register.md
 
@@ -139,7 +139,7 @@ Push to main
   -> post-deploy health check
 ```
 
-Deployment must stop automatically if any prior step fails (per `06_Development_Rules.md`).
+Deployment must stop automatically if any prior step fails (per `12_Decision_Register.md`).
 
 ## Docker / Docker Compose
 
@@ -163,7 +163,7 @@ Deployment must stop automatically if any prior step fails (per `06_Development_
 
 ## Neon (PostgreSQL)
 
-**Role:** Primary system of record — the single source of truth for all tenant data, imports, metrics, forecasts, billing state, and audit logs (per `04_Database.md`).
+**Role:** Primary system of record — the single source of truth for all tenant data, imports, metrics, forecasts, billing state, and audit logs (per `06_Database_Design.md`).
 
 **How it connects:** Both the FastAPI API and the background worker connect directly to Neon over an encrypted connection, using pooled connections. Neither the web app nor the browser ever connects to Neon directly.
 
@@ -186,7 +186,7 @@ Browser requests an upload session
   -> FastAPI API creates a signed upload URL
   -> Browser uploads the file directly to R2 (not through the API)
   -> Background worker reads the object from R2 for parsing/validation
-  -> Temporary file deleted from R2 after successful import (per retention rules in 04_Database.md)
+  -> Temporary file deleted from R2 after successful import (per retention rules in 06_Database_Design.md)
 ```
 
 ## Stripe
@@ -205,7 +205,7 @@ User selects a plan in the web app
   -> Application access follows the locally stored subscription state
 ```
 
-Paid access is never granted based solely on the browser redirect back from Checkout — only the verified webhook updates billing state (per `08_Tech_Stack.md`).
+Paid access is never granted based solely on the browser redirect back from Checkout — only the verified webhook updates billing state (per `04_Technology_Stack.md`).
 
 ## Resend
 
@@ -217,11 +217,11 @@ Paid access is never granted based solely on the browser redirect back from Chec
 
 **Role:** AI model routing layer behind the internal AI Provider Gateway (see `05_AI_Architecture.md`), selecting a cost-effective, EU-compliant model above an approved quality threshold for each AI request.
 
-**How it connects:** Only the FastAPI API's AI Provider Gateway module ever calls OpenRouter. No other component (web app, worker business logic, dashboards) references it directly. Structured, minimized context (metrics and findings, never raw customer data) is sent per `05_AI_Strategy.md`'s Data Minimization rules.
+**How it connects:** Only the FastAPI API's AI Provider Gateway module ever calls OpenRouter. No other component (web app, worker business logic, dashboards) references it directly. Structured, minimized context (metrics and findings, never raw customer data) is sent per `05_AI_Architecture.md`'s Data Minimization rules.
 
 ## Redis (optional)
 
-**Role:** Queue broker for the background worker, caching, rate limiting, and short-lived locks — introduced only once actually needed (per `03_Architecture.md`).
+**Role:** Queue broker for the background worker, caching, rate limiting, and short-lived locks — introduced only once actually needed (per `03_System_Architecture.md`).
 
 **How it connects:** If used, both the FastAPI API (to enqueue jobs) and the background worker (to consume jobs) connect to the same Redis instance, hosted on the VPS or as a small managed add-on.
 
@@ -229,7 +229,7 @@ Paid access is never granted based solely on the browser redirect back from Chec
 
 **Role:** Error tracking and performance monitoring across the web app, API, and worker.
 
-**How it connects:** Each service reports unhandled exceptions and performance traces to Sentry. Sensitive customer content is never sent (per `06_Development_Rules.md`'s logging rules).
+**How it connects:** Each service reports unhandled exceptions and performance traces to Sentry. Sensitive customer content is never sent (per `12_Decision_Register.md`'s logging rules).
 
 ## Uptime Kuma
 
@@ -253,13 +253,13 @@ Paid access is never granted based solely on the browser redirect back from Chec
 | Staging | Pre-production validation | Separate Neon branch/project | Used to test migrations and imports safely before production |
 | Production | Live customer data | Neon production database | Only environment connected to production Stripe/Resend/OpenRouter keys |
 
-Neon's branching capability is specifically useful here: a staging branch can be created from production data (masked, per `04_Database.md`'s security rules) to test risky migrations without touching live data.
+Neon's branching capability is specifically useful here: a staging branch can be created from production data (masked, per `06_Database_Design.md`'s security rules) to test risky migrations without touching live data.
 
 ---
 
 # Secrets and Environment Variable Management
 
-* No secrets are committed to source control (per `06_Development_Rules.md`).
+* No secrets are committed to source control (per `12_Decision_Register.md`).
 * Environment variables (database connection strings, Stripe keys, Resend API key, OpenRouter API key, Supabase Auth keys) are stored in Coolify's environment configuration (or GitHub Actions Secrets + a VPS-side `.env` file if Coolify is not used).
 * Separate keys are used per environment — staging never uses production Stripe or OpenRouter credentials.
 
@@ -291,7 +291,7 @@ Neon's branching capability is specifically useful here: a staging branch can be
 
 # Backup and Disaster Recovery
 
-* **Database:** Automated backups and point-in-time recovery handled by Neon; backup restoration is tested periodically, not assumed to work (per `04_Database.md`'s security rules).
+* **Database:** Automated backups and point-in-time recovery handled by Neon; backup restoration is tested periodically, not assumed to work (per `06_Database_Design.md`'s security rules).
 * **Object storage:** R2 holds only temporary files by default, so backup priority is low; retained files (if a customer enables retention) follow R2's own durability guarantees.
 * **Application state:** Stateless containers (web, API, worker) require no backup — they can be rebuilt from the last known-good container image at any time.
 * **Configuration:** Infrastructure and environment configuration is documented in this repository and Coolify's own configuration export, so the deployment can be reconstructed on a new VPS if needed.
@@ -324,8 +324,8 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 # Current Decisions
 
-* Deploy via Docker containers to a low-cost VPS, optionally managed through Coolify (Accepted, per `08_Tech_Stack.md`).
-* Use GitHub Actions for CI/CD, with deployment blocked on test failure (Accepted, per `06_Development_Rules.md`).
+* Deploy via Docker containers to a low-cost VPS, optionally managed through Coolify (Accepted, per `04_Technology_Stack.md`).
+* Use GitHub Actions for CI/CD, with deployment blocked on test failure (Accepted, per `12_Decision_Register.md`).
 * Host PostgreSQL on Neon rather than self-managed on the VPS (Accepted — ADR-013).
 * Use Supabase strictly for Auth, not database or storage (Accepted — ADR-013).
 * Avoid AWS-specific services and Kubernetes at this stage (Accepted — ADR-009).
@@ -338,7 +338,7 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 **Reason:** This balances cost control against operational risk — the founder self-hosts the cheap, stateless, easily-rebuilt parts (containers) and pays for managed reliability only where mistakes would be costly (data loss, billing errors, security incidents).
 
-**Alternatives Considered:** Fully managed application hosting (Render, Railway, Fly.io) was considered for simplicity, and remains a valid fallback per `08_Tech_Stack.md` if VPS operation becomes too time-consuming for the founder to sustain alongside everything else.
+**Alternatives Considered:** Fully managed application hosting (Render, Railway, Fly.io) was considered for simplicity, and remains a valid fallback per `04_Technology_Stack.md` if VPS operation becomes too time-consuming for the founder to sustain alongside everything else.
 
 **Future Review Criteria:** Revisit if VPS operational overhead becomes a measurable time cost, or if a real outage reveals a gap in this deployment model.
 
@@ -354,7 +354,7 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 # Future Improvements
 
-* Move to a managed application host (Render/Railway/Fly.io) if VPS management becomes an operational burden, per the Scaling Path in `03_Architecture.md`.
+* Move to a managed application host (Render/Railway/Fly.io) if VPS management becomes an operational burden, per the Scaling Path in `03_System_Architecture.md`.
 * Introduce a staging Neon branch workflow formally into the CI/CD pipeline once migrations become riskier (multiple business templates, more customers).
 * Add a second, independent uptime monitor outside the VPS itself, since a monitor co-located with the monitored service cannot detect a full VPS outage.
 
@@ -362,7 +362,7 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 # Questions Still Open
 
-* Should staging environment costs be absorbed now, or only introduced once the pilot phase begins (Phase 3/4 in `10_Roadmap.md`)?
+* Should staging environment costs be absorbed now, or only introduced once the pilot phase begins (Phase 3/4 in `11_Development_Roadmap.md`)?
 * At what customer count does self-hosting on a VPS stop being the right tradeoff versus a managed application host?
 * Should Redis be introduced now, or deferred until the background job architecture actually requires it?
 
