@@ -24,8 +24,8 @@ Nothing below is legal or financial advice — for company registration, tax, an
 |---|---|---|---|
 | Database design & architecture | Multi-tenant schema, `business_id` scoping, migrations | PostgreSQL + ERD tool (dbdiagram.io, drawSQL, or `pgModeler`) | Design schema in dbdiagram.io first; implement via SQLAlchemy models + Alembic migrations in `backend/app/models` |
 | PostgreSQL | System of record | `psql`, pgAdmin or TablePlus (GUI) | `brew install postgresql` (Mac) / Docker image `postgres:16` for local dev |
-| Supabase | Auth (per ADR-004), optional storage | `supabase-py`, `@supabase/supabase-js`, Supabase CLI | `pip install supabase --break-system-packages`; `npm install @supabase/supabase-js`; `supabase init` for local dev stack |
-| Neon | Managed Postgres (per ADR-004) | Neon CLI, `psycopg2`/`asyncpg` | Create project at neon.tech; connection string goes in `.env`, never in code |
+| Supabase | Auth (per ADR-013), optional storage | `supabase-py`, `@supabase/supabase-js`, Supabase CLI | `pip install supabase --break-system-packages`; `npm install @supabase/supabase-js`; `supabase init` for local dev stack |
+| Neon | Managed Postgres (per ADR-013) | Neon CLI, `psycopg2`/`asyncpg` | Create project at neon.tech; connection string goes in `.env`, never in code |
 | Node.js | Runtime for Next.js frontend | Node 20 LTS via `nvm` | `nvm install --lts`; `npx create-next-app@latest` |
 | Python | Backend, analytics, AI orchestration | Python 3.12, `venv` or `poetry` | `python -m venv .venv`; `pip install fastapi uvicorn sqlalchemy alembic pydantic --break-system-packages` |
 | FastAPI | REST API layer | `fastapi`, `uvicorn` | Included above |
