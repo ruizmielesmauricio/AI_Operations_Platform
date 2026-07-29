@@ -14,7 +14,7 @@
 
 This document explains, at a governance level, how Artificial Intelligence fits into the platform's architecture: what it is allowed to do, what it is never allowed to do, and how the company plans to control its cost and reliability — including the planned use of OpenRouter for model selection.
 
-Detailed prompt design, structured input/output schemas, caching rules, and cost-control mechanics remain in `05_AI_Strategy.md` and are not repeated here.
+This document governs AI boundaries and architecture. Implementation-level prompt schemas, caching rules, and model evaluations must remain consistent with these rules and be documented during development.
 
 ---
 
@@ -40,10 +40,10 @@ Detailed prompt design, structured input/output schemas, caching rules, and cost
 
 This document intentionally does **not** define:
 
-* Prompt templates or structured JSON schemas (see `05_AI_Strategy.md`)
-* Token/cost limits by plan (see `05_AI_Strategy.md`, `07_Cost_Strategy.md`)
-* Caching implementation (see `05_AI_Strategy.md`)
-* Database schema for AI usage tracking (see `04_Database.md`)
+* Prompt templates or structured JSON schemas (implementation documentation)
+* Token/cost limits by plan (see `08_Cost_Analysis.md` and implementation documentation)
+* Caching implementation (implementation documentation)
+* Database schema for AI usage tracking (see `06_Database_Design.md`)
 
 ---
 
@@ -51,8 +51,8 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 03_System_Architecture.md
-* 05_AI_Strategy.md (detailed set)
-* 07_Cost_Strategy.md
+* 05_AI_Architecture.md (detailed set)
+* 08_Cost_Analysis.md
 * 12_Decision_Register.md
 
 ---
@@ -69,7 +69,7 @@ All AI requests pass through a single internal gateway. The company plans to rou
 
 > AI explains. Application code calculates.
 
-This is ADR-007 in `12_Decision_Register.md` and the Core Rule in `05_AI_Strategy.md`. Every other decision in this document exists to protect that rule.
+This is ADR-007 in `12_Decision_Register.md` and the Core Rule in `05_AI_Architecture.md`. Every other decision in this document exists to protect that rule.
 
 ---
 
@@ -81,7 +81,7 @@ This is ADR-007 in `12_Decision_Register.md` and the Core Rule in `05_AI_Strateg
 * Explaining anomalies and forecasts
 * Classifying user intent and selecting relevant approved metrics
 
-(Full list: `05_AI_Strategy.md`, "AI Responsibilities")
+(Full list: `05_AI_Architecture.md`, "AI Responsibilities")
 
 # What AI Must Never Do
 
@@ -91,7 +91,7 @@ This is ADR-007 in `12_Decision_Register.md` and the Core Rule in `05_AI_Strateg
 * Authorize access or update billing state
 * Invent a missing figure
 
-(Full list: `05_AI_Strategy.md`, "AI Prohibitions")
+(Full list: `05_AI_Architecture.md`, "AI Prohibitions")
 
 ---
 
@@ -119,7 +119,7 @@ OpenRouter (planned)
 Underlying model (selected per request)
 ```
 
-The internal `AIProvider` interface defined in `05_AI_Strategy.md` does not change. OpenRouter becomes the mechanism the gateway uses to reach a model — it is an implementation detail behind the interface, not a new dependency inside business modules.
+The internal `AIProvider` interface defined in `05_AI_Architecture.md` does not change. OpenRouter becomes the mechanism the gateway uses to reach a model — it is an implementation detail behind the interface, not a new dependency inside business modules.
 
 ## What OpenRouter Is Expected to Provide
 
@@ -134,13 +134,13 @@ The internal `AIProvider` interface defined in `05_AI_Strategy.md` does not chan
 * Usage and cost logging (provider, model, tokens, cost, feature, business, user, timestamp, success/failure) still applies per request.
 * The AI Prohibitions list above is unaffected by which model or router is used — no model, however cheap or capable, is permitted to calculate a number that belongs to deterministic code.
 
-**Status:** Proposed. This becomes an Accepted ADR once a specific quality threshold and evaluation test set (per `05_AI_Strategy.md`, "Model Evaluation") have been defined and tested against candidate models.
+**Status:** Proposed. This becomes an Accepted ADR once a specific quality threshold and evaluation test set (per `05_AI_Architecture.md`, "Model Evaluation") have been defined and tested against candidate models.
 
 ---
 
 # Business Perspective
 
-AI cost is a variable cost per customer, and an unpredictable one if left unmanaged. Routing through OpenRouter is the mechanism by which the company intends to keep that cost "a small portion of the cost per customer," as required by `02_Business_Model.md`.
+AI cost is a variable cost per customer, and an unpredictable one if left unmanaged. Routing through OpenRouter is the mechanism by which the company intends to keep that cost "a small portion of the cost per customer," as required by `09_Business_Model.md`.
 
 ---
 
@@ -152,7 +152,7 @@ Customers should experience consistent, trustworthy explanations regardless of w
 
 # Technical Perspective
 
-The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_Architecture.md` and `03_System_Architecture.md`.
+The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_System_Architecture.md` and `03_System_Architecture.md`.
 
 ---
 
@@ -184,14 +184,14 @@ A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Ac
 
 # Risks
 
-* A cost-first routing strategy could degrade explanation quality if the quality threshold is not enforced strictly. Mitigation: pair routing with the output validation rules in `05_AI_Strategy.md` before enabling cost-optimised routing in production.
+* A cost-first routing strategy could degrade explanation quality if the quality threshold is not enforced strictly. Mitigation: pair routing with the output validation rules in `05_AI_Architecture.md` before enabling cost-optimised routing in production.
 * Introducing a third-party router adds one more vendor dependency. Mitigation: it sits behind the internal interface and is replaceable without touching business modules, consistent with the rest of the stack (`04_Technology_Stack.md`).
 
 ---
 
 # Future Improvements
 
-* Define and publish the numeric quality/reliability threshold referenced in `05_AI_Strategy.md`'s Model Evaluation section.
+* Define and publish the numeric quality/reliability threshold referenced in `05_AI_Architecture.md`'s Model Evaluation section.
 * Build a small internal dashboard (for the founder, not customers) tracking cost-per-question and error rate by model, to make the routing decision auditable over time.
 * Formalise this document's "Proposed" OpenRouter decision as an Accepted ADR once the above is in place.
 
