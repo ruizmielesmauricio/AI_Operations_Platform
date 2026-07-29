@@ -144,7 +144,7 @@ A shared PostgreSQL database with tenant-scoped rows is used initially, defended
 
 ## Governing Principle
 
-Per the Company Constitution (Principle 6, AI-Agnostic Architecture) and ADR-006 / ADR-001, no business module may call an AI provider's SDK directly. All AI requests pass through a single internal **AI Provider Gateway** (`05_AI_Strategy.md`), which is responsible for provider selection, prompt construction, output validation, and cost tracking.
+Per the Company Constitution (Principle 6, AI-Agnostic Architecture) and ADR-006 / ED-006, no business module may call an AI provider's SDK directly. All AI requests pass through a single internal **AI Provider Gateway** (`05_AI_Strategy.md`), which is responsible for provider selection, prompt construction, output validation, and cost tracking.
 
 ## Planned Use of OpenRouter
 
@@ -205,7 +205,7 @@ Provider routing directly supports the Cost Strategy goal of keeping "AI as a sm
 
 # Current Decisions
 
-* The platform uses a single internal AI Provider Gateway; no business module calls a provider SDK directly (Accepted — ADR-006, ADR-001).
+* The platform uses a single internal AI Provider Gateway; no business module calls a provider SDK directly (Accepted — ADR-006, ED-006).
 * The platform plans to route AI requests through OpenRouter to select cost-effective, EU-compliant models above a quality threshold (Proposed — pending ADR).
 
 ---
