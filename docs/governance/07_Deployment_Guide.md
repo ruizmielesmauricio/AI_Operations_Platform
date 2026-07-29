@@ -59,7 +59,7 @@ This document intentionally does **not** define:
 * 05_AI_Architecture.md
 * 08_Tech_Stack.md (detailed set)
 * 08_Cost_Analysis.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
