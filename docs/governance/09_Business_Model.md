@@ -12,9 +12,9 @@
 
 ## Purpose
 
-This document validates the business model described in `02_Business_Model.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, tests the €80/month pricing assumption, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
+This document validates the business model described in `02_Business_Model.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, documents the accepted €80/month price and tests its commercial viability, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
 
-This document does not invent confidence that doesn't exist yet — every number below is a planning assumption, not a commitment or a prediction, and is labelled as such throughout.
+This document does not invent confidence that doesn't exist yet — every revenue forecast and conversion estimate below is a planning assumption, not a commitment or prediction. The current subscription price itself is fixed at €80/month under BD-005.
 
 ---
 
@@ -29,7 +29,7 @@ This document does not invent confidence that doesn't exist yet — every number
 ## In Scope
 
 * Validation of the core business model against market evidence
-* Validation of the €80/month pricing assumption
+* Commercial validation of the accepted €80/month price
 * First 6-month and first 12-month revenue forecast, scenario-based
 * A review plan for revisiting these assumptions
 
@@ -71,11 +71,11 @@ What is **not yet validated** is customer demand: no interviews have been comple
 ## The Model, Restated
 
 * **Customer:** Independent bike shop in Ireland (initial segment), paying a monthly subscription.
-* **Price:** €80/month working reference price (updated from the €79 figure in `02_Business_Model.md` — see note below).
+* **Price:** €80/month per business — the accepted current subscription price under BD-005.
 * **Value delivered:** Deterministic profitability, inventory, repair, and returns analytics, explained in plain language, layered on top of the shop's existing POS/accounting data.
 * **Cost structure:** Low fixed infrastructure cost, small variable AI/processing cost per customer (`08_Cost_Analysis.md`).
 
-**Note on the €79 vs. €80 reference price:** `02_Business_Model.md` records €79/month as "a planning assumption and not a permanently approved public price" (BD-001, Proposed). This document updates the working reference to €80/month per current direction. This is a small, cosmetic change in absolute terms, but `02_Business_Model.md` and `11_ADRs.md` / `12_Architecture_Decision_Log.md` should be updated to avoid two different reference prices circulating in the repository — flagged in "Future Improvements" below.
+**Pricing status:** €80/month per business is the accepted current subscription price (BD-005). The former €79 planning assumption is superseded and must not be used in financial modelling or customer-facing material.
 
 ## Validation Against Market Evidence
 
@@ -91,7 +91,7 @@ What is **not yet validated** is customer demand: no interviews have been comple
 
 ---
 
-# Part 2 — Pricing Assumption Validation
+# Part 2 — Current Price Commercial Validation
 
 ## Is €80/Month Reasonable?
 
@@ -199,7 +199,7 @@ The most commercially important output of this document is not the revenue numbe
 
 # Current Decisions
 
-* Adopt €80/month as the updated working reference price, superseding the €79 figure in `02_Business_Model.md` pending formal update (Proposed).
+* Set the current subscription price at €80/month per business; this supersedes the former €79 planning assumption (BD-005, Accepted).
 * Treat all revenue figures in this document as scenario planning, not forecasts to be relied upon for financial commitments (Accepted).
 * Sequence paying revenue after pilot validation, not from month 1 (Accepted, consistent with `10_Roadmap.md`).
 
@@ -221,13 +221,11 @@ The most commercially important output of this document is not the revenue numbe
 
 * The biggest risk to this entire model is demand risk, not cost or pricing risk — this document cannot resolve that, only `15_Customer_Discovery.md` can.
 * Founder time is the scarcest resource in the first 12 months; the forecast assumes founder-led acquisition with no paid marketing, which may not scale even in the optimistic scenario.
-* The €79 vs. €80 pricing inconsistency across documents should be resolved promptly to avoid confusion in investor or planning conversations.
 
 ---
 
 # Future Improvements
 
-* Update `02_Business_Model.md`'s BD-001 and `11_ADRs.md` / `12_Architecture_Decision_Log.md` to reflect €80/month as the current working reference price, replacing €79.
 * Once real interview data exists, replace Part 1's "Not validated" rows with actual findings.
 * Once pilot billing begins (if pilots are charged), replace Part 3's Month 1-6 table with real figures.
 * Add a simple churn and cohort-tracking approach once the first paying cohort exists, so month-12-and-beyond forecasting has a real basis.
@@ -239,7 +237,6 @@ The most commercially important output of this document is not the revenue numbe
 * Should pilot customers be charged at all, and if so, at what rate relative to €80/month?
 * What conversion rate from pilot to paying customer is realistic — this document assumed roughly 25-60% across scenarios, which is itself unvalidated?
 * At what point should the founder consider paid customer acquisition, given the assumption of zero paid marketing spend in the first 12 months?
-* Should the €79/€80 pricing discrepancy be resolved now, or left until customer discovery gives a firmer number?
 
 ---
 
@@ -248,3 +245,4 @@ The most commercially important output of this document is not the revenue numbe
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; business model and pricing validated against `08_Cost_Analysis.md`; 6- and 12-month scenario-based revenue forecast added. |
+| 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price; removed the superseded €79 discrepancy and retained €80 across all revenue scenarios. |
