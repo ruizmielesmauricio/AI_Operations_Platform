@@ -369,7 +369,7 @@ Our strategy is to reduce these risks through explainability, measurable ROI, cu
 
 # Questions Still Open
 
-* What will our first commercial pricing strategy be?
+* Should the accepted €80/month price later include annual-billing discounts or additional tiers?
 * Which customer segment should we target first within the bike shop market?
 * What measurable ROI should every customer expect within their first year?
 * What customer success metrics will determine product-market fit?
@@ -381,4 +381,5 @@ Our strategy is to reduce these risks through explainability, measurable ROI, cu
 | Version | Date | Changes                       |
 | ------- | ---- | ----------------------------- |
 | 0.1     | TBD  | Initial project vision draft. |
+| 0.2     | 30/07/2026 | Replaced the unresolved pricing-strategy question with future packaging options around the accepted €80/month price. |
 
