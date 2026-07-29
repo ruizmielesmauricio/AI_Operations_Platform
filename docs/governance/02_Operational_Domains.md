@@ -16,7 +16,7 @@ This document defines the operational domains the platform analyses and acts on.
 
 An operational domain is a coherent area of a small business's day-to-day operations that the platform observes, measures, explains, and recommends actions for. This document explains what each domain covers, what business questions it answers, what data it depends on, and how the domains relate to one another and to the platform's supporting layers (knowledge and AI).
 
-It is the bridge between the Company Constitution (why we exist) and the technical module design in `09_Product_Modules.md` (how each domain is calculated).
+It is the bridge between the Company Constitution (why we exist) and the technical module design in `10_Product_Requirements.md` (how each domain is calculated).
 
 ---
 
@@ -45,11 +45,11 @@ It is the bridge between the Company Constitution (why we exist) and the technic
 
 This document intentionally does **not** define:
 
-* Detailed metric formulas (see `09_Product_Modules.md`)
-* Database schema (see `04_Database.md`)
-* AI prompt design (see `05_AI_Strategy.md`)
-* Pricing or packaging by domain (see `02_Business_Model.md`)
-* UI/dashboard layout specifics (see `09_Product_Modules.md`)
+* Detailed metric formulas (see `10_Product_Requirements.md`)
+* Database schema (see `06_Database_Design.md`)
+* AI prompt design (see `05_AI_Architecture.md`)
+* Pricing or packaging by domain (see `09_Business_Model.md`)
+* UI/dashboard layout specifics (see `10_Product_Requirements.md`)
 
 ---
 
@@ -57,9 +57,9 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 01_Project_Vision.md
-* 09_Product_Modules.md (detailed set)
-* 04_Database.md
-* 05_AI_Strategy.md
+* 10_Product_Requirements.md (detailed set)
+* 06_Database_Design.md
+* 05_AI_Architecture.md
 * 12_Decision_Register.md
 
 ---
@@ -81,11 +81,11 @@ Two earlier documents describe "five domains" using different names. Both are co
 | Source | Domain List | Level of Abstraction |
 |---|---|---|
 | `12_Decision_Register.md` (PD-002) | Retail Operations, Workshop Operations, Financial Performance, Business Knowledge, AI Decision Support | Organisational / architectural grouping |
-| `09_Product_Modules.md` | Forecasting, Inventory Optimization, Profitability, Returns & Warranty, Repairs | Functional / analytical modules |
+| `10_Product_Requirements.md` | Forecasting, Inventory Optimization, Profitability, Returns & Warranty, Repairs | Functional / analytical modules |
 
 **Resolution adopted in this document:**
 
-The PD-002 grouping is treated as the top-level operational structure, because it separates *what the business does* (Retail, Workshop, Financial Performance) from *how the platform supports it* (Business Knowledge, AI Decision Support). The `09_Product_Modules.md` list is not a competing taxonomy — its five modules are analytical functions that live **inside** the three business-facing domains:
+The PD-002 grouping is treated as the top-level operational structure, because it separates *what the business does* (Retail, Workshop, Financial Performance) from *how the platform supports it* (Business Knowledge, AI Decision Support). The `10_Product_Requirements.md` list is not a competing taxonomy — its five modules are analytical functions that live **inside** the three business-facing domains:
 
 ```text
 Retail Operations
@@ -120,7 +120,7 @@ Financial Performance
 
 **Primary data required:** Sales transactions, product catalogue, stock levels, supplier information.
 
-**Corresponds to:** Inventory Optimization module in `09_Product_Modules.md`.
+**Corresponds to:** Inventory Optimization module in `10_Product_Requirements.md`.
 
 ---
 
@@ -137,7 +137,7 @@ Financial Performance
 
 **Primary data required:** Repair/work-order records, status history, labour entries, parts used.
 
-**Corresponds to:** Repairs module in `09_Product_Modules.md`.
+**Corresponds to:** Repairs module in `10_Product_Requirements.md`.
 
 ---
 
@@ -154,7 +154,7 @@ Financial Performance
 
 **Primary data required:** Revenue and cost data, historical sales for forecasting, return/warranty records.
 
-**Corresponds to:** Profitability, Forecasting, and Returns & Warranty modules in `09_Product_Modules.md`.
+**Corresponds to:** Profitability, Forecasting, and Returns & Warranty modules in `10_Product_Requirements.md`.
 
 ---
 
@@ -168,7 +168,7 @@ Financial Performance
 * What is our policy for this situation?
 * What terminology does this business template use?
 
-**Primary data required:** Metric definitions, business template configuration, approved documentation (future RAG use per `05_AI_Strategy.md`).
+**Primary data required:** Metric definitions, business template configuration, approved documentation (future RAG use per `05_AI_Architecture.md`).
 
 **Note:** This domain does not calculate business outcomes. It exists so the other domains and the AI layer have a consistent, approved source of definitions and policy to draw from.
 
@@ -184,7 +184,7 @@ Financial Performance
 * What should I do next, and why?
 * What does this number mean for my business?
 
-**Primary data required:** Structured findings and metrics produced by the other domains (never raw data, per `05_AI_Strategy.md`).
+**Primary data required:** Structured findings and metrics produced by the other domains (never raw data, per `05_AI_Architecture.md`).
 
 **Note:** Per the Company Constitution (Principle 3, "Business Logic First") and ADR-007, this domain never generates numbers. It explains numbers that Retail Operations, Workshop Operations, and Financial Performance have already calculated.
 
@@ -204,7 +204,7 @@ A customer should experience the platform as three connected views of their busi
 
 # Technical Perspective
 
-Each analytical domain (Retail Operations, Workshop Operations, Financial Performance) maps to one or more deterministic calculation modules described in `09_Product_Modules.md`, each with its own metrics, rules, findings, and recommendations. Business Knowledge and AI Decision Support are cross-cutting platform services (per `03_Architecture.md`'s Analytics Engine and AI Provider Gateway) rather than domains with their own database entities and dashboards.
+Each analytical domain (Retail Operations, Workshop Operations, Financial Performance) maps to one or more deterministic calculation modules described in `10_Product_Requirements.md`, each with its own metrics, rules, findings, and recommendations. Business Knowledge and AI Decision Support are cross-cutting platform services (per `03_System_Architecture.md`'s Analytics Engine and AI Provider Gateway) rather than domains with their own database entities and dashboards.
 
 ---
 
@@ -218,11 +218,11 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 # Why This Decision?
 
-**Decision:** Use PD-002's grouping as the top-level domain structure, with `09_Product_Modules.md`'s five modules nested inside it.
+**Decision:** Use PD-002's grouping as the top-level domain structure, with `10_Product_Requirements.md`'s five modules nested inside it.
 
 **Reason:** Avoids maintaining two conflicting "five domains" lists across the repository, and matches how an owner actually experiences their business.
 
-**Alternatives Considered:** Keeping `09_Product_Modules.md`'s five modules as the top-level structure and dropping Business Knowledge / AI Decision Support as named domains entirely. Rejected because those two layers are referenced elsewhere (README, AI Strategy) as first-class parts of the platform and deserve documentation, even if they aren't customer-facing dashboard sections.
+**Alternatives Considered:** Keeping `10_Product_Requirements.md`'s five modules as the top-level structure and dropping Business Knowledge / AI Decision Support as named domains entirely. Rejected because those two layers are referenced elsewhere (README, AI Strategy) as first-class parts of the platform and deserve documentation, even if they aren't customer-facing dashboard sections.
 
 **Future Review Criteria:** Revisit once pilot interviews (`15_Customer_Discovery.md`) show whether owners think of returns/warranty as a retail concern or a financial concern.
 
@@ -231,7 +231,7 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 # Risks
 
 * Reconciling two terminologies retroactively may cause confusion if older documents are read without this reconciliation section. Mitigation: this document is now the canonical reference; other documents should link here rather than restate domain lists.
-* Treating Returns & Warranty as a sub-topic of Financial Performance rather than its own domain may under-emphasise it in early dashboard design. Mitigation: `09_Product_Modules.md` still gives it a full module treatment with its own metrics and recommendations.
+* Treating Returns & Warranty as a sub-topic of Financial Performance rather than its own domain may under-emphasise it in early dashboard design. Mitigation: `10_Product_Requirements.md` still gives it a full module treatment with its own metrics and recommendations.
 
 ---
 
@@ -254,4 +254,4 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.1 | TBD | Initial draft; reconciled domain terminology between PD-002 and 09_Product_Modules.md. |
+| 0.1 | TBD | Initial draft; reconciled domain terminology between PD-002 and 10_Product_Requirements.md. |
