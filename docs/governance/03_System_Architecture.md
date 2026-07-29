@@ -57,7 +57,7 @@ This document intentionally does **not** define:
 * 02_Operational_Domains.md
 * 03_Architecture.md (detailed set)
 * 05_AI_Strategy.md
-* 12_Architecture_Decision_Log.md
+* 12_Decision_Register.md
 
 ---
 
