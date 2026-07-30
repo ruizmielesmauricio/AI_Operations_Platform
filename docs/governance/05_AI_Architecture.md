@@ -1,6 +1,6 @@
 # 05_AI_Architecture.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -151,7 +151,7 @@ Customers should experience consistent, trustworthy explanations regardless of w
 
 # Technical Perspective
 
-The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_System_Architecture.md` and `03_System_Architecture.md`.
+The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_System_Architecture.md`.
 
 ---
 
@@ -210,3 +210,4 @@ A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Ac
 |---------|------|---------|
 | 0.1 | TBD | Initial governance-level draft; recorded planned use of OpenRouter for AI provider routing. |
 | 0.2 | 30/07/2026 | Fixed stale `01_Product_Vision.md` filename references (now `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document. This document remains the canonical source for AI provider routing detail. |
+| 0.3 | 30/07/2026 | Fixed a duplicate self-citation in the Technical Perspective section (`03_System_Architecture.md` was cited twice in the same sentence). |
