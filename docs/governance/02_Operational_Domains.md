@@ -68,7 +68,7 @@ This document intentionally does **not** define:
 
 The platform organises everything it does around a small number of **operational domains** — the parts of a business that generate data, create decisions, and benefit from analysis.
 
-There are three **analytical domains** that mirror how a bike shop owner actually thinks about their business — retail, workshop, and money — plus two **supporting domains** that make the analytical domains explainable and accessible: a knowledge layer and an AI decision-support layer.
+The platform provides configurable analytical capabilities for commercial activity, service or production work, and financial performance, plus supporting knowledge and explanation layers. The bicycle-shop template labels these as Retail Operations, Workshop Operations, and Financial Performance; other templates may use different terminology and activate only the capabilities relevant to that business.
 
 This document also resolves a naming inconsistency between two earlier drafts in this repository (see "Reconciling Domain Terminology" below) so that all future documents use one consistent structure.
 
@@ -192,13 +192,13 @@ Financial Performance
 
 # Business Perspective
 
-Owners do not think in terms of "modules" or "domains" — they think in terms of the parts of their shop: the counter, the workshop, and the bank balance. Structuring the platform around Retail, Workshop, and Financial Performance keeps the product aligned with how a bike shop owner already organises their mental model of the business, while Business Knowledge and AI Decision Support remain invisible scaffolding rather than customer-facing "modules."
+Owners do not think in terms of internal modules or domains; they think in terms of the activities their own business performs. The bicycle-shop template may present the counter, workshop, and financial position. A service business may instead present sales, service delivery, and financial performance. Templates adapt terminology and applicability while the same underlying calculation capabilities and platform services are reused.
 
 ---
 
 # Customer Perspective
 
-A customer should experience the platform as three connected views of their business (retail, workshop, money) that are explained in plain language and always traceable back to their own data — never as five abstract "domains."
+A customer should experience only the connected views relevant to their business, using familiar terminology and results traceable to their own data—not a fixed set of bike-shop screens or five abstract internal domains.
 
 ---
 
@@ -208,9 +208,21 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 ---
 
+# Cross-Industry Applicability
+
+* The five functional modules are platform capabilities, not mandatory screens for every customer.
+* Forecasting and profitability can apply broadly when sufficient data exists.
+* Inventory optimisation and returns/warranty activate only for businesses that manage relevant products, stock, or claims.
+* Repairs is the bicycle-shop label for the broader service/production capability and activates only when the selected template supports jobs, services, or production events.
+* Templates may change labels, mappings, thresholds, and enabled modules; they must not create a separate platform, tenant database, or alternative formula for the same canonical metric.
+* Bike-shop wording elsewhere in this document is an explicitly labelled first-template example.
+
+---
+
 # Current Decisions
 
-* The platform is organised around three customer-facing operational domains: Retail Operations, Workshop Operations, and Financial Performance.
+* The bicycle-shop template is organised around Retail Operations, Workshop Operations, and Financial Performance; other templates expose the equivalent applicable capabilities using business-appropriate labels.
+* Irrelevant modules are disabled rather than shown with empty or misleading results.
 * Business Knowledge and AI Decision Support are supporting domains, not customer-facing analytical modules.
 * Returns & Warranty is provisionally assigned to Financial Performance (open to revision — see below).
 
@@ -237,7 +249,7 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 # Future Improvements
 
-* As new business templates are added (garages, cafés, retailers), confirm whether "Retail Operations" and "Workshop Operations" still fit, or whether a more generic domain name (e.g., "Service Operations") is needed for non-repair service businesses.
+* As new business templates are added, validate their customer-facing terminology and module applicability without changing the common platform capabilities.
 * Consider whether Business Knowledge should become a customer-facing feature (e.g., a searchable help/policy assistant) rather than a purely internal supporting layer, per the README's "Warranty & Policy Assistant" and "Business Knowledge Base (RAG)" future features.
 
 ---
@@ -246,7 +258,6 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 
 * Should Returns & Warranty be its own top-level domain once pilot data is available?
 * Should Business Knowledge remain purely internal, or become a customer-visible module?
-* Does "Retail Operations" and "Workshop Operations" naming generalise cleanly to non-bike-shop templates?
 
 ---
 
@@ -255,3 +266,4 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; reconciled domain terminology between PD-002 and 10_Product_Requirements.md. |
+| 0.2 | 30/07/2026 | Separated reusable platform capabilities from bicycle-shop labels and made module applicability template-driven. |

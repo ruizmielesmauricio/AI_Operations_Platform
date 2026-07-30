@@ -58,7 +58,7 @@ This document intentionally does **not** define:
 
 # Executive Summary (TL;DR)
 
-The business model — an €80/month subscription for independent bike shops, sold as a complement to their existing POS rather than a replacement — is consistent with the competitive evidence gathered in `08_Cost_Analysis.md`. The price sits inside a defensible band, and the estimated cost structure supports strong gross margin.
+The initial go-to-market model—an €80/month subscription for independent bike shops, sold as a complement to their existing POS rather than a replacement—is consistent with the competitive evidence gathered in `08_Cost_Analysis.md`. The subscription applies per business; bike shops are the first validation segment, not the permanent limit of the product. The price sits inside a defensible band, and the estimated cost structure supports strong gross margin.
 
 What is **not yet validated** is customer demand: no interviews have been completed, no pilot has run, and no one has actually paid €80/month for this product. This document forecasts revenue under three scenarios — conservative, base, and optimistic — explicitly built on stated assumptions about interview-to-pilot-to-paying conversion, because no real conversion data exists yet. The review plan at the end defines exactly when and how these assumptions get replaced with evidence.
 
@@ -70,7 +70,8 @@ What is **not yet validated** is customer demand: no interviews have been comple
 
 ## The Model, Restated
 
-* **Customer:** Independent bike shop in Ireland (initial segment), paying a monthly subscription.
+* **Initial customer:** Independent bike shop in Ireland, paying a monthly subscription.
+* **Platform customer scope:** Independent product, service, or mixed businesses whose applicable operational modules can be supported by the common platform and a validated business template.
 * **Price:** €80/month per business — the accepted current subscription price under BD-005.
 * **Value delivered:** Deterministic profitability, inventory, repair, and returns analytics, explained in plain language, layered on top of the shop's existing POS/accounting data.
 * **Cost structure:** Low fixed infrastructure cost, small variable AI/processing cost per customer (`08_Cost_Analysis.md`).
@@ -197,6 +198,14 @@ The most commercially important output of this document is not the revenue numbe
 
 ---
 
+# Multi-Industry Commercial Model
+
+Expansion into another industry does not create a separate product or pricing model automatically. The company reuses the common platform, validates a new business template, enables only applicable modules, and retains the accepted €80/month price unless a later accepted pricing decision supersedes BD-005.
+
+Bike-shop-specific market evidence supports the first commercial segment only. Demand, willingness to pay, terminology, applicable modules, onboarding effort, and support cost must be validated again before entering each additional vertical.
+
+---
+
 # Current Decisions
 
 * Set the current subscription price at €80/month per business; this supersedes the former €79 planning assumption (BD-005, Accepted).
@@ -246,3 +255,4 @@ The most commercially important output of this document is not the revenue numbe
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; business model and pricing validated against `08_Cost_Analysis.md`; 6- and 12-month scenario-based revenue forecast added. |
 | 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price; removed the superseded €79 discrepancy and retained €80 across all revenue scenarios. |
+| 0.3 | 30/07/2026 | Separated the initial bike-shop go-to-market segment from the reusable multi-industry subscription product. |

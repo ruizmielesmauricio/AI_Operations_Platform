@@ -82,8 +82,10 @@ Canonical Operational Entities (reusable, industry-agnostic)
         |
         v
 Business Template Extensions (industry-specific configuration)
-   bicycle_shop: repairs, mechanics, parts_used, warranty_claims
-   coffee_shop:  recipes, recipe_ingredients, production_batches
+   bicycle_shop: bicycle attributes, mechanic roles, repair terminology
+   coffee_shop:  recipe terminology, ingredient attributes, batch settings
+
+The examples above are configuration overlays. They do not create separate databases or duplicate the canonical sales, inventory, profitability, or production-event structures.
 ```
 
 (Full detail on the core and canonical layers: `06_Database_Design.md`.)
@@ -126,6 +128,14 @@ A coffee-shop template configures this as: input = ingredients, output = a quant
 This keeps `sales`, `sale_items`, `inventory_movements`, and `products` completely unchanged between the two business types — only the template-level configuration and a thin extension table differ.
 
 **Status:** Proposed. This generalises the "Repairs" section of `06_Database_Design.md`'s Bicycle-Shop Template into a reusable canonical entity. It requires an update to `06_Database_Design.md` and `10_Product_Requirements.md` once accepted, since both currently describe repairs as bicycle-specific.
+
+---
+
+# Database Isolation from Business Type
+
+Every tenant uses the same Neon PostgreSQL system of record and tenant-scoped canonical tables. Selecting a business type must never provision a separate database or clone a complete schema. Template-specific attributes may use governed extension tables or configuration fields only when the canonical model cannot express them cleanly.
+
+A new business type should first reuse existing entities and formulas. A structural extension requires evidence that the concept cannot be represented by configuration, and any new canonical entity must remain reusable beyond a single named industry.
 
 ---
 
@@ -214,3 +224,4 @@ Being able to support a new vertical primarily through configuration rather than
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; introduced the repairs-vs-recipes worked example and proposed the generalised "Production Events" canonical entity. |
+| 0.2 | 30/07/2026 | Clarified that business templates are configuration overlays on one shared canonical database, not separate schemas or databases. |

@@ -155,7 +155,7 @@ The platform is planning to use **OpenRouter** as the routing layer behind the A
 * OpenRouter sits behind the internal `AIProvider` interface already defined in `05_AI_Architecture.md` — it does not replace that interface, it becomes one implementation of it. Business modules continue to depend only on the internal interface.
 * It allows the gateway to select the cheapest model that still meets an approved quality bar for a given task, rather than committing to one vendor's pricing.
 * It allows filtering or preferring models that meet EU regulatory and data-handling requirements, which supports the "EU infrastructure where practical" and "Privacy by Design" principles in `01_Product_Vision.md`.
-* Because routing logic lives inside the gateway rather than in business code, the specific routing service (OpenRouter or an alternative) can be swapped later without touching Retail Operations, Workshop Operations, or Financial Performance modules.
+* Because routing logic lives inside the gateway rather than in business code, the specific routing service (OpenRouter or an alternative) can be swapped later without touching enabled operational modules or their deterministic business logic.
 
 **Selection criteria for any model routed through this layer** (to be formalised as an ADR once thresholds are tested against real usage):
 
@@ -236,6 +236,14 @@ Provider routing directly supports the Cost Strategy goal of keeping "AI as a sm
 
 ---
 
+# Multi-Industry Configuration Boundary
+
+The platform runs as one shared multi-tenant application with one canonical data model and tenant-scoped records. A business template may configure terminology, enabled modules, source-column aliases, thresholds, and business-specific extension fields. It must not introduce a separate application, separate tenant database, or duplicate calculation engine for a business type.
+
+Bike-shop concepts such as workshop, repair, bicycle, part, or mechanic belong to the bicycle-shop template or to clearly labelled examples. Core services operate on canonical concepts such as product, sale, service/production event, input, employee, customer, and financial transaction. Modules and report sections execute only when enabled for the tenant and supported by sufficient data.
+
+---
+
 # Scheduled Performance Reporting Architecture
 
 The platform generates two independent report types through deterministic background jobs:
@@ -267,3 +275,5 @@ Accepted reporting behaviour is governed by PD-007 and ADR-019 in `12_Decision_R
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; documented planned use of OpenRouter for AI provider routing. |
+| 0.2 | 30/07/2026 | Added deterministic scheduled performance reporting architecture and recovery controls. |
+| 0.3 | 30/07/2026 | Defined the shared multi-industry core and the configuration boundary for business templates. |
