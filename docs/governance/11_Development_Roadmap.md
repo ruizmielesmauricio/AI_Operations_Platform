@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.5 (Draft)
+**Version:** 0.6 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -370,7 +370,9 @@ Revenue is not expected before Phase 6. The scenarios in `09_Business_Model.md` 
 
 ---
 
-# Change 8 Delivery Work — Scheduled Reporting
+# Phase 3 Detail — Scheduled Reporting Implementation
+
+Implementation checklist for the "Scheduled reporting" deliverable in Phase 3's table above.
 
 - [ ] Store and validate each customer's IANA timezone.
 - [ ] Build separate weekly and monthly timezone-aware schedules.
@@ -406,3 +408,4 @@ This work is governed by PD-007 and ADR-019.
 | 0.3 | 30/07/2026 | Marked the `01_Project_Vision.md` import-template housekeeping item complete; added Scheduled Reporting to Phase 3 (PD-007/PR-8 baseline weekly/monthly cadence); clarified Phase 7's "Report scheduling" as custom/additional scheduling only; synced version header with revision history. |
 | 0.4 | 30/07/2026 | Removed the self-referential "(technical set)" Related Document. |
 | 0.5 | 30/07/2026 | Fixed the Phase 3 "Scheduled reporting" line, which incorrectly described email delivery — corrected to match the accepted in-app-only design (PD-007/ADR-019). |
+| 0.6 | 30/07/2026 | Renamed "Change 8 Delivery Work — Scheduled Reporting" to "Phase 3 Detail — Scheduled Reporting Implementation" and labelled it as elaboration on the Phase 3 table, so the heading follows this document's Phase/Gate structure instead of an internal work-item name. |

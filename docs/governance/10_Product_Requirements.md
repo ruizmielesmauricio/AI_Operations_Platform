@@ -1,6 +1,6 @@
 # 10_Product_Requirements.md
 
-**Version:** 0.3 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -52,8 +52,10 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
+* 03_System_Architecture.md
 * 05_AI_Architecture.md
 * 06_Database_Design.md
+* 07_Deployment_Guide.md
 * 11_Development_Roadmap.md
 * 12_Decision_Register.md
 
@@ -343,3 +345,4 @@ Removing the template requirement removes the single largest onboarding drop-off
 | 0.1 | 29/07/2026 | Initial draft. Records PD-006 (no import template) and ED-009 (AI ingestion boundary). |
 | 0.2 | 30/07/2026 | Added PR-8 (Scheduled Reporting: weekly Monday / monthly 1st-of-month email reports, PD-007); fixed stale `01_Product_Vision.md` filename references and duplicate/self-referential Out of Scope citations. |
 | 0.3 | 30/07/2026 | Corrected PR-8 to match the accepted in-app-only reporting design (PD-007/ADR-019 — no email, seven-day availability, on-demand PDF/Word export, idempotent generation with recovery); removed the duplicate "PR-4 — Scheduled Performance Reports" section (its content was merged into PR-8, resolving the PR-4 ID collision with the existing "PR-4 — Findings and Recommendations"); fixed the Current Decisions bullet that still described email delivery. |
+| 0.4 | 30/07/2026 | Added `03_System_Architecture.md` and `07_Deployment_Guide.md` to Related Documents — PR-8 now substantively depends on both (architecture and Resend-exclusion detail) but neither was linked. |
