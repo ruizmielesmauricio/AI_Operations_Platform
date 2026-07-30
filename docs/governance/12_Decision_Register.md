@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -102,6 +102,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-005 | Begin with CSV and Excel uploads before building POS integrations | Accepted | tech PD-003 |
 | PD-006 | Do not require customers to use a predefined import template; the platform performs schema detection and normalisation | Accepted | from `10_Product_Requirements.md` |
 | PD-007 | Generate separate weekly and monthly performance reports as seven-day in-app views with notifications; use a reusable deterministic template and offer PDF/Word only on explicit request | Accepted | Change 8 reporting definition |
+| PD-008 | Activate only the modules, terminology, metrics, recommendations, and report sections applicable to each validated business template; bike-shop concepts are not universal product requirements | Accepted | Change 9 multi-industry consistency |
 
 ---
 
@@ -128,6 +129,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `08_Tech_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 | ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications, and seven-day customer-facing retention | Accepted | Change 8 reporting architecture |
+| ADR-020 | Use one shared canonical data and calculation core across business types; templates may configure labels, mappings, thresholds, enabled modules, and governed extensions but must not create separate applications or tenant databases | Accepted | Change 9 multi-industry architecture |
 
 ---
 
@@ -198,3 +200,4 @@ What evidence would cause this decision to be revisited?
 | 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
 | 1.3 | 30/07/2026 | Added accepted decisions PD-007 and ADR-019 for deterministic scheduled performance reporting, in-app delivery, seven-day availability, on-demand exports, and recovery controls. |
 | 1.2 | 30/07/2026 | Clarified BD-005 as the accepted current subscription price of €80/month and removed obsolete €79 update actions. |
+| 1.4 | 30/07/2026 | Added PD-008 and ADR-020 to separate bicycle-shop configuration from the reusable multi-industry product, schema, and calculation core. |
