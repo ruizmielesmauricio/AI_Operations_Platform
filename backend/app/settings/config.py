@@ -20,7 +20,11 @@ class Settings(BaseSettings):
 
     supabase_url: str = ""
     supabase_anon_key: str = ""
-    supabase_jwt_secret: str = ""
+    # A non-empty placeholder so local/test JWT signing works out of the box
+    # (PyJWT rejects an empty HMAC key). Production must override this via
+    # env var with the real secret from the Supabase project dashboard —
+    # never commit a real secret here.
+    supabase_jwt_secret: str = "local-dev-secret-change-me-before-any-real-deployment"
 
     r2_account_id: str = ""
     r2_access_key_id: str = ""

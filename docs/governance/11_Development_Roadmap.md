@@ -182,10 +182,10 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 
 **Stage A — Foundation**
 - [x] A1. Create the database (local Postgres via docker-compose)
-- [ ] A2. Create the full schema — shared core, canonical entities, bicycle-shop template extension (`06_Database_Design.md`)
-- [ ] A3. Authentication (Supabase Auth — backend JWT verification + frontend client)
-- [ ] A4. Business signup + template selection (PR-1)
-- [ ] A5. Tenant isolation enforcement + automated tests (PR-6.1/6.2, ED-008) — built now, not retrofitted
+- [x] A2. Create the full schema — shared core, canonical entities, bicycle-shop template extension (`06_Database_Design.md`)
+- [x] A3. Authentication (Supabase Auth — backend JWT verification + frontend client)
+- [x] A4. Business signup + template selection (PR-1)
+- [x] A5. Tenant isolation enforcement + automated tests (PR-6.1/6.2, ED-008) — built now, not retrofitted
 
 **Stage B — Getting real data in**
 - [ ] B6. Upload data interface (signed URL to R2)
