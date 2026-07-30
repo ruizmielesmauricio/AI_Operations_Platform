@@ -1,10 +1,10 @@
 # 08_Cost_Analysis.md
 
-**Version:** 0.1 (Draft)
+**Version:** 1.0 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -12,9 +12,9 @@
 
 ## Purpose
 
-This document has two parts. First, it maps the competitive landscape in Ireland and internationally — what independent bike shops currently pay for software, and what that software does and does not do — so the company's positioning and pricing are grounded in evidence rather than assumption. Second, it estimates the platform's own operating cost per customer, based on the architecture and deployment model already defined in this repository.
+This document has two parts. First, it maps the competitive landscape in Ireland and internationally — what independent bike shops currently pay for software, and what that software does and does not do — so the company's positioning and pricing are grounded in evidence rather than assumption. Second, it governs the assumptions, structure and conclusions of the company's financial forecast, based on the architecture and deployment model already defined in this repository.
 
-Together, these two halves test the accepted €80/month price against two questions: *is there room for that price in the market, and does the business make money at it?*
+The connected calculation artifact is [`../finance/07_Financial_Forecast.xlsx`](../finance/07_Financial_Forecast.xlsx). The spreadsheet is the editable calculation source of truth; this document explains what is modelled, what the current assumptions mean and which conclusions may be used for planning.
 
 ---
 
@@ -32,8 +32,10 @@ Together, these two halves test the accepted €80/month price against two quest
 * Price and feature comparison
 * Gap analysis relative to our planned product
 * Summary of competitive advantage
-* Estimated fixed and variable operating cost per customer
-* Cost stages (prototype, pilot, early production)
+* Fixed, variable, step and business-overhead cost assumptions
+* Client-count economics at 0, 5, 10, 25, 50, 100 and 300 customers
+* Conservative, expected and optimistic 12-month forecasts
+* Unit economics, break-even tests, sensitivity analysis and forecast governance
 
 ---
 
@@ -41,20 +43,23 @@ Together, these two halves test the accepted €80/month price against two quest
 
 This document intentionally does **not** define:
 
-* Alternative pricing tiers, discounts, and future price changes (see `09_Business_Model.md`)
-* Revenue forecasting (see `09_Business_Model.md`)
+* Alternative pricing tiers and future price changes (see `09_Business_Model.md`)
+* Tax, VAT, founder payroll or personal tax advice
 * Detailed infrastructure configuration (see `07_Deployment_Guide.md`)
-* Cost-control engineering rules (see `08_Cost_Analysis.md`, detailed set)
+* Final vendor commitments before production procurement
 
 ---
 
 ## Related Documents
 
-* 09_Business_Model.md
-* 08_Cost_Analysis.md (detailed set)
-* 07_Deployment_Guide.md
-* 09_Business_Model.md
-* 15_Customer_Discovery.md
+* `../finance/07_Financial_Forecast.xlsx`
+* `04_Technology_Stack.md`
+* `05_AI_Architecture.md`
+* `07_Deployment_Guide.md`
+* `09_Business_Model.md`
+* `11_Development_Roadmap.md`
+* `12_Decision_Register.md`
+* `15_Customer_Discovery.md`
 
 ---
 
@@ -64,7 +69,7 @@ Independent bike shops in Ireland and internationally already pay for point-of-s
 
 This creates a real, evidenced gap: **nothing in the market combines industry-aware retail + workshop analytics with deterministic calculation and AI explanation, at a price an independent shop can justify.** At €80/month, we sit below premium POS tiers and mid-tier general BI tools, while offering something neither category currently provides.
 
-On the cost side, estimated fixed infrastructure cost at pilot scale is low (roughly €60–€150/month total, not per customer), with AI cost as the main variable cost per customer — which is precisely why the AI provider routing strategy in `05_AI_Architecture.md` matters commercially, not just architecturally.
+The financial model now uses three explicit planning scenarios instead of two conflicting infrastructure ranges. At 1–10 customers, the model assumes monthly fixed platform cost of **€80 conservative, €45 expected or €30 optimistic**. These are planning assumptions that combine baseline hosting, database, monitoring, email and storage allowances; they are not quotations. Business overhead, payment fees, per-customer usage, customer acquisition and churn are modelled separately.
 
 ---
 
@@ -135,125 +140,200 @@ These don't target bike shops specifically, but a technically confident owner co
 
 ---
 
-# Part 2 — Estimated Operating Cost
+# Part 2 — Financial Forecast
 
-## Cost Categories
+## Connected Calculation Artifact
 
-Per `08_Cost_Analysis.md`, cost is split into fixed infrastructure cost (largely independent of customer count at small scale) and variable cost per customer (mainly AI usage and storage).
+[`07_Financial_Forecast.xlsx`](../finance/07_Financial_Forecast.xlsx) contains:
 
-## Estimated Fixed Monthly Cost (Pilot Stage, ~1-10 customers)
+* A central assumptions sheet with editable conservative, expected and optimistic inputs.
+* Client-count economics at 0, 5, 10, 25, 50, 100 and 300 customers.
+* Monthly customer, revenue, cost, profit and cash forecasts for the first 12 months.
+* Sensitivity tests, model checks, charts and a source/audit trail.
 
-| Item | Estimated Monthly Cost (EUR) | Notes |
+The spreadsheet must be updated when assumptions change. Static figures in this document are a dated summary of model version 1.0.
+
+## Model Conventions
+
+| Convention | Treatment |
+|---|---|
+| Current price | €80 per business per month, governed by BD-005 |
+| Currency | EUR; USD vendor prices are retained as source evidence and absorbed into planning allowances |
+| Forecast period | Monthly for 12 months |
+| Revenue recognition | Active closing customers × €80 for planning |
+| Tax and VAT | Excluded pending confirmation by an Irish accountant or tax adviser |
+| Founder salary | €0 in the base forecast; a €3,000 monthly goal is tested separately |
+| Pilot discounts | Excluded; any discount must be added as a separate assumption without changing BD-005 |
+| Forecast versus actual | All non-vendor inputs remain assumptions until pilot actuals replace them |
+
+## Cost Classification
+
+| Cost class | Model treatment | Examples |
 |---|---|---|
-| VPS (Hetzner or similar) | €10-€25 | Hosts web, API, worker, reverse proxy |
-| Neon (PostgreSQL, managed) | €0-€25 | Free/low tier likely sufficient at pilot scale |
-| Cloudflare R2 (object storage) | €1-€5 | Temporary files only; low volume |
-| Resend (transactional email) | €0-€20 | Free tier likely sufficient at pilot volume |
-| Sentry (error tracking) | €0-€26 | Free/developer tier likely sufficient initially |
-| Uptime Kuma | €0 | Self-hosted, no license cost |
-| Plausible Analytics | €0-€9 | Small self-hosted or entry cloud tier |
-| Domain + DNS | ~€1 (amortized) | ~€10-€15/year |
-| **Estimated fixed total** | **~€15-€110/month** | Wide range reflects free-tier eligibility at pilot scale |
+| Fixed platform | Step cost based on active-customer bands | VPS/container hosting, baseline Neon capacity, monitoring, email and storage allowances |
+| Variable per customer | Increases with active customers | Stripe, AI explanations, report emails, storage/processing and support allowance |
+| Step costs | Increase when a customer band requires more capacity | Larger VPS, database tier, monitoring/email upgrade |
+| Business overhead | Separate from direct service delivery | Accounting, insurance, legal, administration and basic marketing |
+| Acquisition cost | Applied to each new customer | Founder-led sales, visits, advertising and onboarding allowance |
+| Founder compensation | Excluded from base; tested separately | €3,000 monthly founder-salary goal |
 
-## Estimated Variable Cost Per Customer (Monthly)
+## Verified Vendor Inputs
 
-| Item | Estimated Cost per Customer (EUR) | Notes |
-|---|---|---|
-| Stripe processing fees | ~1.5%-2.5% of subscription value + fixed fee | Applies only to paying customers; varies by card vs. SEPA |
-| AI usage (via OpenRouter-routed models) | €0.50-€3.00 | Depends heavily on plan limits (`05_AI_Architecture.md` cost controls) and model routing decisions (`05_AI_Architecture.md`) |
-| Incremental storage | <€0.50 | Uploads are temporary by default; normalized data is small relative to object storage |
-| Incremental database load | <€1 | Shared Neon instance absorbs this at low customer counts |
-| **Estimated variable total** | **~€2-€6 per paying customer, plus card/SEPA fees** | To be validated against real pilot usage |
+As checked on 30/07/2026:
 
-## Estimated Gross Margin at €80/Month
+* [Stripe Ireland](https://stripe.com/ie/pricing) lists standard EEA cards at **1.5% + €0.25**, and SEPA Direct Debit at **€0.35**. The base model uses the card rate and keeps SEPA as a future payment-mix test.
+* [Cloudflare R2](https://developers.cloudflare.com/r2/pricing/) lists Standard storage at **$0.015 per GB-month**, with 10 GB-month of monthly free storage and free egress. The model uses a broader per-customer storage/processing allowance because R2 storage alone is not the full ingestion cost.
+* [Sentry](https://sentry.io/pricing/) lists a $0 Developer tier and a $26/month Team tier.
+* [Neon](https://neon.com/pricing) provides a free tier and describes typical paid usage around $15/month; actual cost depends on compute and storage usage.
+* [Resend](https://resend.com/pricing) provides a free tier. The forecast nevertheless retains a small per-customer email allowance so weekly and monthly reporting does not appear permanently free.
 
-Using the ranges above, at a small number of pilot customers:
+Vendor prices are time-sensitive. The spreadsheet records the source URL, date, unit and modelling treatment for each input.
+
+## Scenario Assumptions
+
+| Assumption | Conservative | Expected | Optimistic |
+|---|---:|---:|---:|
+| Monthly churn | 4.0% | 2.5% | 1.5% |
+| CAC per new customer | €250 | €150 | €90 |
+| AI cost per active customer | €3.00 | €1.50 | €0.75 |
+| Email/report cost per active customer | €0.20 | €0.10 | €0.05 |
+| Storage and compute per active customer | €1.30 | €0.70 | €0.35 |
+| Support allowance per active customer | €0.40 | €0.25 | €0.15 |
+| Fixed platform cost at 1–10 customers | €80 | €45 | €30 |
+| Business overhead at 1–10 customers | €100 | €75 | €50 |
+
+The planning range for fixed platform cost at 1–10 customers is therefore **€30–€80 per month**, with **€45** as the expected case. This single scenario range replaces the inconsistent €60–€150 and €15–€110 figures previously used.
+
+## Unit Economics at the Current €80 Price
+
+In the expected scenario:
 
 ```text
-Revenue per customer:        EUR 80.00
-Estimated Stripe fee:        ~EUR 1.50-2.50 (varies by payment method)
-Estimated AI cost:           ~EUR 0.50-3.00
-Estimated storage/DB cost:   ~EUR 1.00 (shared, allocated)
+Subscription revenue per customer:          €80.00
+Stripe EEA card fee:                         €1.45
+AI explanation allowance:                    €1.50
+Email/report allowance:                      €0.10
+Storage and compute allowance:               €0.70
+Support allowance:                           €0.25
 --------------------------------------------------
-Estimated variable cost:     ~EUR 3.00-6.50 per customer
-Estimated contribution:      ~EUR 73.50-77.00 per customer, before fixed cost allocation
+Expected direct variable cost:               €4.00
+Expected contribution before fixed costs:   €76.00
+Expected contribution margin:                95.0%
 ```
 
-Fixed costs (~€15-€110/month total) are shared across all customers, so gross margin improves sharply as customer count grows past pilot scale — this is a favourable cost structure for a subscription SaaS business, but it has not yet been validated against real usage data.
+This is a forecast, not an observed margin. AI, ingestion, reporting and support allowances must be replaced with tenant-level actuals during the pilot.
 
-## Cost Stage Progression
+## Client-Count Economics — Expected Scenario
 
-* **Prototype (Phase 2):** Near-zero cost; free tiers, no production billing, single founder testing.
-* **Pilot (Phase 3-4):** Costs as estimated above; 3-5 pilot businesses per `11_Development_Roadmap.md`, likely at reduced or waived pricing during validation.
-* **Early Production (Phase 6+):** Fixed costs may need to move off free tiers (Sentry, Resend, Neon) as usage grows; this is the point at which real cost-per-customer data should replace these estimates.
+| Active customers | Monthly revenue | Total monthly cost before acquisition and founder salary | Monthly operating profit | Operating margin | Cost per customer |
+|---:|---:|---:|---:|---:|---:|
+| 0 | €0 | €120 | -€120 | N/A | N/A |
+| 5 | €400 | €140 | €260 | 65.0% | €28 |
+| 10 | €800 | €160 | €640 | 80.0% | €16 |
+| 25 | €2,000 | €270 | €1,730 | 86.5% | €11 |
+| 50 | €4,000 | €490 | €3,510 | 87.8% | €10 |
+| 100 | €8,000 | €930 | €7,070 | 88.4% | €9 |
+| 300 | €24,000 | €2,400 | €21,600 | 90.0% | €8 |
+
+These static scenarios exclude customer-acquisition spending because CAC depends on how many new customers are added in a month. The 12-month forecast includes CAC explicitly.
+
+## 12-Month Forecast Summary
+
+| Scenario | Month 12 active customers | Month 12 revenue | Month 12 operating profit | 12-month revenue | 12-month operating profit / ending cash |
+|---|---:|---:|---:|---:|---:|
+| Conservative | 26 | €2,080 | €485 | €11,200 | -€49 |
+| Expected | 49 | €3,920 | €2,384 | €21,280 | €9,676 |
+| Optimistic | 129 | €10,320 | €6,765 | €46,640 | €28,682 |
+
+The conservative scenario is approximately cash-neutral after 12 months because slower acquisition, higher CAC, higher churn and higher usage costs absorb the operating contribution. The expected and optimistic cases demonstrate potential, not targets or guarantees.
+
+## Break-Even Interpretation
+
+* At five paying customers, the expected static scenario covers direct costs, expected fixed platform cost and expected base business overhead.
+* The base forecast excludes founder salary. At the expected cost structure, 50 active customers produce approximately **€3,510/month** before acquisition spending and founder compensation, leaving approximately **€510/month** after the separate €3,000 founder-salary test.
+* Break-even month depends on the timing of customer acquisition and CAC, not only the number of active customers.
+* Taxes, VAT and founder payroll costs may materially increase the number of customers needed to support founder compensation.
+
+## Sensitivity Tests
+
+The spreadsheet tests or provides explicit input controls for:
+
+* AI cost between €0.50 and €5.00 per active customer.
+* Higher infrastructure step costs.
+* Larger uploads and higher storage/processing costs.
+* Monthly churn increasing from 2.5% to 5.0%.
+* A less favourable Stripe/payment-method mix.
+* An annual discount equivalent to one month free.
+* Higher weekly and monthly report-generation and delivery cost.
+
+## Forecast Governance
+
+The following labels must remain distinct:
+
+* **Verified vendor input:** Current value taken from an official price page.
+* **Assumption:** Founder-selected input awaiting evidence.
+* **Forecast:** Formula-derived future result.
+* **Actual:** Observed invoice, payment, usage or customer result.
+* **Variance:** Actual minus forecast.
+
+During the pilot, the company must record actual cost per tenant for AI, data processing, database, storage, report generation, email, support and payment processing. Assumptions should be replaced only when sufficient evidence exists, with changes recorded in the spreadsheet's source and version history.
 
 ---
 
 # Business Perspective
 
-The competitive analysis confirms €80/month sits in a defensible price band — above basic Irish EPOS entry tiers but well below premium POS plans and mid-tier general BI tools — provided the product delivers what neither category currently offers: explainable, industry-aware analytics.
+The competitive analysis confirms that €80/month sits in a defensible price band. The expected financial scenario also indicates strong contribution economics if usage is controlled and the customer-growth assumptions are achieved.
 
 ---
 
 # Customer Perspective
 
-A bike shop owner already paying for a POS system should be able to justify an additional €80/month specifically because it answers questions their POS cannot: why margin changed, what to reorder, and how the workshop is really performing — not because it replaces anything they already use.
+The customer pays €80/month for deterministic, industry-aware decision support that complements existing POS software. The financial model must never justify degrading service quality merely to protect an assumed margin.
 
 ---
 
 # Technical Perspective
 
-The variable cost structure (AI usage as the dominant variable cost) is precisely why the AI Provider Gateway and OpenRouter routing strategy in `05_AI_Architecture.md` are commercially load-bearing, not just an architectural nicety — controlling AI cost per request is what protects the gross margin estimated above.
+The backend performs all calculations and business logic. AI is limited to explaining backend-generated findings. Per-tenant metering, usage caps, caching, deterministic report generation and vendor-routing controls are commercially necessary because they protect the unit economics without transferring calculation responsibility to AI.
 
 ---
 
 # Commercial Perspective
 
-At current estimates, gross margin per customer is high once past pilot scale, which supports the founder-led, low-fixed-cost model described in `08_Cost_Analysis.md`. The main commercial risk is not infrastructure cost — it is customer acquisition cost and willingness to pay, which this document cannot validate and which `15_Customer_Discovery.md` interviews must address directly.
+Infrastructure is not the only cost driver. CAC, churn, business overhead, payment mix and the timing of client acquisition materially affect cash generation. Financial planning must therefore use the connected forecast rather than multiplying €80 by a target customer count and treating the result as profit.
 
 ---
 
 # Current Decisions
 
 * Set the current subscription price at €80/month per business (BD-005, Accepted).
-* Treat AI usage as the primary variable cost to actively manage per customer (Accepted, consistent with `08_Cost_Analysis.md`).
-* Treat this competitive analysis as based on public pricing pages, to be revisited after direct competitor trials and customer interviews (Accepted).
-
----
-
-# Why This Decision?
-
-**Decision:** Set the current subscription price at €80/month per business, positioned as a complement to (not a replacement for) the shop's existing POS/EPOS system.
-
-**Reason:** Competitor pricing shows a real gap between basic EPOS reporting and expensive/generic BI tools that this price point sits inside, while the estimated cost structure supports healthy gross margin at that price.
-
-**Alternatives Considered:** Pricing below €50/month to undercut basic EPOS tiers was considered, but rejected for now because it risks signalling "another cheap add-on" rather than a serious decision-support tool, and doesn't match the value described in `01_Product_Vision.md`. Pricing above €150/month (near premium POS tiers) was also considered and rejected as too high before the product's value is proven to a first paying cohort.
-
-**Future Review Criteria:** €80/month remains the current price. Review future pricing, packaging, or discounts only when `15_Customer_Discovery.md` interviews provide willingness-to-pay evidence or real pilot costs materially change the unit economics.
+* Use the connected spreadsheet as the calculation source of truth for cost and revenue scenarios.
+* Separate fixed platform, variable, step, business-overhead, acquisition and founder-compensation costs.
+* Exclude tax and VAT until professionally confirmed, while clearly disclosing the exclusion.
+* Replace assumptions with measured pilot actuals and track variance.
 
 ---
 
 # Risks
 
-* Competitor pricing pages change frequently and may already be out of date by the time this is read; treat as directional, not exact.
-* Actual AI cost per customer could exceed estimates if usage patterns (e.g., long conversational sessions) are heavier than assumed — mitigated by the usage controls and caching strategy in `05_AI_Architecture.md`.
-* Owners may resist a second subscription regardless of price, if they don't yet trust AI-driven recommendations — this is a customer discovery risk, not a cost risk, and is tracked in `15_Customer_Discovery.md`.
-
----
-
-# Future Improvements
-
-* Replace estimated infrastructure and AI costs with real pilot-phase measurements once Phase 3/4 begins.
-* Conduct direct trials of at least two or three competitor products (not just marketing pages) to validate the feature gap analysis first-hand.
-* Track cost per customer as a live metric (per `08_Cost_Analysis.md`'s Cost Review Metrics) rather than relying on this document's estimates past the pilot stage.
+* Customer acquisition may be slower or more expensive than assumed.
+* Churn may be higher than assumed.
+* AI, ingestion, storage, database or reporting usage may exceed allowances.
+* Infrastructure upgrades may be required earlier than the client-count steps assume.
+* Vendor pricing and exchange rates may change.
+* Tax, VAT, insurance, accounting and payroll treatment may reduce operating profit.
+* Owners may resist a second subscription even when the product has clear value.
 
 ---
 
 # Questions Still Open
 
-* What is real customer willingness to pay €80/month alongside an existing POS subscription?
-* How much AI usage does a typical owner actually generate per month, and does it match the estimated €0.50-€3.00 range?
-* Should pilot customers pay a reduced rate, or use the product free during validation, per `11_Development_Roadmap.md`'s Phase 3/4 guidance?
+* What CAC and monthly churn are observed during the first paying cohort?
+* What are actual AI, ingestion, reporting and support costs per tenant?
+* What Irish tax, VAT, founder-payroll and insurance costs must be added?
+* Should pilot customers receive a temporary discount while the public price remains €80?
+* What customer or usage thresholds actually trigger each infrastructure step?
+* What monthly cash reserve should be maintained before the company funds founder compensation?
 
 ---
 
@@ -263,3 +343,4 @@ At current estimates, gross margin per customer is high once past pilot scale, w
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; competitive landscape and cost estimate based on public pricing research. |
 | 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price and aligned pricing language with BD-005. |
+| 1.0 | 30/07/2026 | Reconciled the fixed-cost range; added governed assumptions, client-count economics, three 12-month scenarios, unit economics, break-even interpretation, sensitivities, forecast governance and the connected financial forecast spreadsheet. |
