@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.6 (Draft)
+**Version:** 0.7 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -206,6 +206,9 @@ Proceed only when:
 | Privacy controls | Retention settings, deletion, data export |
 | Audit logging | Privileged actions recorded |
 | Forecasting module | Simple methods first (seasonal/moving average) |
+| Conversational agent — business Q&A lane | Intent classifier + approved deterministic query functions (PD-008, ADR-020); extends Phase 2's AI explanation layer |
+| Conversational agent — product/support lane | Retrieval over an approved help-content knowledge base; hands off to human support when unresolved (PR-5.7) |
+| Low-stock alerting | Real-time, deterministic, in-app (PD-009, PR-9) |
 | Pilot onboarding material | Setup guide, not a template |
 | 3–5 pilot businesses recruited | From Phase 1 interview relationships |
 
@@ -302,7 +305,7 @@ Proceed only when:
 | Automated recurring imports | Manual upload friction proven |
 | Second business template | Validated demand in a new vertical |
 | Production Events generalisation (ADR-016) | Second template being built |
-| Advanced forecasting | Simple methods proven insufficient |
+| Advanced forecasting (e.g. ML models incorporating external signals such as weather — relevant to Irish cycling demand) | Simple methods proven insufficient |
 | Multi-location support | Customer with multiple locations |
 | Custom/additional report scheduling (beyond the default weekly/monthly cadence in PR-8) | Requested repeatedly |
 | Mobile workflows | Usage data shows mobile need |
@@ -409,3 +412,4 @@ This work is governed by PD-007 and ADR-019.
 | 0.4 | 30/07/2026 | Removed the self-referential "(technical set)" Related Document. |
 | 0.5 | 30/07/2026 | Fixed the Phase 3 "Scheduled reporting" line, which incorrectly described email delivery — corrected to match the accepted in-app-only design (PD-007/ADR-019). |
 | 0.6 | 30/07/2026 | Renamed "Change 8 Delivery Work — Scheduled Reporting" to "Phase 3 Detail — Scheduled Reporting Implementation" and labelled it as elaboration on the Phase 3 table, so the heading follows this document's Phase/Gate structure instead of an internal work-item name. |
+| 0.7 | 30/07/2026 | Added the conversational agent's business Q&A and product/support lanes, and low-stock alerting, to Phase 3 (PD-008, PD-009, ADR-020). Named weather-augmented ML forecasting as the concrete example of Phase 7's "Advanced forecasting" trigger. |
