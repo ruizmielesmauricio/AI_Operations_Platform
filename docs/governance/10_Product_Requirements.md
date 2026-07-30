@@ -291,6 +291,55 @@ Removing the template requirement removes the single largest onboarding drop-off
 
 ---
 
+# PR-4 — Scheduled Performance Reports
+
+## PR-4.1 Scheduling and period
+
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| PR-4.1 | Generate a weekly report every Monday at 08:00 in the customer's configured timezone | Report covers the previous completed week |
+| PR-4.2 | Generate a monthly report on the first calendar day at 08:00 in the customer's configured timezone | Report covers the previous completed calendar month |
+| PR-4.3 | Keep weekly and monthly reports separate when schedules coincide | Two reports and two notifications are created |
+
+## PR-4.2 Delivery, access and exports
+
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| PR-4.4 | Deliver each report as an in-app report with its own notification | No automatic email attachment or report file is created |
+| PR-4.5 | Keep the customer-facing report available for seven days | Notification displays the report's exact expiry date |
+| PR-4.6 | Offer PDF or Word only as an explicit on-demand export | File generation begins only after the customer requests it |
+
+## PR-4.3 Required content
+
+The reusable cross-industry template must contain, when relevant and supported by sufficient data:
+
+1. Top three selling products.
+2. Bottom three selling products.
+3. Revenue, profit, and expenses.
+4. Performance charts against the previous equivalent period: week over week or month over month.
+5. A deterministic summary of the most material performance changes.
+6. Backend-calculated projections.
+7. Recommendations selected through predefined business rules.
+8. Low-stock products based on configured thresholds.
+9. Reporting period, data freshness, and warnings for missing or insufficient data.
+
+Sections that do not apply to a business type are omitted rather than populated with misleading placeholders.
+
+## PR-4.4 Logic and reliability
+
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| PR-4.7 | Generate every scheduled report without AI | All numbers, summaries, projections, and recommendations trace to backend calculations, templates, or rules |
+| PR-4.8 | Make report generation idempotent | Tenant + report type + period uniquely identifies one report |
+| PR-4.9 | Retry transient failures automatically | Bounded retry policy is tested |
+| PR-4.10 | Detect a missing report through an independent recovery job and force regeneration | Reconciliation test proves a deliberately missed job is recovered |
+| PR-4.11 | Alert the operator after persistent failure | Alert includes tenant, report type, period, attempts, and failure reason |
+| PR-4.12 | Preserve a minimal operational audit record after report expiry | Status, attempts, timestamps, notification state, and failure reason remain available under the applicable retention policy |
+
+These requirements implement PD-007 and ADR-019.
+
+---
+
 # Questions Still Open
 
 * What is the acceptable manual-confirmation rate before the no-template approach is judged to have failed?

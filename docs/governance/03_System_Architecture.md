@@ -222,6 +222,24 @@ Provider routing directly supports the Cost Strategy goal of keeping "AI as a sm
 
 ---
 
+# Scheduled Performance Reporting Architecture
+
+The platform generates two independent report types through deterministic background jobs:
+
+* **Weekly:** every Monday at 08:00 in the customer's configured timezone, covering the previous completed week.
+* **Monthly:** on the first calendar day at 08:00 in the customer's configured timezone, covering the previous completed month.
+* If both schedules fall on the same day, both jobs run and create separate reports and notifications.
+
+The worker obtains tenant-scoped data from Neon, calculates report figures and comparisons through backend code, renders the standard in-app report template, and creates an in-app notification. Scheduled reporting does not call the AI gateway and does not automatically create a file.
+
+Each report is uniquely keyed by tenant, report type, and reporting period. This makes generation idempotent and prevents retries from creating duplicates. A primary scheduled job retries transient failures; an independent recovery job detects a missing report and forces regeneration. Persistent failure creates an internal operational alert.
+
+The in-app report remains available for seven days. Its notification states the expiry date. After expiry, the customer-facing report payload may be removed, while a minimal audit record remains in Neon containing report identity, reporting period, status, attempts, timestamps, notification status, and failure reason. PDF or Word is generated only when the customer requests an export through the SaaS.
+
+Accepted reporting behaviour is governed by PD-007 and ADR-019 in `12_Decision_Register.md`.
+
+---
+
 # Questions Still Open
 
 * What is the minimum acceptable quality threshold, and how is it measured before launch?

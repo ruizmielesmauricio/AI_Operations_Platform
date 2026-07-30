@@ -326,6 +326,16 @@ Infrastructure is not the only cost driver. CAC, churn, business overhead, payme
 
 ---
 
+# Scheduled Reporting Cost Treatment
+
+Weekly and monthly reports use deterministic backend calculations, reusable presentation templates, and in-app notifications. They do not require AI calls, transactional report-delivery emails, or automatically generated files. The forecast's reporting allowance therefore covers worker execution, database queries, in-app notification records, short-lived report payloads, monitoring, recovery retries, and occasional on-demand PDF/Word exports.
+
+The spreadsheet label "Email/report cost per active customer" should be interpreted as a conservative combined notification/report-runtime allowance until the next workbook revision renames that input. It must not be interpreted as a scheduled email or AI cost. Pilot metering must separately capture scheduled job compute, recovery attempts, seven-day report storage, notification volume, and requested export generation.
+
+This treatment lowers normal reporting cost while preserving a modest allowance for real usage and failure recovery. PD-007 and ADR-019 govern the reporting behaviour.
+
+---
+
 # Questions Still Open
 
 * What CAC and monthly churn are observed during the first paying cohort?

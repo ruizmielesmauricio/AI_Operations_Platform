@@ -370,6 +370,25 @@ Revenue is not expected before Phase 6. The scenarios in `09_Business_Model.md` 
 
 ---
 
+# Change 8 Delivery Work — Scheduled Reporting
+
+- [ ] Store and validate each customer's IANA timezone.
+- [ ] Build separate weekly and monthly timezone-aware schedules.
+- [ ] Implement the reusable cross-industry in-app report template.
+- [ ] Implement top/bottom products, revenue, profit, expenses, comparative charts, projections, rule-based recommendations, low-stock warnings, and data-quality warnings.
+- [ ] Add in-app notifications that show the seven-day expiry date.
+- [ ] Add idempotency using tenant + report type + reporting period.
+- [ ] Implement bounded retries and an independent missing-report recovery job.
+- [ ] Add persistent-failure alerts and operational audit records.
+- [ ] Implement seven-day expiry of the customer-facing report payload.
+- [ ] Add explicit on-demand PDF and Word export; do not generate files on the normal schedule.
+- [ ] Add tests for daylight-saving changes, timezone boundaries, weekly/monthly date collisions, duplicate prevention, forced recovery, expiry, and inapplicable business-template sections.
+- [ ] Meter report compute, recovery attempts, temporary storage, notifications, and requested exports during the pilot.
+
+This work is governed by PD-007 and ADR-019.
+
+---
+
 # Questions Still Open
 
 * How many interviews are genuinely enough before Gate A — 15, or fewer if patterns emerge clearly?
