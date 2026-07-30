@@ -1,10 +1,10 @@
 # 10_Product_Requirements.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 29/07/2026
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -41,8 +41,8 @@ It contains one significant product decision that **supersedes earlier documenta
 
 This document intentionally does **not** define:
 
-* Metric formulas (see `10_Product_Requirements.md`)
-* Database schema (see `06_Database_Design.md`, `06_Database_Design.md`)
+* Metric formulas (see `02_Operational_Domains.md` and implementation documentation)
+* Database schema (see `06_Database_Design.md`)
 * Architecture (see `03_System_Architecture.md`)
 * Delivery sequencing (see `11_Development_Roadmap.md`)
 
@@ -89,7 +89,7 @@ They export whatever their POS, accounting system, or spreadsheet produces, and 
 
 ### Why This Changed
 
-Earlier documentation (`01_Product_Vision.md`, "Low-Friction Use") proposed providing a downloadable import template. That approach has three problems that make it unworkable in practice:
+Earlier thinking proposed providing a downloadable import template. That approach has three problems that make it unworkable in practice:
 
 1. **It assumes the customer has time.** A shop owner will not restructure a spreadsheet to match our column names. They will close the tab.
 2. **It assumes the customer has the skill.** Column mapping is a data task. Our target user explicitly does not want to do data tasks (`01_Project_Vision.md`, Target User).
@@ -97,7 +97,7 @@ Earlier documentation (`01_Product_Vision.md`, "Low-Friction Use") proposed prov
 
 If the customer has to do the data preparation, we have not removed the work — we have just moved it to the person least equipped to do it. The platform's value proposition is doing that work for them.
 
-**This supersedes the "Provide a downloadable import template" line in `01_Product_Vision.md`, which should be updated.** Recorded as PD-006 in `12_Decision_Register.md`.
+**This supersedes the earlier "downloadable import template" approach.** `01_Project_Vision.md`'s "Low-Friction Use" product principle now reflects this accepted requirement. Recorded as PD-006 in `12_Decision_Register.md`.
 
 ### Ingestion Requirements
 
@@ -187,6 +187,18 @@ This should be recorded as an engineering constraint and tested — see PR-6.4.
 | PR-7.2 | Update access only from verified webhooks | Browser redirect alone never grants paid access |
 | PR-7.3 | Manage billing via Stripe Customer Portal | User can update payment method and cancel |
 
+## PR-8 — Scheduled Reporting
+
+| ID | Requirement | Acceptance Criteria |
+|---|---|---|
+| PR-8.1 | Send a weekly summary report by email | Delivered every Monday, business timezone, covering the prior calendar week |
+| PR-8.2 | Send a monthly summary report by email | Delivered on the 1st of each month, business timezone, covering the prior calendar month |
+| PR-8.3 | Report content is calculated, not AI-generated | Figures come from the same deterministic metrics engine as the dashboard (Business Logic First); AI may only write the plain-language summary around them, per `05_AI_Architecture.md` |
+| PR-8.4 | Reports are sent by the background worker, not a web request | Consistent with `07_Deployment_Guide.md`'s Resend integration |
+| PR-8.5 | User can disable scheduled reports | Opt-out does not affect dashboard or on-demand access |
+
+**Status:** Baseline requirement for launch — the fixed weekly (Monday) / monthly (1st) cadence above is the accepted default for every business. Custom or additional report scheduling (arbitrary cadence, per-user recipients, extra report types) remains deferred to Phase 7 of `11_Development_Roadmap.md`.
+
 ---
 
 # Non-Functional Requirements
@@ -244,9 +256,10 @@ Removing the template requirement removes the single largest onboarding drop-off
 
 # Current Decisions
 
-* No customer-facing import template; the platform performs schema detection and normalisation (**PD-006, Accepted** — supersedes `01_Product_Vision.md` onboarding guidance)
+* No customer-facing import template; the platform performs schema detection and normalisation (**PD-006, Accepted** — reflected in `01_Project_Vision.md`'s "Low-Friction Use" principle)
 * AI may suggest column mappings once, but never transforms, cleans, validates, or deduplicates data (**ED-009, Accepted**)
 * Uploaded files deleted after successful ingestion (ADR-008, Accepted)
+* Every business receives a weekly (Monday) and monthly (1st-of-month) automated email report by default, calculated deterministically and opt-out capable (**PD-007, Accepted**)
 
 ---
 
@@ -291,3 +304,4 @@ Removing the template requirement removes the single largest onboarding drop-off
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft. Records PD-006 (no import template) and ED-009 (AI ingestion boundary). |
+| 0.2 | 30/07/2026 | Added PR-8 (Scheduled Reporting: weekly Monday / monthly 1st-of-month email reports, PD-007); fixed stale `01_Product_Vision.md` filename references and duplicate/self-referential Out of Scope citations. |

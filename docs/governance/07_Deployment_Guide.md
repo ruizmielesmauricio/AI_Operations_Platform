@@ -1,10 +1,10 @@
 # 07_Deployment_Guide.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -57,7 +57,6 @@ This document intentionally does **not** define:
 * 03_System_Architecture.md
 * 04_Technology_Stack.md
 * 05_AI_Architecture.md
-* 04_Technology_Stack.md (detailed set)
 * 08_Cost_Analysis.md
 * 12_Decision_Register.md
 
@@ -211,7 +210,7 @@ Paid access is never granted based solely on the browser redirect back from Chec
 
 **Role:** Transactional email — invitations, import completion/failure notices, report delivery, alerts, and billing notices.
 
-**How it connects:** The FastAPI API or background worker constructs the email request and calls Resend's API. Non-urgent email (e.g., weekly reports) is sent by the worker rather than blocking a web request.
+**How it connects:** The FastAPI API or background worker constructs the email request and calls Resend's API. Non-urgent email — including the scheduled weekly (Monday) and monthly (1st-of-month) reports required by PR-8 in `10_Product_Requirements.md` — is sent by the worker on a schedule, rather than blocking a web request.
 
 ## OpenRouter
 
@@ -373,3 +372,4 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; full external-service connection map and deployment sequence documented. |
+| 0.2 | 30/07/2026 | Clarified the Resend section to reference the PR-8/PD-007 weekly (Monday) and monthly (1st-of-month) scheduled report requirement; removed a duplicate `04_Technology_Stack.md` Related Document entry. |

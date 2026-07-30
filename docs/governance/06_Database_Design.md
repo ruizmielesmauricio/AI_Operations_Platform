@@ -1,10 +1,10 @@
 # 06_Database_Design.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -53,7 +53,6 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
-* 06_Database_Design.md (detailed set)
 * 10_Product_Requirements.md
 * 12_Decision_Register.md
 
@@ -150,7 +149,7 @@ Every new industry the company enters should mean writing a business template (c
 
 # Customer Perspective
 
-A coffee-shop owner should never see "repairs," "mechanics," or bicycle terminology anywhere in their instance of the product, and a bike-shop owner should never see "recipes" or "ingredients." Both should see terminology and workflows that feel purpose-built for their business, even though the same underlying tables serve both (per `01_Product_Vision.md`, "Industry-Flexible Core").
+A coffee-shop owner should never see "repairs," "mechanics," or bicycle terminology anywhere in their instance of the product, and a bike-shop owner should never see "recipes" or "ingredients." Both should see terminology and workflows that feel purpose-built for their business, even though the same underlying tables serve both (per `01_Project_Vision.md`, "Industry-Flexible Core").
 
 ---
 
@@ -214,3 +213,4 @@ Being able to support a new vertical primarily through configuration rather than
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; introduced the repairs-vs-recipes worked example and proposed the generalised "Production Events" canonical entity. |
+| 0.2 | 30/07/2026 | Fixed a stale `01_Product_Vision.md` filename reference (now `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document. |

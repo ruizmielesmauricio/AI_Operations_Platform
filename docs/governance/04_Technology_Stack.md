@@ -1,6 +1,6 @@
 # 04_Technology_Stack.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -43,7 +43,7 @@ This document intentionally does **not** define:
 * Library versions, configuration, or code-level detail (implementation documentation)
 * Deployment steps (see `07_Deployment_Guide.md`)
 * Database schema (see `06_Database_Design.md`)
-* AI provider routing detail (see `05_AI_Architecture.md`, `05_AI_Architecture.md`)
+* AI provider routing detail (see `05_AI_Architecture.md`)
 
 ---
 
@@ -51,7 +51,6 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 03_System_Architecture.md
-* 04_Technology_Stack.md (detailed set)
 * 12_Decision_Register.md
 
 ---
@@ -183,3 +182,4 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 |---------|------|---------|
 | 0.1 | TBD | Initial governance-level technology-stack draft. |
 | 0.2 | 30/07/2026 | Clarified Neon as the sole PostgreSQL host, Supabase as authentication only, and Cloudflare R2 as object/file storage rather than a database. |
+| 0.3 | 30/07/2026 | Removed a duplicate self-citation in Out of Scope and the self-referential "(detailed set)" Related Document. |

@@ -1,13 +1,11 @@
 # 01_Project_Vision.md
 
+**Version:** 0.3 (Draft)
+**Status:** Draft
+**Phase:** Phase 1 – Company Foundation
+**Author:** Founder & CTO
+**Last Updated:** 30/07/2026
 
-| **Field** | **Value** |
-|----------|-----------|
-| **Version** | 0.1 (Draft) |
-| **Status** | Draft |
-| **Phase** | Phase 1 – Company Foundation |
-| **Author** | Founder & CTO |
-| **Last Updated** | 03/07/2026 |
 ---
 
 
@@ -170,6 +168,22 @@ Our immediate focus is not.
 
 ---
 
+# Target User
+
+The platform is built for the independent shop **owner-operator**, not a data analyst and not an enterprise IT buyer.
+
+Typical characteristics:
+
+* Time-poor — runs the counter, the workshop, and the business simultaneously.
+* Not a data specialist — will not clean spreadsheets, map columns, or learn a BI tool.
+* Decision-driven, not curiosity-driven — wants "what should I do," not "what does this chart mean."
+* Already paying for a POS/EPOS system and reluctant to replace it.
+* Trusts explanations more than black-box scores.
+
+This is the user every requirement in `10_Product_Requirements.md` is written for — most directly PR-1 (Onboarding) and PR-2 (Data Ingestion), where the no-import-template decision (PD-006) exists specifically because this user will not do data preparation work.
+
+---
+
 # Our Theory of the Business
 
 Inspired by the management thinking of Peter Drucker, we recognise that every company is built on assumptions.
@@ -237,6 +251,19 @@ AI Operations Platform combines:
 into a single decision-support platform.
 
 Rather than simply presenting information, the platform explains what is happening, why it is happening and what actions should be considered next.
+
+---
+
+# Product Principles
+
+These are product-level commitments that follow from the Company Constitution's principles, made specific enough to design and test against. Other governance documents (`03_System_Architecture.md`, `05_AI_Architecture.md`, `06_Database_Design.md`, `10_Product_Requirements.md`) cite these by name.
+
+* **Never Hallucinate Numbers** — every figure shown to a customer must trace to stored data or a deterministic calculation. AI-generated text must never contain a number that was not present in the structured input it was given (Constitution Principle 3; enforced by PR-5.3 in `10_Product_Requirements.md`).
+* **Action-Oriented Analytics** — every module surfaces a prioritised recommended action alongside a metric, not a metric alone (Constitution Principle 2).
+* **AI-Agnostic** — no product feature may depend on a single AI vendor; all AI requests are routed through the internal AI Provider Gateway (Constitution Principle 6; implemented per `05_AI_Architecture.md`).
+* **Industry-Flexible Core** — the canonical data model and calculation engine must generalise across verticals. Bike-shop-specific terminology and rules live only in the business-template layer, never in shared core tables (Constitution Principle 8; implemented per `06_Database_Design.md`).
+* **EU Infrastructure Where Practical / Privacy by Design** — prefer EU-region hosting and EU-compliant data processing, and collect only the customer data a feature actually needs (Constitution Principle 7).
+* **Low-Friction Use** — the customer reaches value with minimal setup effort. The customer is never asked to reformat, template, or pre-clean their data before uploading it (PD-006, Accepted — see `10_Product_Requirements.md`, PR-2. This principle previously proposed a downloadable import template; that approach was superseded by PD-006 and this section now reflects the current, accepted requirement).
 
 ---
 
@@ -382,4 +409,5 @@ Our strategy is to reduce these risks through explainability, measurable ROI, cu
 | ------- | ---- | ----------------------------- |
 | 0.1     | TBD  | Initial project vision draft. |
 | 0.2     | 30/07/2026 | Replaced the unresolved pricing-strategy question with future packaging options around the accepted €80/month price. |
+| 0.3     | 30/07/2026 | Added "Target User" and "Product Principles" sections (Never Hallucinate Numbers, Action-Oriented Analytics, AI-Agnostic, Industry-Flexible Core, EU Infrastructure/Privacy by Design, Low-Friction Use) so the principles already cited by name in `03_System_Architecture.md`, `05_AI_Architecture.md`, `06_Database_Design.md`, and `10_Product_Requirements.md` are actually defined here; confirmed the import-template guidance is superseded by PD-006; standardised the header to the plain `**Field:** Value` format used by every other governance document (was previously a table); synced version header with revision history. |
 

@@ -1,10 +1,10 @@
 # 12_Decision_Register.md
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 29/07/2026
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -101,6 +101,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-004 | Every feature must save time, save money, reduce operational risk, or improve decisions | Accepted | gov PD-003 |
 | PD-005 | Begin with CSV and Excel uploads before building POS integrations | Accepted | tech PD-003 |
 | PD-006 | Do not require customers to use a predefined import template; the platform performs schema detection and normalisation | Accepted | from `10_Product_Requirements.md` |
+| PD-007 | Send a weekly (Monday) and monthly (1st-of-month) automated summary report by email to every business by default, opt-out capable | Accepted | new |
 
 ---
 
@@ -124,7 +125,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-014 | Separate the platform into specialised engines: Database, Calculation, Machine Learning, AI | Accepted | gov ADR-003 |
 | ADR-015 | Route AI requests through OpenRouter behind the internal AI Provider Gateway, selecting cost-effective, EU-compliant models above a defined quality threshold | **Proposed** | new |
 | ADR-016 | Generalise repairs and recipes into a shared canonical "Production Events" entity rather than industry-specific tables | **Proposed** | new |
-| ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `08_Tech_Stack.md` |
+| ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `04_Technology_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 
 ---
@@ -149,8 +150,8 @@ The former governance register has been renamed to this canonical `12_Decision_R
 
 | ID | Status | What's Needed to Move to Accepted |
 |---|---|---|
-| ADR-015 (OpenRouter) | Proposed | Define a numeric quality/reliability threshold and evaluation test set (`05_AI_Strategy.md`, Model Evaluation) |
-| ADR-016 (Production Events) | Proposed | Validate the pattern against a third business type; update `04_Database.md` and `09_Product_Modules.md` |
+| ADR-015 (OpenRouter) | Proposed | Define a numeric quality/reliability threshold and evaluation test set (`05_AI_Architecture.md`, Model Evaluation) |
+| ADR-016 (Production Events) | Proposed | Validate the pattern against a third business type; update `06_Database_Design.md` and `10_Product_Requirements.md` |
 
 ---
 
@@ -195,3 +196,4 @@ What evidence would cause this decision to be revisited?
 | 1.0 | 29/07/2026 | Merged `11_ADRs.md` and the former `12_Architecture_Decision_Log.md` into one canonical register; renamed it `12_Decision_Register.md`; resolved duplicate ADR-004; set price to €80 (BD-005); added ADR-015 through ADR-018 and ED-005 through ED-008. |
 | 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
 | 1.2 | 30/07/2026 | Clarified BD-005 as the accepted current subscription price of €80/month and removed obsolete €79 update actions. |
+| 1.3 | 30/07/2026 | Added PD-007 (weekly/monthly automated reporting). Fixed stale filename references left over from the register merge (`08_Tech_Stack.md` → `04_Technology_Stack.md`; `05_AI_Strategy.md` → `05_AI_Architecture.md`; `04_Database.md`/`09_Product_Modules.md` → `06_Database_Design.md`/`10_Product_Requirements.md`). Synced header date with this entry. |

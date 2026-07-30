@@ -1,9 +1,48 @@
-# 14 — Skills, Tools & Vendor Stack Checklist
+# 14_Skills_Tools_Vendor_Stack_Checklist.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1–2 (Documentation → Prototype)
-**Related Documents:** 03_System_Architecture.md, 04_Technology_Stack.md, 05_AI_Architecture.md, 06_Database_Design.md, 10_Product_Requirements.md, 11_Development_Roadmap.md, 12_Decision_Register.md
+**Author:** Founder & CTO
+**Last Updated:** 30/07/2026
+
+---
+
+# Document Contract
+
+## Purpose
+
+This document is a practical checklist of the skills, tools, and vendor accounts needed to build the platform, organised by category. It translates the governance-level technology decisions in `04_Technology_Stack.md` and `12_Decision_Register.md` into concrete install steps and account setup, and separates that from competencies that require a person (accountant, solicitor) rather than a package.
+
+## Audience
+
+* Founder
+* Engineering Team
+* Future Employees
+
+## In Scope
+
+* Concrete tools, libraries, and install commands per technology category
+* Financial/legal competencies that require a professional, not a package
+* Claude Skills that can be built to encode this project's conventions
+
+## Out of Scope
+
+This document intentionally does **not** define:
+
+* Why a technology category was chosen (see `04_Technology_Stack.md`)
+* Architecture or data model (see `03_System_Architecture.md`, `06_Database_Design.md`)
+* Delivery sequencing (see `11_Development_Roadmap.md`)
+
+## Related Documents
+
+* 03_System_Architecture.md
+* 04_Technology_Stack.md
+* 05_AI_Architecture.md
+* 06_Database_Design.md
+* 10_Product_Requirements.md
+* 11_Development_Roadmap.md
+* 12_Decision_Register.md
 
 ---
 
@@ -31,7 +70,7 @@ Nothing below is legal or financial advice — for company registration, tax, an
 | Python | Backend, analytics, AI orchestration | Python 3.12, `venv` or `poetry` | `python -m venv .venv`; `pip install fastapi uvicorn sqlalchemy alembic pydantic --break-system-packages` |
 | FastAPI | REST API layer | `fastapi`, `uvicorn` | Included above |
 | SQLAlchemy + Alembic | ORM + migrations | `sqlalchemy`, `alembic` | `pip install sqlalchemy alembic` |
-| Background jobs | Imports, forecasts, cleanup (must be idempotent) | Dramatiq or RQ (per ADR pending in 08_Tech_Stack) | `pip install dramatiq[redis]` once Redis is justified |
+| Background jobs | Imports, forecasts, cleanup (must be idempotent) | Dramatiq or RQ (per ADR pending in `04_Technology_Stack.md`) | `pip install dramatiq[redis]` once Redis is justified |
 | Testing | Business-critical calculation correctness | `pytest`, `pytest-asyncio`, Playwright (frontend e2e) | `pip install pytest pytest-asyncio`; `npm install -D @playwright/test` |
 
 ## 2. Data & Machine Learning
@@ -102,7 +141,7 @@ For a project like this, it's worth building a few **custom project-specific ski
 1. **`bikeshop-schema`** — encodes your tenant model, naming conventions (`business_id` scoping), canonical entities, and import-provenance fields from `06_Database_Design.md`, so any future schema/migration work follows the same pattern automatically.
 2. **`ai-gateway-conventions`** — encodes the structured-input/output contract from `05_AI_Architecture.md` (the JSON packet shape, prohibited AI uses, validation rules) so any AI feature I help build calls the gateway correctly and never free-hands a number.
 3. **`adr-writer`** — encodes your ADR/BD/PD/ED template and status values from `12_Decision_Register.md`, so decision docs come out consistently formatted without you re-pasting the template each time.
-4. **`ui-design-system`** — encodes your Tailwind/shadcn/ECharts choices and dashboard layout principles from `01_Product_Vision.md` and `10_Product_Requirements.md`, so generated frontend code matches your intended look rather than generic defaults.
+4. **`ui-design-system`** — encodes your Tailwind/shadcn/ECharts choices and dashboard layout principles from `01_Project_Vision.md` and `10_Product_Requirements.md`, so generated frontend code matches your intended look rather than generic defaults.
 
 **How to actually create these:** I'd use the `skill-creator` meta-skill to scaffold each one — it structures a `SKILL.md` with the right triggers and format. Once created, where they live depends on where you're working:
 
@@ -130,3 +169,4 @@ Given you're still in Phase 1–2 (documentation → prototype), the highest-lev
 |---|---|---|
 | 0.1 | 2026-07-29 | Initial skills/tools checklist created. |
 | 0.2 | 2026-07-30 | Removed Supabase Storage, confirmed Supabase Auth only, Neon PostgreSQL as the system of record, and Cloudflare R2 as object/file storage rather than a database. |
+| 0.3 | 2026-07-30 | Renamed file from "14 — Skills, Tools & Vendor Stack Checklist.md" to `14_Skills_Tools_Vendor_Stack_Checklist.md` to match the repository's naming convention; added the missing Document Contract (Purpose/Audience/In Scope/Out of Scope/Related Documents) required by ED-003; fixed a stale `01_Product_Vision.md` filename reference. |
