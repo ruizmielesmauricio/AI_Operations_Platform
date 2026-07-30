@@ -1,6 +1,6 @@
 # 07_Deployment_Guide.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -208,9 +208,9 @@ Paid access is never granted based solely on the browser redirect back from Chec
 
 ## Resend
 
-**Role:** Transactional email — invitations, import completion/failure notices, report delivery, alerts, and billing notices.
+**Role:** Transactional email — invitations, import completion/failure notices, alerts, and billing notices. Scheduled weekly/monthly performance reports (PR-8 in `10_Product_Requirements.md`, PD-007/ADR-019) are **not** sent through Resend — they are delivered in-app only; see "Scheduled Reporting Operations" below.
 
-**How it connects:** The FastAPI API or background worker constructs the email request and calls Resend's API. Non-urgent email — including the scheduled weekly (Monday) and monthly (1st-of-month) reports required by PR-8 in `10_Product_Requirements.md` — is sent by the worker on a schedule, rather than blocking a web request.
+**How it connects:** The FastAPI API or background worker constructs the email request and calls Resend's API. Non-urgent email is sent by the worker rather than blocking a web request.
 
 ## OpenRouter
 
@@ -396,3 +396,4 @@ Deployment health checks must cover the scheduler, worker queue, recovery job, n
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; full external-service connection map and deployment sequence documented. |
 | 0.2 | 30/07/2026 | Clarified the Resend section to reference the PR-8/PD-007 weekly (Monday) and monthly (1st-of-month) scheduled report requirement; removed a duplicate `04_Technology_Stack.md` Related Document entry. |
+| 0.3 | 30/07/2026 | Corrected the Resend section, which had incorrectly stated that scheduled reports are emailed — reports are in-app only (PD-007/ADR-019) and now cross-reference the "Scheduled Reporting Operations" section, which was already correct. |

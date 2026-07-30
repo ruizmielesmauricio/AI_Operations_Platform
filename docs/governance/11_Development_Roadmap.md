@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.4 (Draft)
+**Version:** 0.5 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -199,7 +199,7 @@ Proceed only when:
 | Backup restoration tested | Not assumed — actually tested |
 | Monitoring | Sentry + Uptime Kuma |
 | Transactional email | Resend: invitations, import results |
-| Scheduled reporting | Weekly (Monday) and monthly (1st-of-month) email reports, per PR-8/PD-007 |
+| Scheduled reporting | Weekly (Monday) and monthly (1st-of-month) in-app reports — never emailed — per PR-8/PD-007/ADR-019 |
 | User roles and permissions | Owner, manager, staff |
 | Import history and error recovery | Visible, reversible |
 | Stripe test mode | Checkout and webhook flow proven, not yet live |
@@ -405,3 +405,4 @@ This work is governed by PD-007 and ADR-019.
 | 0.2 | 30/07/2026 | Removed the completed €79-to-€80 housekeeping item and clarified that pilots test the accepted €80/month price. |
 | 0.3 | 30/07/2026 | Marked the `01_Project_Vision.md` import-template housekeeping item complete; added Scheduled Reporting to Phase 3 (PD-007/PR-8 baseline weekly/monthly cadence); clarified Phase 7's "Report scheduling" as custom/additional scheduling only; synced version header with revision history. |
 | 0.4 | 30/07/2026 | Removed the self-referential "(technical set)" Related Document. |
+| 0.5 | 30/07/2026 | Fixed the Phase 3 "Scheduled reporting" line, which incorrectly described email delivery — corrected to match the accepted in-app-only design (PD-007/ADR-019). |

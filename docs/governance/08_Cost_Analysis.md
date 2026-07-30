@@ -1,6 +1,6 @@
 # 08_Cost_Analysis.md
 
-**Version:** 1.0 (Draft)
+**Version:** 1.1 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -171,7 +171,7 @@ The spreadsheet must be updated when assumptions change. Static figures in this 
 | Cost class | Model treatment | Examples |
 |---|---|---|
 | Fixed platform | Step cost based on active-customer bands | VPS/container hosting, baseline Neon capacity, monitoring, email and storage allowances |
-| Variable per customer | Increases with active customers | Stripe, AI explanations, report emails, storage/processing and support allowance |
+| Variable per customer | Increases with active customers | Stripe, AI explanations, scheduled report generation (in-app, not email), storage/processing and support allowance |
 | Step costs | Increase when a customer band requires more capacity | Larger VPS, database tier, monitoring/email upgrade |
 | Business overhead | Separate from direct service delivery | Accounting, insurance, legal, administration and basic marketing |
 | Acquisition cost | Applied to each new customer | Founder-led sales, visits, advertising and onboarding allowance |
@@ -185,7 +185,7 @@ As checked on 30/07/2026:
 * [Cloudflare R2](https://developers.cloudflare.com/r2/pricing/) lists Standard storage at **$0.015 per GB-month**, with 10 GB-month of monthly free storage and free egress. The model uses a broader per-customer storage/processing allowance because R2 storage alone is not the full ingestion cost.
 * [Sentry](https://sentry.io/pricing/) lists a $0 Developer tier and a $26/month Team tier.
 * [Neon](https://neon.com/pricing) provides a free tier and describes typical paid usage around $15/month; actual cost depends on compute and storage usage.
-* [Resend](https://resend.com/pricing) provides a free tier. The forecast nevertheless retains a small per-customer email allowance so weekly and monthly reporting does not appear permanently free.
+* [Resend](https://resend.com/pricing) provides a free tier. The forecast nevertheless retains a small per-customer email allowance for transactional email (invitations, alerts, billing notices). Scheduled weekly and monthly reports are delivered in-app, not by email (PD-007/ADR-019), and are costed separately under "Scheduled Reporting Cost Treatment" below.
 
 Vendor prices are time-sensitive. The spreadsheet records the source URL, date, unit and modelling treatment for each input.
 
@@ -354,3 +354,4 @@ This treatment lowers normal reporting cost while preserving a modest allowance 
 | 0.1 | TBD | Initial draft; competitive landscape and cost estimate based on public pricing research. |
 | 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price and aligned pricing language with BD-005. |
 | 1.0 | 30/07/2026 | Reconciled the fixed-cost range; added governed assumptions, client-count economics, three 12-month scenarios, unit economics, break-even interpretation, sensitivities, forecast governance and the connected financial forecast spreadsheet. |
+| 1.1 | 30/07/2026 | Fixed the Resend vendor-input note and the Cost Classification table's "Examples" column, both of which incorrectly implied weekly/monthly reports are emailed — reports are in-app only (PD-007/ADR-019); confirmed the "Scheduled Reporting Cost Treatment" section is consistent with this. |
