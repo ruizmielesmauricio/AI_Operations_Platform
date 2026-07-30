@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.3
+**Version:** 1.5
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -101,7 +101,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-004 | Every feature must save time, save money, reduce operational risk, or improve decisions | Accepted | gov PD-003 |
 | PD-005 | Begin with CSV and Excel uploads before building POS integrations | Accepted | tech PD-003 |
 | PD-006 | Do not require customers to use a predefined import template; the platform performs schema detection and normalisation | Accepted | from `10_Product_Requirements.md` |
-| PD-007 | Generate separate weekly and monthly performance reports as seven-day in-app views with notifications; use a reusable deterministic template and offer PDF/Word only on explicit request | Accepted | Change 8 reporting definition |
+| PD-007 | Generate separate weekly and monthly performance reports, delivered **in-app only — never by email** — as seven-day views with notifications; use a reusable deterministic template and offer PDF/Word only on explicit request | Accepted | new |
 
 ---
 
@@ -127,7 +127,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-016 | Generalise repairs and recipes into a shared canonical "Production Events" entity rather than industry-specific tables | **Proposed** | new |
 | ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `04_Technology_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
-| ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications, and seven-day customer-facing retention | Accepted | Change 8 reporting architecture |
+| ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications (no email), and seven-day customer-facing retention | Accepted | new |
 
 ---
 
@@ -196,6 +196,7 @@ What evidence would cause this decision to be revisited?
 |---------|------|---------|
 | 1.0 | 29/07/2026 | Merged `11_ADRs.md` and the former `12_Architecture_Decision_Log.md` into one canonical register; renamed it `12_Decision_Register.md`; resolved duplicate ADR-004; set price to €80 (BD-005); added ADR-015 through ADR-018 and ED-005 through ED-008. |
 | 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
-| 1.3 | 30/07/2026 | Added accepted decisions PD-007 and ADR-019 for deterministic scheduled performance reporting, in-app delivery, seven-day availability, on-demand exports, and recovery controls. |
 | 1.2 | 30/07/2026 | Clarified BD-005 as the accepted current subscription price of €80/month and removed obsolete €79 update actions. |
-| 1.3 | 30/07/2026 | Added PD-007 (weekly/monthly automated reporting). Fixed stale filename references left over from the register merge (`08_Tech_Stack.md` → `04_Technology_Stack.md`; `05_AI_Strategy.md` → `05_AI_Architecture.md`; `04_Database.md`/`09_Product_Modules.md` → `06_Database_Design.md`/`10_Product_Requirements.md`). Synced header date with this entry. |
+| 1.3 | 30/07/2026 | Added PD-007 (weekly/monthly automated email reporting, later superseded — see 1.4). Fixed stale filename references left over from the register merge (`08_Tech_Stack.md` → `04_Technology_Stack.md`; `05_AI_Strategy.md` → `05_AI_Architecture.md`; `04_Database.md`/`09_Product_Modules.md` → `06_Database_Design.md`/`10_Product_Requirements.md`). |
+| 1.4 | 30/07/2026 | Redefined PD-007 and added ADR-019: scheduled reporting is delivered in-app only (not by email), with seven-day availability, on-demand PDF/Word export, idempotent generation, and recovery controls. |
+| 1.5 | 30/07/2026 | Normalized the Prior ID column for PD-007/ADR-019 to match this register's citation convention (`new`, not a work-item name). Corrected `03_System_Architecture.md`, `07_Deployment_Guide.md`, `08_Cost_Analysis.md`, `10_Product_Requirements.md`, and `11_Development_Roadmap.md`, which still described PD-007 as email-delivered after the 1.4 redefinition — all now consistently state in-app-only delivery. Resolved a duplicate "PR-4" section ID in `10_Product_Requirements.md` created when the 1.4 reporting spec was added alongside the existing PR-8. Fixed this table's own out-of-order/duplicate version numbering (the prior 1.3 row appeared twice, once out of chronological order). |

@@ -1,6 +1,6 @@
 # 03_System_Architecture.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -230,7 +230,7 @@ The platform generates two independent report types through deterministic backgr
 * **Monthly:** on the first calendar day at 08:00 in the customer's configured timezone, covering the previous completed month.
 * If both schedules fall on the same day, both jobs run and create separate reports and notifications.
 
-The worker obtains tenant-scoped data from Neon, calculates report figures and comparisons through backend code, renders the standard in-app report template, and creates an in-app notification. Scheduled reporting does not call the AI gateway and does not automatically create a file.
+The worker obtains tenant-scoped data from Neon, calculates report figures and comparisons through backend code, renders the standard in-app report template, and creates an in-app notification. Reports are delivered **in-app only — never by email** (no Resend involvement). Scheduled reporting does not call the AI gateway and does not automatically create a file.
 
 Each report is uniquely keyed by tenant, report type, and reporting period. This makes generation idempotent and prevents retries from creating duplicates. A primary scheduled job retries transient failures; an independent recovery job detects a missing report and forces regeneration. Persistent failure creates an internal operational alert.
 
@@ -254,3 +254,4 @@ Accepted reporting behaviour is governed by PD-007 and ADR-019 in `12_Decision_R
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; documented planned use of OpenRouter for AI provider routing. |
 | 0.2 | 30/07/2026 | Trimmed the "AI Provider Routing Strategy" section to a summary + pointer to `05_AI_Architecture.md` (removed ~30 lines duplicating that document almost verbatim, consistent with this document's own Out of Scope declaration); fixed stale `01_Product_Vision.md` filename references; removed the self-referential "(detailed set)" Related Document. |
+| 0.3 | 30/07/2026 | Reviewed the "Scheduled Performance Reporting Architecture" section against the accepted in-app-only reporting design; added an explicit "never by email" statement for consistency with `07_Deployment_Guide.md`, `10_Product_Requirements.md`, and `08_Cost_Analysis.md`. |

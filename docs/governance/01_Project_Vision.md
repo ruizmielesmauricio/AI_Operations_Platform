@@ -1,6 +1,6 @@
 # 01_Project_Vision.md
 
-**Version:** 0.3 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -85,7 +85,7 @@ Our mission is not to replace business owners with Artificial Intelligence.
 
 Our mission is to help them make better operational decisions by combining Business Intelligence, Forecasting, Machine Learning and Artificial Intelligence into one explainable decision-support platform.
 
-The first product built on this platform is **Bike Shop AI Copilot**, focused exclusively on helping independent bicycle retailers operate with the same level of intelligence typically available only to much larger organisations.
+The first product built on this platform is **Bike Shop AI Copilot** *(working title, see `13_Branding_Strategy.md`)*, launching with independent bicycle retailers as the first vertical so they can operate with the same level of intelligence typically available only to much larger organisations. The same platform is designed to extend to other retail and service verticals without a core rebuild (Constitution Principle 8, BD-002).
 
 ---
 
@@ -410,4 +410,5 @@ Our strategy is to reduce these risks through explainability, measurable ROI, cu
 | 0.1     | TBD  | Initial project vision draft. |
 | 0.2     | 30/07/2026 | Replaced the unresolved pricing-strategy question with future packaging options around the accepted €80/month price. |
 | 0.3     | 30/07/2026 | Added "Target User" and "Product Principles" sections (Never Hallucinate Numbers, Action-Oriented Analytics, AI-Agnostic, Industry-Flexible Core, EU Infrastructure/Privacy by Design, Low-Friction Use) so the principles already cited by name in `03_System_Architecture.md`, `05_AI_Architecture.md`, `06_Database_Design.md`, and `10_Product_Requirements.md` are actually defined here; confirmed the import-template guidance is superseded by PD-006; standardised the header to the plain `**Field:** Value` format used by every other governance document (was previously a table); synced version header with revision history. |
+| 0.4     | 30/07/2026 | Removed "focused exclusively on... bicycle retailers" from the Executive Summary — it contradicted the Constitution's "working title, must not lock to one industry" framing for "Bike Shop AI Copilot" (Principle 8, BD-002). |
 

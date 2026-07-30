@@ -1,6 +1,6 @@
 # 10_Product_Requirements.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -52,8 +52,10 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
+* 03_System_Architecture.md
 * 05_AI_Architecture.md
 * 06_Database_Design.md
+* 07_Deployment_Guide.md
 * 11_Development_Roadmap.md
 * 12_Decision_Register.md
 
@@ -189,13 +191,50 @@ This should be recorded as an engineering constraint and tested — see PR-6.4.
 
 ## PR-8 — Scheduled Reporting
 
-| ID | Requirement | Acceptance Criteria |
+Reports are delivered **in-app only — never by email.** This is the accepted design (PD-007, ADR-019 in `12_Decision_Register.md`); no automatic email or attachment is created for a scheduled report.
+
+### PR-8.1 Scheduling and period
+
+| ID | Requirement | Acceptance criterion |
 |---|---|---|
-| PR-8.1 | Send a weekly summary report by email | Delivered every Monday, business timezone, covering the prior calendar week |
-| PR-8.2 | Send a monthly summary report by email | Delivered on the 1st of each month, business timezone, covering the prior calendar month |
-| PR-8.3 | Report content is calculated, not AI-generated | Figures come from the same deterministic metrics engine as the dashboard (Business Logic First); AI may only write the plain-language summary around them, per `05_AI_Architecture.md` |
-| PR-8.4 | Reports are sent by the background worker, not a web request | Consistent with `07_Deployment_Guide.md`'s Resend integration |
-| PR-8.5 | User can disable scheduled reports | Opt-out does not affect dashboard or on-demand access |
+| PR-8.1 | Generate a weekly report every Monday at 08:00 in the customer's configured timezone | Report covers the previous completed week |
+| PR-8.2 | Generate a monthly report on the first calendar day at 08:00 in the customer's configured timezone | Report covers the previous completed calendar month |
+| PR-8.3 | Keep weekly and monthly reports separate when schedules coincide | Two reports and two notifications are created |
+
+### PR-8.2 Delivery, access and exports
+
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| PR-8.4 | Deliver each report as an in-app report with its own notification | No automatic email attachment or report file is created |
+| PR-8.5 | Keep the customer-facing report available for seven days | Notification displays the report's exact expiry date |
+| PR-8.6 | Offer PDF or Word only as an explicit on-demand export | File generation begins only after the customer requests it |
+
+### PR-8.3 Required content
+
+The reusable cross-industry template must contain, when relevant and supported by sufficient data:
+
+1. Top three selling products.
+2. Bottom three selling products.
+3. Revenue, profit, and expenses.
+4. Performance charts against the previous equivalent period: week over week or month over month.
+5. A deterministic summary of the most material performance changes.
+6. Backend-calculated projections.
+7. Recommendations selected through predefined business rules.
+8. Low-stock products based on configured thresholds.
+9. Reporting period, data freshness, and warnings for missing or insufficient data.
+
+Sections that do not apply to a business type are omitted rather than populated with misleading placeholders.
+
+### PR-8.4 Logic and reliability
+
+| ID | Requirement | Acceptance criterion |
+|---|---|---|
+| PR-8.7 | Generate every scheduled report without AI | All numbers, summaries, projections, and recommendations trace to backend calculations, templates, or rules |
+| PR-8.8 | Make report generation idempotent | Tenant + report type + period uniquely identifies one report |
+| PR-8.9 | Retry transient failures automatically | Bounded retry policy is tested |
+| PR-8.10 | Detect a missing report through an independent recovery job and force regeneration | Reconciliation test proves a deliberately missed job is recovered |
+| PR-8.11 | Alert the operator after persistent failure | Alert includes tenant, report type, period, attempts, and failure reason |
+| PR-8.12 | Preserve a minimal operational audit record after report expiry | Status, attempts, timestamps, notification state, and failure reason remain available under the applicable retention policy |
 
 **Status:** Baseline requirement for launch — the fixed weekly (Monday) / monthly (1st) cadence above is the accepted default for every business. Custom or additional report scheduling (arbitrary cadence, per-user recipients, extra report types) remains deferred to Phase 7 of `11_Development_Roadmap.md`.
 
@@ -259,7 +298,7 @@ Removing the template requirement removes the single largest onboarding drop-off
 * No customer-facing import template; the platform performs schema detection and normalisation (**PD-006, Accepted** — reflected in `01_Project_Vision.md`'s "Low-Friction Use" principle)
 * AI may suggest column mappings once, but never transforms, cleans, validates, or deduplicates data (**ED-009, Accepted**)
 * Uploaded files deleted after successful ingestion (ADR-008, Accepted)
-* Every business receives a weekly (Monday) and monthly (1st-of-month) automated email report by default, calculated deterministically and opt-out capable (**PD-007, Accepted**)
+* Every business receives a weekly (Monday) and monthly (1st-of-month) automated **in-app** report by default — never emailed — generated deterministically, kept available for seven days, with PDF/Word available only as an on-demand export (**PD-007, Accepted**)
 
 ---
 
@@ -291,55 +330,6 @@ Removing the template requirement removes the single largest onboarding drop-off
 
 ---
 
-# PR-4 — Scheduled Performance Reports
-
-## PR-4.1 Scheduling and period
-
-| ID | Requirement | Acceptance criterion |
-|---|---|---|
-| PR-4.1 | Generate a weekly report every Monday at 08:00 in the customer's configured timezone | Report covers the previous completed week |
-| PR-4.2 | Generate a monthly report on the first calendar day at 08:00 in the customer's configured timezone | Report covers the previous completed calendar month |
-| PR-4.3 | Keep weekly and monthly reports separate when schedules coincide | Two reports and two notifications are created |
-
-## PR-4.2 Delivery, access and exports
-
-| ID | Requirement | Acceptance criterion |
-|---|---|---|
-| PR-4.4 | Deliver each report as an in-app report with its own notification | No automatic email attachment or report file is created |
-| PR-4.5 | Keep the customer-facing report available for seven days | Notification displays the report's exact expiry date |
-| PR-4.6 | Offer PDF or Word only as an explicit on-demand export | File generation begins only after the customer requests it |
-
-## PR-4.3 Required content
-
-The reusable cross-industry template must contain, when relevant and supported by sufficient data:
-
-1. Top three selling products.
-2. Bottom three selling products.
-3. Revenue, profit, and expenses.
-4. Performance charts against the previous equivalent period: week over week or month over month.
-5. A deterministic summary of the most material performance changes.
-6. Backend-calculated projections.
-7. Recommendations selected through predefined business rules.
-8. Low-stock products based on configured thresholds.
-9. Reporting period, data freshness, and warnings for missing or insufficient data.
-
-Sections that do not apply to a business type are omitted rather than populated with misleading placeholders.
-
-## PR-4.4 Logic and reliability
-
-| ID | Requirement | Acceptance criterion |
-|---|---|---|
-| PR-4.7 | Generate every scheduled report without AI | All numbers, summaries, projections, and recommendations trace to backend calculations, templates, or rules |
-| PR-4.8 | Make report generation idempotent | Tenant + report type + period uniquely identifies one report |
-| PR-4.9 | Retry transient failures automatically | Bounded retry policy is tested |
-| PR-4.10 | Detect a missing report through an independent recovery job and force regeneration | Reconciliation test proves a deliberately missed job is recovered |
-| PR-4.11 | Alert the operator after persistent failure | Alert includes tenant, report type, period, attempts, and failure reason |
-| PR-4.12 | Preserve a minimal operational audit record after report expiry | Status, attempts, timestamps, notification state, and failure reason remain available under the applicable retention policy |
-
-These requirements implement PD-007 and ADR-019.
-
----
-
 # Questions Still Open
 
 * What is the acceptable manual-confirmation rate before the no-template approach is judged to have failed?
@@ -354,3 +344,5 @@ These requirements implement PD-007 and ADR-019.
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft. Records PD-006 (no import template) and ED-009 (AI ingestion boundary). |
 | 0.2 | 30/07/2026 | Added PR-8 (Scheduled Reporting: weekly Monday / monthly 1st-of-month email reports, PD-007); fixed stale `01_Product_Vision.md` filename references and duplicate/self-referential Out of Scope citations. |
+| 0.3 | 30/07/2026 | Corrected PR-8 to match the accepted in-app-only reporting design (PD-007/ADR-019 — no email, seven-day availability, on-demand PDF/Word export, idempotent generation with recovery); removed the duplicate "PR-4 — Scheduled Performance Reports" section (its content was merged into PR-8, resolving the PR-4 ID collision with the existing "PR-4 — Findings and Recommendations"); fixed the Current Decisions bullet that still described email delivery. |
+| 0.4 | 30/07/2026 | Added `03_System_Architecture.md` and `07_Deployment_Guide.md` to Related Documents — PR-8 now substantively depends on both (architecture and Resend-exclusion detail) but neither was linked. |
