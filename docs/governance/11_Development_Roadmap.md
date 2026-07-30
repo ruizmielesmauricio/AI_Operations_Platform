@@ -158,7 +158,7 @@ Proceed only when:
 |---|---|
 | Repository scaffolding | Backend, frontend, Docker, CI skeleton |
 | Authentication | Supabase Auth integration; session verified by API |
-| Business creation and template selection | Bicycle shop template first |
+| Business creation and template selection | Bicycle-shop template first; configuration only, on the shared platform |
 | Tenant isolation | Enforced and tested from day one, not retrofitted |
 | File upload to object storage | Signed URL flow via R2 |
 | **Schema detection engine** | Alias dictionary + structural heuristics; tested against real Phase 1 files |
@@ -166,7 +166,7 @@ Proceed only when:
 | Mapping profile persistence | Second upload requires no input (PR-2.5) |
 | Validation and normalisation | Deterministic; plain-language errors (PR-2.8) |
 | Transactional import | Idempotent, reversible |
-| Core KPI calculation | Revenue, gross margin, stock cover, repair turnaround |
+| Core KPI calculation | Revenue and gross margin; stock cover and repair turnaround only when enabled and supported by the bicycle-shop template data |
 | Basic dashboard | ECharts, browser-rendered |
 | AI explanation layer | Behind gateway; structured input only |
 | Import deletion / undo | PR-2.11 |
@@ -291,6 +291,15 @@ Proceed only when:
 
 ---
 
+# Cross-Industry Delivery Guardrails
+
+* The bicycle-shop template remains the only Phase 2 build target so validation stays focused.
+* The common schema, calculation services, ingestion pipeline, authentication, tenant isolation, and reporting engine must not contain bicycle-shop-only assumptions.
+* A second vertical requires customer discovery and a validated template; it does not justify a separate application or database.
+* Expansion testing must verify terminology, enabled modules, canonical mappings, report applicability, and consistent formulas across templates.
+
+---
+
 # Phase 7 — Product Expansion
 
 **Epic:** `COP — Phase 7: Expansion`
@@ -300,7 +309,7 @@ Proceed only when:
 |---|---|
 | Direct POS integrations | Customer demand for the specific POS |
 | Automated recurring imports | Manual upload friction proven |
-| Second business template | Validated demand in a new vertical |
+| Second business template | Validated demand in a new vertical; configuration on the shared core |
 | Production Events generalisation (ADR-016) | Second template being built |
 | Advanced forecasting | Simple methods proven insufficient |
 | Multi-location support | Customer with multiple locations |
@@ -403,3 +412,5 @@ This work is governed by PD-007 and ADR-019.
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft; structured for Jira epic mapping. |
 | 0.2 | 30/07/2026 | Removed the completed €79-to-€80 housekeeping item and clarified that pilots test the accepted €80/month price. |
+| 0.3 | 30/07/2026 | Added deterministic scheduled-report implementation and validation work from Change 8. |
+| 0.4 | 30/07/2026 | Added cross-industry delivery guardrails and made bike-specific KPIs conditional on the first template. |
