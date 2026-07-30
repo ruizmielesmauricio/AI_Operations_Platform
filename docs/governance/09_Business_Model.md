@@ -1,10 +1,10 @@
 # 09_Business_Model.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -12,7 +12,7 @@
 
 ## Purpose
 
-This document validates the business model described in `09_Business_Model.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, documents the accepted €80/month price and tests its commercial viability, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
+This document validates the business model described in `01_Project_Vision.md` against the competitive and cost evidence gathered in `08_Cost_Analysis.md`, documents the accepted €80/month price and tests its commercial viability, estimates revenue for the first six and twelve months, and sets out a review plan for revisiting all of it as real evidence arrives.
 
 This document does not invent confidence that doesn't exist yet — every revenue forecast and conversion estimate below is a planning assumption, not a commitment or prediction. The current subscription price itself is fixed at €80/month under BD-005.
 
@@ -48,7 +48,6 @@ This document intentionally does **not** define:
 
 ## Related Documents
 
-* 09_Business_Model.md (detailed set)
 * 08_Cost_Analysis.md
 * 11_Development_Roadmap.md
 * 15_Customer_Discovery.md
@@ -245,4 +244,4 @@ The most commercially important output of this document is not the revenue numbe
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; business model and pricing validated against `08_Cost_Analysis.md`; 6- and 12-month scenario-based revenue forecast added. |
-| 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price; removed the superseded €79 discrepancy and retained €80 across all revenue scenarios. |
+| 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price; removed the superseded €79 discrepancy and retained €80 across all revenue scenarios. Fixed a self-referential citation in the Purpose section (now correctly points to `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document; synced version header with revision history. |

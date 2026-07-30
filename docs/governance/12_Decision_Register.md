@@ -4,7 +4,7 @@
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 29/07/2026
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -125,7 +125,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-014 | Separate the platform into specialised engines: Database, Calculation, Machine Learning, AI | Accepted | gov ADR-003 |
 | ADR-015 | Route AI requests through OpenRouter behind the internal AI Provider Gateway, selecting cost-effective, EU-compliant models above a defined quality threshold | **Proposed** | new |
 | ADR-016 | Generalise repairs and recipes into a shared canonical "Production Events" entity rather than industry-specific tables | **Proposed** | new |
-| ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `08_Tech_Stack.md` |
+| ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `04_Technology_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 | ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications, and seven-day customer-facing retention | Accepted | Change 8 reporting architecture |
 
@@ -151,8 +151,8 @@ The former governance register has been renamed to this canonical `12_Decision_R
 
 | ID | Status | What's Needed to Move to Accepted |
 |---|---|---|
-| ADR-015 (OpenRouter) | Proposed | Define a numeric quality/reliability threshold and evaluation test set (`05_AI_Strategy.md`, Model Evaluation) |
-| ADR-016 (Production Events) | Proposed | Validate the pattern against a third business type; update `04_Database.md` and `09_Product_Modules.md` |
+| ADR-015 (OpenRouter) | Proposed | Define a numeric quality/reliability threshold and evaluation test set (`05_AI_Architecture.md`, Model Evaluation) |
+| ADR-016 (Production Events) | Proposed | Validate the pattern against a third business type; update `06_Database_Design.md` and `10_Product_Requirements.md` |
 
 ---
 
@@ -198,3 +198,4 @@ What evidence would cause this decision to be revisited?
 | 1.1 | 29/07/2026 | Added accepted decisions PD-006 (no required customer-facing import template) and ED-009 (AI limited to suggesting column mappings). |
 | 1.3 | 30/07/2026 | Added accepted decisions PD-007 and ADR-019 for deterministic scheduled performance reporting, in-app delivery, seven-day availability, on-demand exports, and recovery controls. |
 | 1.2 | 30/07/2026 | Clarified BD-005 as the accepted current subscription price of €80/month and removed obsolete €79 update actions. |
+| 1.3 | 30/07/2026 | Added PD-007 (weekly/monthly automated reporting). Fixed stale filename references left over from the register merge (`08_Tech_Stack.md` → `04_Technology_Stack.md`; `05_AI_Strategy.md` → `05_AI_Architecture.md`; `04_Database.md`/`09_Product_Modules.md` → `06_Database_Design.md`/`10_Product_Requirements.md`). Synced header date with this entry. |

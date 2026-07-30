@@ -1,10 +1,10 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 29/07/2026
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -54,7 +54,6 @@ This document intentionally does **not** define:
 ## Related Documents
 
 * 10_Product_Requirements.md
-* 11_Development_Roadmap.md (technical set)
 * 15_Customer_Discovery.md
 * 12_Decision_Register.md
 
@@ -109,7 +108,7 @@ The most important sequencing decision: **customer discovery comes before seriou
 **Outstanding housekeeping:**
 
 - [x] Consolidate the former decision registers into `12_Decision_Register.md`
-- [ ] Update `01_Product_Vision.md` to remove the import-template guidance (superseded by PD-006)
+- [x] Update `01_Project_Vision.md` to remove the import-template guidance (superseded by PD-006; replaced by the "Low-Friction Use" product principle)
 - [ ] Update `06_Database_Design.md` and `10_Product_Requirements.md` if ADR-016 is accepted
 - [ ] Generate remaining individual decision files in `docs/decisions/`
 
@@ -200,6 +199,7 @@ Proceed only when:
 | Backup restoration tested | Not assumed — actually tested |
 | Monitoring | Sentry + Uptime Kuma |
 | Transactional email | Resend: invitations, import results |
+| Scheduled reporting | Weekly (Monday) and monthly (1st-of-month) email reports, per PR-8/PD-007 |
 | User roles and permissions | Owner, manager, staff |
 | Import history and error recovery | Visible, reversible |
 | Stripe test mode | Checkout and webhook flow proven, not yet live |
@@ -304,7 +304,7 @@ Proceed only when:
 | Production Events generalisation (ADR-016) | Second template being built |
 | Advanced forecasting | Simple methods proven insufficient |
 | Multi-location support | Customer with multiple locations |
-| Report scheduling | Requested repeatedly |
+| Custom/additional report scheduling (beyond the default weekly/monthly cadence in PR-8) | Requested repeatedly |
 | Mobile workflows | Usage data shows mobile need |
 
 ---
@@ -403,3 +403,5 @@ This work is governed by PD-007 and ADR-019.
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft; structured for Jira epic mapping. |
 | 0.2 | 30/07/2026 | Removed the completed €79-to-€80 housekeeping item and clarified that pilots test the accepted €80/month price. |
+| 0.3 | 30/07/2026 | Marked the `01_Project_Vision.md` import-template housekeeping item complete; added Scheduled Reporting to Phase 3 (PD-007/PR-8 baseline weekly/monthly cadence); clarified Phase 7's "Report scheduling" as custom/additional scheduling only; synced version header with revision history. |
+| 0.4 | 30/07/2026 | Removed the self-referential "(technical set)" Related Document. |

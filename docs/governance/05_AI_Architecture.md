@@ -1,10 +1,10 @@
 # 05_AI_Architecture.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -51,7 +51,6 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 03_System_Architecture.md
-* 05_AI_Architecture.md (detailed set)
 * 08_Cost_Analysis.md
 * 12_Decision_Register.md
 
@@ -125,7 +124,7 @@ The internal `AIProvider` interface defined in `05_AI_Architecture.md` does not 
 
 * **Cost control** — routing to the cheapest available model that still meets the platform's quality bar, rather than committing to one provider's pricing regardless of task.
 * **EU regulatory fit** — the ability to prefer or restrict model selection to providers/models that meet applicable EU data-processing and regulatory requirements.
-* **A quality floor** — routing decisions must be constrained by a minimum reliability/quality threshold, so cost optimisation cannot silently increase hallucination risk. This directly protects the "Never Hallucinate Numbers" principle in `01_Product_Vision.md`, since even explanatory text must stay factually grounded in the structured data it was given.
+* **A quality floor** — routing decisions must be constrained by a minimum reliability/quality threshold, so cost optimisation cannot silently increase hallucination risk. This directly protects the "Never Hallucinate Numbers" principle in `01_Project_Vision.md`, since even explanatory text must stay factually grounded in the structured data it was given.
 * **Fallback behaviour** — if a selected model fails or times out, the gateway can fall back to an alternative model without the customer-facing feature needing to know.
 
 ## What Does Not Change
@@ -152,13 +151,13 @@ Customers should experience consistent, trustworthy explanations regardless of w
 
 # Technical Perspective
 
-The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_System_Architecture.md` and `03_System_Architecture.md`.
+The AI Provider Gateway remains the single place in the codebase where a provider or router SDK is referenced. Everything upstream of it (business modules, dashboards, recommendation engine) depends only on the internal `AIProvider` interface, exactly as described in `03_System_Architecture.md`.
 
 ---
 
 # Commercial Perspective
 
-A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Action-Oriented Analytics" product principles in `01_Product_Vision.md` without requiring the company to negotiate or maintain relationships with multiple AI vendors directly.
+A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Action-Oriented Analytics" product principles in `01_Project_Vision.md` without requiring the company to negotiate or maintain relationships with multiple AI vendors directly.
 
 ---
 
@@ -210,3 +209,5 @@ A cost- and compliance-aware routing strategy supports the "AI-Agnostic" and "Ac
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial governance-level draft; recorded planned use of OpenRouter for AI provider routing. |
+| 0.2 | 30/07/2026 | Fixed stale `01_Product_Vision.md` filename references (now `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document. This document remains the canonical source for AI provider routing detail. |
+| 0.3 | 30/07/2026 | Fixed a duplicate self-citation in the Technical Perspective section (`03_System_Architecture.md` was cited twice in the same sentence). |

@@ -1,10 +1,10 @@
 # 15_Customer_Discovery.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Customer Validation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -44,6 +44,16 @@ Rather than pitching our product, these sessions aim to understand how independe
 * Pricing discussions
 * Sales conversations
 * Technical implementation
+
+---
+
+## Related Documents
+
+* 01_Project_Vision.md
+* 09_Business_Model.md
+* 10_Product_Requirements.md
+* 11_Development_Roadmap.md
+* 12_Decision_Register.md
 
 ---
 
@@ -318,3 +328,4 @@ This discovery phase will be considered complete when:
 | Version | Date | Changes                                      |
 | ------- | ---- | -------------------------------------------- |
 | 0.1     | TBD  | Initial Customer Discovery Playbook created. |
+| 0.2     | 30/07/2026 | Added the missing "Related Documents" section for template consistency with the rest of `docs/governance/`. |

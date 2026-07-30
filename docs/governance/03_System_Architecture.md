@@ -1,10 +1,10 @@
 # 03_System_Architecture.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -55,7 +55,6 @@ This document intentionally does **not** define:
 
 * 00_Company_Constitution.md
 * 02_Operational_Domains.md
-* 03_System_Architecture.md (detailed set)
 * 05_AI_Architecture.md
 * 12_Decision_Register.md
 
@@ -146,30 +145,17 @@ A shared PostgreSQL database with tenant-scoped rows is used initially, defended
 
 Per the Company Constitution (Principle 6, AI-Agnostic Architecture) and ADR-006 / ED-006, no business module may call an AI provider's SDK directly. All AI requests pass through a single internal **AI Provider Gateway** (`05_AI_Architecture.md`), which is responsible for provider selection, prompt construction, output validation, and cost tracking.
 
-## Planned Use of OpenRouter
+## Planned Use of OpenRouter (Summary)
 
-The platform is planning to use **OpenRouter** as the routing layer behind the AI Provider Gateway, rather than integrating a single model vendor directly.
+The platform plans to route AI requests through **OpenRouter**, as one implementation behind the internal `AIProvider` interface — not a new dependency inside business modules:
 
-**Why this fits the existing strategy:**
+```text
+Business Modules -> AI Provider Gateway -> (OpenRouter or direct provider) -> Model
+```
 
-* OpenRouter sits behind the internal `AIProvider` interface already defined in `05_AI_Architecture.md` — it does not replace that interface, it becomes one implementation of it. Business modules continue to depend only on the internal interface.
-* It allows the gateway to select the cheapest model that still meets an approved quality bar for a given task, rather than committing to one vendor's pricing.
-* It allows filtering or preferring models that meet EU regulatory and data-handling requirements, which supports the "EU infrastructure where practical" and "Privacy by Design" principles in `01_Product_Vision.md`.
-* Because routing logic lives inside the gateway rather than in business code, the specific routing service (OpenRouter or an alternative) can be swapped later without touching Retail Operations, Workshop Operations, or Financial Performance modules.
+This is an architecture-layering decision: the specific routing service can be swapped later without touching Retail Operations, Workshop Operations, or Financial Performance modules. It does not change the Business Logic First rule — AI still only explains calculated output.
 
-**Selection criteria for any model routed through this layer** (to be formalised as an ADR once thresholds are tested against real usage):
-
-* Cost per request, weighted against the cost strategy in `08_Cost_Analysis.md`
-* Compliance with applicable EU regulation and data-processing terms
-* A minimum quality/reliability threshold, so that low-cost model selection does not come at the expense of hallucinated or unreliable explanations — directly serving the "Never Hallucinate Numbers" principle in `01_Product_Vision.md`
-* Latency, for responsiveness in the dashboard AI explanation layer
-* Availability of a fallback model within the same routing layer if the preferred model fails
-
-**What this does not change:**
-
-* AI still only explains calculated output; it never performs the calculation itself (Business Logic First still holds regardless of which model or router is used).
-* Output validation, redaction, and usage logging in the AI Provider Gateway still apply uniformly to any model reached through OpenRouter.
-* This is a routing/provider decision, not a relaxation of the AI Prohibitions list in `05_AI_Architecture.md`.
+**Full reasoning, selection criteria, and status:** see `05_AI_Architecture.md`, "Provider Independence and OpenRouter" (canonical). This document does not restate it.
 
 **Status:** Proposed — pending a dedicated ADR once cost and quality thresholds are tested with pilot usage.
 
@@ -267,3 +253,4 @@ Accepted reporting behaviour is governed by PD-007 and ADR-019 in `12_Decision_R
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; documented planned use of OpenRouter for AI provider routing. |
+| 0.2 | 30/07/2026 | Trimmed the "AI Provider Routing Strategy" section to a summary + pointer to `05_AI_Architecture.md` (removed ~30 lines duplicating that document almost verbatim, consistent with this document's own Out of Scope declaration); fixed stale `01_Product_Vision.md` filename references; removed the self-referential "(detailed set)" Related Document. |

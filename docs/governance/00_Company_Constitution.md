@@ -1,10 +1,10 @@
 # 00_Company_Constitution.md
 
-**Version:** 1.0
+**Version:** 1.2
 **Status:** Accepted
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** TBD
+**Last Updated:** 30/07/2026
 
 ---
 
@@ -105,7 +105,7 @@ AI Operations Platform
 
 ## First Product
 
-Bike Shop AI Copilot
+Bike Shop AI Copilot *(working title for the bike-shop template of the platform, pending formal brand naming in Phase 5 — see `13_Branding_Strategy.md`. The chosen brand name must not lock the product identity to one industry, per Principle 8 and BD-002.)*
 
 ---
 
@@ -440,9 +440,8 @@ If it achieves none of these objectives, it should not be built.
 
 # Questions Still Open
 
-* What will the company name be?
+* Which company/product name will be selected from the shortlisted candidates (Tara, Nora, Orla, Vera) and formally cleared? (see `13_Branding_Strategy.md`)
 * What will the company branding look like?
-* Which country will be our first commercial market?
 * Which AI provider will become the default for Version 1?
 * What metrics will define customer success after launch?
 
@@ -454,3 +453,4 @@ If it achieves none of these objectives, it should not be built.
 | ------- | ---- | ----------------------------------------- |
 | 1.0     | TBD  | Initial Company Constitution established. |
 | 1.1     | TBD  | Added status decisions to the file. |
+| 1.2     | 30/07/2026 | Marked "Bike Shop AI Copilot" as a working title pending Phase 5 branding (resolves conflict with `13_Branding_Strategy.md`'s naming guidance); updated the company-name open question to reflect the shortlisted candidates; removed the first-market question (already answered as Ireland in `01_Project_Vision.md`); synced version header with revision history. |
