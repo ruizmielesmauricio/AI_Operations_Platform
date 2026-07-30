@@ -360,6 +360,29 @@ This deployment model keeps fixed monthly infrastructure cost low at the prototy
 
 ---
 
+# Scheduled Reporting Operations
+
+A timezone-aware scheduler dispatches separate weekly and monthly report jobs:
+
+* Weekly: Monday at 08:00 in the customer's configured timezone.
+* Monthly: first calendar day at 08:00 in the customer's configured timezone.
+* A date collision does not merge the jobs; each produces its own report and in-app notification.
+
+The worker calculates and renders the reusable in-app template from Neon data without using AI. Normal scheduled reports do not use Resend and do not create files in R2. PDF or Word is generated only after an explicit customer export request; any generated export follows the platform's temporary-file controls.
+
+Reliability controls:
+
+1. Use a unique key of tenant, report type, and reporting period.
+2. Retry transient generation failures with bounded backoff.
+3. Run an independent reconciliation job after the scheduled window to detect missing reports and force regeneration.
+4. Alert the operator if the forced recovery also fails.
+5. Record job attempts, report status, notification status, timestamps, and failure reasons in Neon.
+6. Expire the customer-facing report after seven days and show the expiry date in its notification; retain only the minimum audit record required for operations and governance.
+
+Deployment health checks must cover the scheduler, worker queue, recovery job, notification creation, expiry process, and on-demand export path.
+
+---
+
 # Questions Still Open
 
 * Should staging environment costs be absorbed now, or only introduced once the pilot phase begins (Phase 3/4 in `11_Development_Roadmap.md`)?
