@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -102,6 +102,8 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-005 | Begin with CSV and Excel uploads before building POS integrations | Accepted | tech PD-003 |
 | PD-006 | Do not require customers to use a predefined import template; the platform performs schema detection and normalisation | Accepted | from `10_Product_Requirements.md` |
 | PD-007 | Generate separate weekly and monthly performance reports, delivered **in-app only — never by email** — as seven-day views with notifications; use a reusable deterministic template and offer PDF/Word only on explicit request | Accepted | new |
+| PD-008 | Extend the in-app AI agent to handle three categories of natural-language question through one chat interface — tenant business-data Q&A, scheduled-report explanation, and product/support help — with AI restricted in every case to classifying intent and phrasing an answer, never calculating or inventing one | Accepted | new |
+| PD-009 | Add low-stock alerting as a standalone, real-time in-app notification capability, generated deterministically whenever inventory data changes, independent of the weekly/monthly report cycle | Accepted | new |
 
 ---
 
@@ -128,6 +130,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `04_Technology_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 | ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications (no email), and seven-day customer-facing retention | Accepted | new |
+| ADR-020 | Route every conversational-agent question through an intent classifier that selects one of a fixed, approved set of deterministic query functions or an approved help-content knowledge base before any AI generation occurs — no free-form calculation, retrieval, or invention outside these approved sources | Accepted | new |
 
 ---
 
@@ -200,3 +203,4 @@ What evidence would cause this decision to be revisited?
 | 1.3 | 30/07/2026 | Added PD-007 (weekly/monthly automated email reporting, later superseded — see 1.4). Fixed stale filename references left over from the register merge (`08_Tech_Stack.md` → `04_Technology_Stack.md`; `05_AI_Strategy.md` → `05_AI_Architecture.md`; `04_Database.md`/`09_Product_Modules.md` → `06_Database_Design.md`/`10_Product_Requirements.md`). |
 | 1.4 | 30/07/2026 | Redefined PD-007 and added ADR-019: scheduled reporting is delivered in-app only (not by email), with seven-day availability, on-demand PDF/Word export, idempotent generation, and recovery controls. |
 | 1.5 | 30/07/2026 | Normalized the Prior ID column for PD-007/ADR-019 to match this register's citation convention (`new`, not a work-item name). Corrected `03_System_Architecture.md`, `07_Deployment_Guide.md`, `08_Cost_Analysis.md`, `10_Product_Requirements.md`, and `11_Development_Roadmap.md`, which still described PD-007 as email-delivered after the 1.4 redefinition — all now consistently state in-app-only delivery. Resolved a duplicate "PR-4" section ID in `10_Product_Requirements.md` created when the 1.4 reporting spec was added alongside the existing PR-8. Fixed this table's own out-of-order/duplicate version numbering (the prior 1.3 row appeared twice, once out of chronological order). |
+| 1.6 | 30/07/2026 | Added PD-008 (three-lane conversational agent: business Q&A, report explanation, product/support help), PD-009 (standalone low-stock alerting), and ADR-020 (intent-classifier routing to approved deterministic queries or an approved help-content knowledge base — no free-form AI calculation or invention). Recorded during Phase 2 prototype service scoping. |

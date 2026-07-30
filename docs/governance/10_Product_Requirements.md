@@ -1,6 +1,6 @@
 # 10_Product_Requirements.md
 
-**Version:** 0.4 (Draft)
+**Version:** 0.5 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -170,6 +170,8 @@ This should be recorded as an engineering constraint and tested — see PR-6.4.
 | PR-5.3 | Reject or flag any AI numeric claim not present in structured input | Output validation blocks unsupported figures |
 | PR-5.4 | Degrade gracefully when AI is unavailable | Dashboards and metrics remain fully functional; clear message shown |
 | PR-5.5 | Enforce per-tenant AI usage limits | Limits applied server-side; usage logged per request |
+| PR-5.6 | Provide one conversational agent that classifies every question into business-data Q&A, report explanation, or product/support help before generating an answer (PD-008, ADR-020) | Automated test asserts every agent response traces to an approved query function or an approved knowledge-base entry — never a free-form AI calculation |
+| PR-5.7 | Answer product/support questions from an approved help-content knowledge base, and hand off to human support when the knowledge base cannot resolve the question | No invented support answers; unresolved questions create a support request visible to the operator |
 
 ## PR-6 — Security and Tenancy
 
@@ -237,6 +239,18 @@ Sections that do not apply to a business type are omitted rather than populated 
 | PR-8.12 | Preserve a minimal operational audit record after report expiry | Status, attempts, timestamps, notification state, and failure reason remain available under the applicable retention policy |
 
 **Status:** Baseline requirement for launch — the fixed weekly (Monday) / monthly (1st) cadence above is the accepted default for every business. Custom or additional report scheduling (arbitrary cadence, per-user recipients, extra report types) remains deferred to Phase 7 of `11_Development_Roadmap.md`.
+
+## PR-9 — Alerts
+
+Per PD-009, low-stock alerting is a standalone, real-time capability — distinct from PR-8.3's low-stock section inside the periodic report, which remains a point-in-time summary.
+
+| ID | Requirement | Acceptance Criteria |
+|---|---|---|
+| PR-9.1 | Generate a low-stock alert automatically whenever inventory data changes and a product crosses its configured threshold | Alert created without waiting for the weekly/monthly report cycle |
+| PR-9.2 | Deliver low-stock alerts in-app only, consistent with PR-8's no-email default | Notification visible in-app; no automatic email |
+| PR-9.3 | Let the owner configure the low-stock threshold per product or category | Threshold stored per business; default provided if unset |
+| PR-9.4 | Calculate alert triggers deterministically, never via AI | Same input always produces the same alert; covered by unit tests |
+| PR-9.5 | Surface active alerts through the conversational agent's business-data lane on request | "What's low on stock?" returns the same alert data shown in-app |
 
 ---
 
@@ -346,3 +360,4 @@ Removing the template requirement removes the single largest onboarding drop-off
 | 0.2 | 30/07/2026 | Added PR-8 (Scheduled Reporting: weekly Monday / monthly 1st-of-month email reports, PD-007); fixed stale `01_Product_Vision.md` filename references and duplicate/self-referential Out of Scope citations. |
 | 0.3 | 30/07/2026 | Corrected PR-8 to match the accepted in-app-only reporting design (PD-007/ADR-019 — no email, seven-day availability, on-demand PDF/Word export, idempotent generation with recovery); removed the duplicate "PR-4 — Scheduled Performance Reports" section (its content was merged into PR-8, resolving the PR-4 ID collision with the existing "PR-4 — Findings and Recommendations"); fixed the Current Decisions bullet that still described email delivery. |
 | 0.4 | 30/07/2026 | Added `03_System_Architecture.md` and `07_Deployment_Guide.md` to Related Documents — PR-8 now substantively depends on both (architecture and Resend-exclusion detail) but neither was linked. |
+| 0.5 | 30/07/2026 | Added PR-5.6/PR-5.7 (three-lane conversational agent: business Q&A, report explanation, product/support help with human handoff) and PR-9 (standalone low-stock alerting), per PD-008, PD-009, and ADR-020 in `12_Decision_Register.md`. |

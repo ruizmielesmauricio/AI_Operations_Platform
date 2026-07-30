@@ -1,6 +1,6 @@
 # 02_Operational_Domains.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -188,6 +188,14 @@ Financial Performance
 
 **Note:** Per the Company Constitution (Principle 3, "Business Logic First") and ADR-007, this domain never generates numbers. It explains numbers that Retail Operations, Workshop Operations, and Financial Performance have already calculated.
 
+**The customer-facing conversational agent (PD-008, ADR-020):** Customers interact with this domain through a single chat interface, behaving similarly to a general AI assistant from the customer's point of view. Behind that one interface, every question is routed down one of three lanes by an intent classifier — never answered by free-form AI generation:
+
+1. **Business-data Q&A** — "What were our sales yesterday?", "What are our most/least popular products?". The AI classifies the question against a fixed set of approved deterministic query functions (already computed by Retail/Workshop/Financial Performance), the matching function runs in code, and the AI phrases the returned numbers in plain language. The AI never computes the answer itself.
+2. **Report explanation** — plain-language walkthroughs of the weekly/monthly reports defined in PR-8, answering "why" questions about a report the customer is already looking at.
+3. **Product/support help** — "Why was my import rejected?", "How do I invite a teammate?". These are not business-data questions, so they are answered by retrieving from an approved help-content knowledge base (the Business Knowledge domain, above) rather than any calculation path. Where the knowledge base cannot resolve the question, the agent hands off to human support rather than guessing.
+
+This resolves the "Should Business Knowledge remain purely internal, or become a customer-visible module?" question below in favour of the latter, scoped specifically to support/help content.
+
 ---
 
 # Business Perspective
@@ -238,15 +246,15 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 # Future Improvements
 
 * As new business templates are added (garages, cafés, retailers), confirm whether "Retail Operations" and "Workshop Operations" still fit, or whether a more generic domain name (e.g., "Service Operations") is needed for non-repair service businesses.
-* Consider whether Business Knowledge should become a customer-facing feature (e.g., a searchable help/policy assistant) rather than a purely internal supporting layer, per the README's "Warranty & Policy Assistant" and "Business Knowledge Base (RAG)" future features.
+* Consider whether Business Knowledge should become a customer-facing feature (e.g., a searchable help/policy assistant) rather than a purely internal supporting layer, per the README's "Warranty & Policy Assistant" and "Business Knowledge Base (RAG)" future features. **Decided (PD-008):** yes, scoped to product/support help content surfaced through the conversational agent's support lane.
 
 ---
 
 # Questions Still Open
 
 * Should Returns & Warranty be its own top-level domain once pilot data is available?
-* Should Business Knowledge remain purely internal, or become a customer-visible module?
 * Does "Retail Operations" and "Workshop Operations" naming generalise cleanly to non-bike-shop templates?
+* What content populates the support-lane knowledge base at prototype stage, and who maintains it as the product changes?
 
 ---
 
@@ -255,3 +263,4 @@ Each analytical domain (Retail Operations, Workshop Operations, Financial Perfor
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; reconciled domain terminology between PD-002 and 10_Product_Requirements.md. |
+| 0.2 | 30/07/2026 | Added the customer-facing conversational agent design to AI Decision Support (PD-008, ADR-020): three intent-classified lanes (business-data Q&A, report explanation, product/support help), resolving the open question on whether Business Knowledge becomes customer-visible. |
