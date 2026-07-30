@@ -9,8 +9,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
     "alembic>=1.13",
-    "pydantic>=2.9",
+    "pydantic[email]>=2.9",
     "pydantic-settings>=2.5",
+    "stripe>=11.0",
 ]
 
 [project.optional-dependencies]
