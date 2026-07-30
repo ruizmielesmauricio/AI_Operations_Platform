@@ -87,7 +87,7 @@ Our mission is not to replace business owners with Artificial Intelligence.
 
 Our mission is to help them make better operational decisions by combining Business Intelligence, Forecasting, Machine Learning and Artificial Intelligence into one explainable decision-support platform.
 
-The first product built on this platform is **Bike Shop AI Copilot**, focused exclusively on helping independent bicycle retailers operate with the same level of intelligence typically available only to much larger organisations.
+The first market configuration built on this platform is **Bike Shop AI Copilot**, focused on helping independent bicycle retailers operate with the same level of intelligence typically available only to much larger organisations. It is the first validation vertical, not the boundary of the core product.
 
 ---
 
@@ -162,7 +162,7 @@ Typical characteristics include:
 * High-value stock
 * Small operational teams
 
-These characteristics allow us to validate our platform in a real business environment before expanding into additional retail sectors.
+These characteristics allow us to validate our platform in a real business environment before expanding into other product-, service-, or mixed-business sectors.
 
 Our long-term vision is broader than bike shops.
 
@@ -330,7 +330,7 @@ Artificial Intelligence will explain, summarise and communicate those recommenda
 
 # Commercial Perspective
 
-Our long-term opportunity is to build a reusable operational intelligence platform that can support multiple retail industries while maintaining industry-specific expertise through configurable business rules.
+Our long-term opportunity is to build a reusable operational intelligence platform that can support multiple industries while maintaining business-type-specific expertise through configurable terminology, modules, mappings, thresholds, and rules.
 
 This creates a scalable business model without requiring the core platform to be rebuilt for each new market.
 
@@ -339,7 +339,8 @@ This creates a scalable business model without requiring the core platform to be
 # Current Decisions
 
 * Independent bike shops are our first commercial vertical.
-* The company is building a reusable AI Operations Platform.
+* The company is building one reusable AI Operations Platform with a common core for all supported business types.
+* Bike-shop concepts are configuration and examples; they are not universal platform requirements.
 * AI will enhance decision-making rather than replace business logic.
 * The platform will follow an AI-agnostic architecture.
 * Every recommendation should make the customer's business better.
@@ -382,4 +383,5 @@ Our strategy is to reduce these risks through explainability, measurable ROI, cu
 | ------- | ---- | ----------------------------- |
 | 0.1     | TBD  | Initial project vision draft. |
 | 0.2     | 30/07/2026 | Replaced the unresolved pricing-strategy question with future packaging options around the accepted €80/month price. |
+| 0.3     | 30/07/2026 | Clarified that bike shops are the first validation vertical while the product core supports product, service, and mixed businesses. |
 
