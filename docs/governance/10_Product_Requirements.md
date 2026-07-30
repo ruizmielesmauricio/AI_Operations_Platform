@@ -75,9 +75,19 @@ The single most important requirement in this document is that **the customer mu
 |---|---|---|
 | PR-1.1 | User can create an account and a business | Account created, business record exists, user is owner |
 | PR-1.2 | User selects their business type | Business template activated; terminology adapts throughout the UI |
+| PR-1.3 | Activate only operational modules applicable to the selected business type | Inapplicable modules, metrics, recommendations, and report sections are not shown |
+| PR-1.4 | Reuse the common product and calculation core across business types | Selecting a template changes configuration, mappings, thresholds, extensions, and labels—not the application or canonical formulas |
 | PR-1.3 | Onboarding asks a small number of operational questions | No more than 6 questions before first upload |
 | PR-1.4 | User reaches first upload within 5 minutes of signup | Measured from account creation to upload screen |
 | PR-1.5 | User invites additional users with roles | Invitation email sent; role-based permissions enforced server-side |
+
+# Business-Type Configuration
+
+The bicycle-shop template is the first implementation and validation target. Terms such as workshop, repair, bicycle, part, and mechanic are template labels or examples, not universal product entities.
+
+Each validated template defines customer-facing terminology, enabled modules and report sections, canonical mappings, thresholds and rules, and governed extension attributes. Templates must not duplicate the application, create a separate database per industry, redefine a canonical metric inconsistently, or display an inapplicable module.
+
+---
 
 ## PR-2 — Data Ingestion (Critical Section)
 
@@ -245,6 +255,7 @@ Removing the template requirement removes the single largest onboarding drop-off
 # Current Decisions
 
 * No customer-facing import template; the platform performs schema detection and normalisation (**PD-006, Accepted** — supersedes `01_Product_Vision.md` onboarding guidance)
+* Business templates configure terminology and applicability on the shared core; they do not create separate products or databases (**PD-008 and ADR-020, Accepted**)
 * AI may suggest column mappings once, but never transforms, cleans, validates, or deduplicates data (**ED-009, Accepted**)
 * Uploaded files deleted after successful ingestion (ADR-008, Accepted)
 
@@ -340,3 +351,5 @@ These requirements implement PD-007 and ADR-019.
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 29/07/2026 | Initial draft. Records PD-006 (no import template) and ED-009 (AI ingestion boundary). |
+| 0.2 | 30/07/2026 | Added deterministic scheduled reporting requirements from Change 8. |
+| 0.3 | 30/07/2026 | Made business-template terminology and module applicability explicit while preserving one common product and calculation core. |
