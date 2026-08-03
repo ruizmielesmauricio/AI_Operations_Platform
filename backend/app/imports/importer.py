@@ -21,6 +21,7 @@ from app.imports.exceptions import (
     HeaderRowNotFound,
     ImportNotReversible,
     ImportRecordNotReady,
+    ImportSupersededByLaterInventoryImport,
     MappedColumnMissing,
 )
 from app.imports.file_parser import normalize_cell
@@ -63,17 +64,18 @@ class ParsedSaleRow:
 
 
 @dataclass
+class ParsedInventoryRow:
+    row_number: int  # spreadsheet-visible, 1-indexed
+    product_name: str | None
+    sku: str | None
+    quantity_on_hand: int
+
+
+@dataclass
 class RejectedRow:
     row_number: int
-    code: str  # "missing_date" | "missing_price" | "invalid_quantity"
+    code: str
     raw: dict[str, str]
-
-
-_REJECTION_MESSAGES = {
-    "missing_date": "no date found",
-    "missing_price": "no price found",
-    "invalid_quantity": "quantity couldn't be read",
-}
 
 
 def extract_mapped_values(row: Row, column_index_by_field: dict[str, int]) -> dict[str, object]:
@@ -137,6 +139,35 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         cost_price_at_sale=cost_price_at_sale,
         order_reference=order_reference,
         total_amount_mismatch=mismatch,
+    )
+
+
+def validate_and_parse_inventory_row(
+    row_number: int, mapped_values: dict[str, object]
+) -> ParsedInventoryRow | RejectedRow:
+    product_name = _blank_to_none(mapped_values.get("product_name"))
+    sku = _blank_to_none(mapped_values.get("sku"))
+    if not product_name and not sku:
+        # Unlike sales (product_id can be None — the sale itself is still a
+        # valid revenue fact without it), a row with no identifier here has
+        # no reconcilable content at all: it's not a degraded row, it's a
+        # non-row.
+        return RejectedRow(row_number, "missing_product_identifier", _display_raw(mapped_values))
+
+    quantity_on_hand = parse_int(mapped_values.get("quantity_on_hand"))
+    if quantity_on_hand is None:
+        # Never defaults, unlike sales' quantity-defaults-to-1 — there's no
+        # safe guess for "how much stock is there," and a wrong guess risks
+        # a false low-stock signal downstream.
+        return RejectedRow(row_number, "missing_quantity", _display_raw(mapped_values))
+    if quantity_on_hand < 0:
+        # Parses cleanly but is nonsensical for this field — a negative
+        # count isn't "garbled," it's a different failure that "blank vs.
+        # unparseable" alone wouldn't catch.
+        return RejectedRow(row_number, "negative_quantity", _display_raw(mapped_values))
+
+    return ParsedInventoryRow(
+        row_number=row_number, product_name=product_name, sku=sku, quantity_on_hand=quantity_on_hand
     )
 
 
@@ -254,16 +285,71 @@ class ProductMatcher:
         self._by_name[normalize_product_name(product.name)] = product
 
 
+# --- Inventory reconciliation (pure, no DB) ------------------------------
+#
+# An inventory upload is a snapshot, not a transaction — it never creates
+# Sale/SaleItem rows. Per product: delta = uploaded_qty - current_derived_
+# stock, written as one "adjustment" InventoryMovement if non-zero. This
+# keeps "stock is derived, never stored directly" intact by treating the
+# upload as a reconciliation event, not an overwrite.
+
+
+@dataclass
+class ResolvedInventoryRow:
+    row_number: int
+    product_id: uuid.UUID
+    quantity_on_hand: int
+    is_new_product: bool  # new product => starting stock is 0 by definition
+
+
+@dataclass
+class InventoryWriteResult:
+    row_number: int
+    product_id: uuid.UUID
+    delta: int  # 0 means no movement needed (already matches)
+
+
+def reconcile_inventory_rows(
+    resolved_rows: list[ResolvedInventoryRow], starting_stock: dict[uuid.UUID, int]
+) -> tuple[list[InventoryWriteResult], list[dict]]:
+    """Computes each row's adjustment delta in file order. `starting_stock`
+    is read, never mutated (a local running copy tracks each product's
+    stock as rows are processed) — necessary because the same product can
+    legitimately appear twice in one file: a read-only snapshot would have
+    both rows compute delta against the same stale total instead of
+    compounding, silently under- or over-adjusting. Returns write results
+    plus a list of {"row_number"} entries for any product seen more than
+    once in this file (surfaced as a warning, not hidden as "last wins").
+    """
+    running = dict(starting_stock)
+    results: list[InventoryWriteResult] = []
+    duplicate_rows: list[dict] = []
+    seen: set[uuid.UUID] = set()
+    for row in resolved_rows:
+        current = 0 if row.is_new_product else running.get(row.product_id, 0)
+        if row.product_id in seen:
+            duplicate_rows.append({"row_number": row.row_number})
+        seen.add(row.product_id)
+        delta = row.quantity_on_hand - current
+        results.append(InventoryWriteResult(row.row_number, row.product_id, delta))
+        running[row.product_id] = row.quantity_on_hand
+    return results, duplicate_rows
+
+
 # --- Rejection/warning summary (PR-2.8/2.9) ----------------------------
 
 _REJECTION_MESSAGE_TEMPLATES = {
     "missing_date": "no date found",
     "missing_price": "no price found",
     "invalid_quantity": "quantity couldn't be read",
+    "missing_product_identifier": "no product name or SKU found",
+    "missing_quantity": "no stock count found",
+    "negative_quantity": "stock count can't be negative",
 }
 _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
     "total_amount_mismatch": "had a total that didn't match price × quantity — used price × quantity",
+    "duplicate_product_in_file": "the same product appeared more than once — used the last value",
 }
 
 
@@ -311,51 +397,9 @@ class ImportResult:
     rejection_summary: dict | None = None
 
 
-def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
-    if upload.status != "mapped" or import_record.status != "mapped":
-        raise ImportRecordNotReady(import_record.status)
-
-    profile = ImportMappingProfileRepository(db).get_by_id(upload.business_id, import_record.mapping_profile_id)
-    field_mapping: dict[str, str | None] = profile.column_mapping["fields"]
-
-    file_bytes = download_checked(upload.storage_key)
-    grid = file_parser.read_rows(file_bytes, upload.original_filename, max_rows=_MAX_IMPORT_ROWS)
-    try:
-        header_row_index = detection.detect_header_row(grid, upload.entity_type)
-    except HeaderRowNotFound:
-        # Falls back to the index confirmed at mapping time, stored
-        # specifically for this case — a file whose header auto-detection
-        # never succeeds (that's why it needed a manual pick in the first
-        # place) would otherwise fail here identically, every time.
-        stored_index = profile.column_mapping.get("header_row_index")
-        if stored_index is None:
-            raise
-        header_row_index = stored_index
-    columns = [normalize_cell(c) for c in grid[header_row_index]]
-    data_rows = grid[header_row_index + 1 :]
-
-    column_index_by_field: dict[str, int] = {}
-    for field, source_column in field_mapping.items():
-        if source_column is None:
-            continue
-        try:
-            column_index_by_field[field] = columns.index(source_column)
-        except ValueError:
-            raise MappedColumnMissing(source_column)
-
-    parsed_rows: list[ParsedSaleRow] = []
-    rejections: list[RejectedRow] = []
-    for offset, row in enumerate(data_rows):
-        if not any(normalize_cell(c) != "" for c in row):
-            continue  # fully blank row — not data, not counted as a rejection either
-        row_number = header_row_index + 2 + offset  # 1-indexed, spreadsheet-visible
-        mapped_values = extract_mapped_values(row, column_index_by_field)
-        result = validate_and_parse_row(row_number, mapped_values)
-        if isinstance(result, RejectedRow):
-            rejections.append(result)
-        else:
-            parsed_rows.append(result)
-
+def _write_sales(
+    db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedSaleRow]
+) -> tuple[int, dict[str, list[dict]]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     for row in parsed_rows:
         if row.total_amount_mismatch:
@@ -414,6 +458,117 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
                     reference_id=item.id,
                 )
             rows_imported += 1
+    return rows_imported, warnings
+
+
+def _write_inventory(
+    db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedInventoryRow]
+) -> tuple[int, dict[str, list[dict]]]:
+    warnings: dict[str, list[dict]] = defaultdict(list)
+    product_repo = ProductRepository(db)
+    movement_repo = InventoryMovementRepository(db)
+    matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+
+    # Pass 1: resolve every row to a product, creating as needed — mirrors
+    # _write_sales' matching exactly (same matcher, same reused-as-is class).
+    resolved: list[ResolvedInventoryRow] = []
+    for row in parsed_rows:
+        match = matcher.resolve(sku=row.sku, product_name=row.product_name)
+        if match.action == "create":
+            product = product_repo.create(
+                business_id=upload.business_id,
+                sku=match.create_sku,
+                name=match.create_name,
+                cost_price=None,
+                sell_price=None,
+            )
+            matcher.register_created(product)
+            resolved.append(
+                ResolvedInventoryRow(row.row_number, product.id, row.quantity_on_hand, is_new_product=True)
+            )
+        else:
+            # Never "none" here — validate_and_parse_inventory_row already
+            # rejects rows with no sku and no product_name before this point.
+            if match.name_mismatch:
+                warnings["product_name_mismatch"].append(
+                    {"row_number": row.row_number, "product_name": row.product_name}
+                )
+            resolved.append(
+                ResolvedInventoryRow(row.row_number, match.product_id, row.quantity_on_hand, is_new_product=False)
+            )
+
+    existing_ids = [r.product_id for r in resolved if not r.is_new_product]
+    starting_stock = movement_repo.sum_by_product_ids(upload.business_id, existing_ids)
+
+    write_results, duplicate_rows = reconcile_inventory_rows(resolved, starting_stock)
+    if duplicate_rows:
+        warnings["duplicate_product_in_file"].extend(duplicate_rows)
+
+    rows_imported = 0
+    for result in write_results:
+        if result.delta != 0:
+            movement_repo.create(
+                business_id=upload.business_id,
+                product_id=result.product_id,
+                quantity_delta=result.delta,
+                reason="adjustment",
+                import_record_id=import_record.id,
+            )
+        rows_imported += 1
+    return rows_imported, warnings
+
+
+def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
+    if upload.status != "mapped" or import_record.status != "mapped":
+        raise ImportRecordNotReady(import_record.status)
+
+    profile = ImportMappingProfileRepository(db).get_by_id(upload.business_id, import_record.mapping_profile_id)
+    field_mapping: dict[str, str | None] = profile.column_mapping["fields"]
+
+    file_bytes = download_checked(upload.storage_key)
+    grid = file_parser.read_rows(file_bytes, upload.original_filename, max_rows=_MAX_IMPORT_ROWS)
+    try:
+        header_row_index = detection.detect_header_row(grid, upload.entity_type)
+    except HeaderRowNotFound:
+        # Falls back to the index confirmed at mapping time, stored
+        # specifically for this case — a file whose header auto-detection
+        # never succeeds (that's why it needed a manual pick in the first
+        # place) would otherwise fail here identically, every time.
+        stored_index = profile.column_mapping.get("header_row_index")
+        if stored_index is None:
+            raise
+        header_row_index = stored_index
+    columns = [normalize_cell(c) for c in grid[header_row_index]]
+    data_rows = grid[header_row_index + 1 :]
+
+    column_index_by_field: dict[str, int] = {}
+    for field, source_column in field_mapping.items():
+        if source_column is None:
+            continue
+        try:
+            column_index_by_field[field] = columns.index(source_column)
+        except ValueError:
+            raise MappedColumnMissing(source_column)
+
+    parse_row = validate_and_parse_row if upload.entity_type == "sales" else validate_and_parse_inventory_row
+
+    parsed_rows: list[ParsedSaleRow | ParsedInventoryRow] = []
+    rejections: list[RejectedRow] = []
+    for offset, row in enumerate(data_rows):
+        if not any(normalize_cell(c) != "" for c in row):
+            continue  # fully blank row — not data, not counted as a rejection either
+        row_number = header_row_index + 2 + offset  # 1-indexed, spreadsheet-visible
+        mapped_values = extract_mapped_values(row, column_index_by_field)
+        result = parse_row(row_number, mapped_values)
+        if isinstance(result, RejectedRow):
+            rejections.append(result)
+        else:
+            parsed_rows.append(result)
+
+    if upload.entity_type == "sales":
+        rows_imported, warnings = _write_sales(db, upload, import_record, parsed_rows)
+    else:
+        rows_imported, warnings = _write_inventory(db, upload, import_record, parsed_rows)
 
     rejection_summary = _build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)
@@ -457,6 +612,31 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
     if import_record.status != "completed" or import_record.reversed_at is not None:
         raise ImportNotReversible(import_record.status, import_record.reversed_at)
 
+    # A sales movement's magnitude (-quantity) is independent of everything
+    # else in the ledger, so undoing one has always been safe unconditionally.
+    # An adjustment movement's magnitude is NOT independent — it's
+    # uploaded_qty minus stock-at-the-moment-it-ran, which bakes in every
+    # movement before it. Undoing anything (sales or inventory) that ran
+    # before a later, still-in-effect inventory reconciliation would
+    # silently corrupt the stock that reconciliation established. Checked
+    # globally, before the entity-type branch below, because this can
+    # corrupt a *sales* undo too, not just an inventory one.
+    if ImportRecordRepository(db).has_later_completed_inventory_import(
+        import_record.business_id, after=import_record.updated_at
+    ):
+        raise ImportSupersededByLaterInventoryImport()
+
+    if import_record.entity_type == "sales":
+        _undo_sales_import(db, import_record)
+    else:
+        _undo_inventory_import(db, import_record)
+
+    ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
+    db.commit()
+    return import_record
+
+
+def _undo_sales_import(db: Session, import_record: ImportRecord) -> None:
     sale_repo = SaleRepository(db)
     sale_item_repo = SaleItemRepository(db)
     movement_repo = InventoryMovementRepository(db)
@@ -475,6 +655,10 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
     # place — proving "no other references anywhere" needs a cross-import
     # scan, and the user may have already edited that product since.
 
-    ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
-    db.commit()
-    return import_record
+
+def _undo_inventory_import(db: Session, import_record: ImportRecord) -> None:
+    # No Sale/SaleItem cascade — an inventory import only ever writes
+    # "adjustment" InventoryMovement rows, traced directly by
+    # import_record_id (reference_id is sales-only). Products left in
+    # place, same reasoning as the sales path.
+    InventoryMovementRepository(db).bulk_delete_by_import_record_id(import_record.business_id, import_record.id)

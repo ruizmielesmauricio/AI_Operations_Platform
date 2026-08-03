@@ -10,6 +10,7 @@ from app.imports.exceptions import (
     HeaderRowNotFound,
     ImportNotReversible,
     ImportRecordNotReady,
+    ImportSupersededByLaterInventoryImport,
     MappedColumnMissing,
 )
 from app.models.membership import Membership
@@ -74,6 +75,8 @@ def undo_import(
     try:
         record = importer.undo_import(db, import_record)
     except ImportNotReversible as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ImportSupersededByLaterInventoryImport as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     return ImportUndoResponse(

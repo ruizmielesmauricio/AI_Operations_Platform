@@ -43,8 +43,12 @@ class InvalidHeaderRowIndex(Exception):
 
 
 class InsufficientMapping(Exception):
-    """Raised when a confirmed mapping doesn't include the minimum fields
-    needed to calculate anything (sale_date, and unit_price or total_amount)."""
+    """Raised when a confirmed mapping doesn't satisfy the minimum-viability
+    rule for its entity_type (app/imports/aliases.py: MINIMUM_MAPPING_RULES)."""
+
+    def __init__(self, entity_type: str):
+        self.entity_type = entity_type
+        super().__init__(f"Mapping is not sufficient to import '{entity_type}' data")
 
 
 class InvalidFieldMapping(Exception):
@@ -89,3 +93,17 @@ class ImportNotReversible(Exception):
         self.status = status
         self.reversed_at = reversed_at
         super().__init__(f"Import cannot be reversed (status={status}, reversed_at={reversed_at})")
+
+
+class ImportSupersededByLaterInventoryImport(Exception):
+    """Raised when undo is attempted on an import that ran before a later,
+    still-in-effect inventory reconciliation. That reconciliation's movement
+    magnitude baked in this import's effect on stock — undoing it now would
+    silently corrupt the stock the reconciliation established (see
+    app/imports/importer.py's undo_import docstring for the exact scenario)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This import can't be undone — a newer stock count has been recorded since. "
+            "Upload a corrected stock count instead."
+        )

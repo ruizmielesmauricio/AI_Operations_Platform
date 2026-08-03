@@ -17,33 +17,43 @@ import type {
 // actual gate on which extensions are allowed (PR-2.1, app/imports/service.py).
 const ACCEPTED_EXTENSIONS = ".csv,.xls,.xlsx";
 
-// Only "sales" exists today, but this is a dropdown (not a hidden default)
-// so adding a second entity type later is a new option here, not new UI —
-// same pattern as onboarding's business-template dropdown.
-const ENTITY_TYPES = [{ value: "sales", label: "Sales transactions" }];
-
-// Order matters here: it's the order fields are asked about on the
-// confirmation screen (PR-2.4).
-const FIELD_ORDER = [
-  "sale_date",
-  "product_name",
-  "sku",
-  "quantity",
-  "unit_price",
-  "total_amount",
-  "cost_price_at_sale",
-  "order_reference",
+const ENTITY_TYPES = [
+  { value: "sales", label: "Sales transactions" },
+  { value: "inventory", label: "Inventory / stock count" },
 ];
 
-const FIELD_LABELS: Record<string, string> = {
-  sale_date: "Which column is the sale date?",
-  product_name: "Which column is the product name?",
-  sku: "Which column is the SKU or product code? (optional)",
-  quantity: "Which column is the quantity sold?",
-  unit_price: "Which column is the unit price?",
-  total_amount: "Which column is the total amount? (optional if unit price is set)",
-  cost_price_at_sale: "Which column is the cost price? (optional)",
-  order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
+// Keyed by entity_type — order matters within each: it's the order fields
+// are asked about on the confirmation screen (PR-2.4).
+const FIELD_ORDER: Record<string, string[]> = {
+  sales: [
+    "sale_date",
+    "product_name",
+    "sku",
+    "quantity",
+    "unit_price",
+    "total_amount",
+    "cost_price_at_sale",
+    "order_reference",
+  ],
+  inventory: ["product_name", "sku", "quantity_on_hand"],
+};
+
+const FIELD_LABELS: Record<string, Record<string, string>> = {
+  sales: {
+    sale_date: "Which column is the sale date?",
+    product_name: "Which column is the product name?",
+    sku: "Which column is the SKU or product code? (optional)",
+    quantity: "Which column is the quantity sold?",
+    unit_price: "Which column is the unit price?",
+    total_amount: "Which column is the total amount? (optional if unit price is set)",
+    cost_price_at_sale: "Which column is the cost price? (optional)",
+    order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
+  },
+  inventory: {
+    product_name: "Which column is the product name? (optional if SKU is set)",
+    sku: "Which column is the SKU or product code? (optional if product name is set)",
+    quantity_on_hand: "Which column is the current quantity in stock?",
+  },
 };
 
 const NOT_PRESENT = "";
@@ -62,6 +72,9 @@ export default function UploadsPage() {
 
   // The upload currently going through mapping confirmation, if any.
   const [mappingUploadId, setMappingUploadId] = useState<string | null>(null);
+  // Which field list/labels to render — the confirmation form never needed
+  // to know this before there was only one entity_type.
+  const [mappingEntityType, setMappingEntityType] = useState<string>(ENTITY_TYPES[0].value);
   const [detection, setDetection] = useState<DetectMappingResponse | null>(null);
   const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState(false);
@@ -122,8 +135,9 @@ export default function UploadsPage() {
     return match ? match.confidence : null;
   }
 
-  async function startMapping(uploadId: string, headerRowIndex?: number) {
+  async function startMapping(uploadId: string, uploadEntityType: string, headerRowIndex?: number) {
     setMappingError(null);
+    setMappingEntityType(uploadEntityType);
     try {
       const body = headerRowIndex === undefined ? {} : { header_row_index: headerRowIndex };
       const result = await apiPost<DetectMappingResponse>(
@@ -150,7 +164,7 @@ export default function UploadsPage() {
       setDetection(result);
       setFieldMapping(
         Object.fromEntries(
-          FIELD_ORDER.map((field) => [field, result.suggested_mapping[field] ?? NOT_PRESENT])
+          FIELD_ORDER[uploadEntityType].map((field) => [field, result.suggested_mapping[field] ?? NOT_PRESENT])
         )
       );
     } catch {
@@ -159,7 +173,7 @@ export default function UploadsPage() {
   }
 
   function handlePickHeaderRow(rowIndex: number) {
-    if (mappingUploadId) startMapping(mappingUploadId, rowIndex);
+    if (mappingUploadId) startMapping(mappingUploadId, mappingEntityType, rowIndex);
   }
 
   async function handleConfirmMapping(e: React.FormEvent) {
@@ -169,7 +183,7 @@ export default function UploadsPage() {
     setMappingError(null);
     try {
       const fieldValues = Object.fromEntries(
-        FIELD_ORDER.map((field) => [field, fieldMapping[field] || null])
+        FIELD_ORDER[mappingEntityType].map((field) => [field, fieldMapping[field] || null])
       );
       await apiPost<ConfirmMappingResponse>(
         `/businesses/${businessId}/uploads/${mappingUploadId}/confirm-mapping`,
@@ -182,9 +196,7 @@ export default function UploadsPage() {
       setChosenHeaderRowIndex(null);
       loadUploads(businessId);
     } catch {
-      setMappingError(
-        "Could not save this mapping — make sure a sale date and a price field are mapped."
-      );
+      setMappingError("Could not save this mapping — check that the required fields are mapped.");
     } finally {
       setConfirming(false);
     }
@@ -248,7 +260,7 @@ export default function UploadsPage() {
       setFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       loadUploads(businessId);
-      await startMapping(id);
+      await startMapping(id, entityType);
     } catch {
       setError("Upload failed. Make sure the file is a CSV, XLS, or XLSX export.");
     } finally {
@@ -364,14 +376,14 @@ export default function UploadsPage() {
         <form onSubmit={handleConfirmMapping}>
           <h2>Confirm what each column means</h2>
           <p>We matched most columns automatically — check them, and fix anything that's wrong.</p>
-          {FIELD_ORDER.map((field) => {
+          {FIELD_ORDER[mappingEntityType].map((field) => {
             const selected = fieldMapping[field] ?? "";
             const samples = sampleValuesFor(selected);
             const confidence = confidenceFor(field, selected);
             const needsDoubleCheck = confidence !== null && confidence < HIGH_CONFIDENCE;
             return (
               <div key={field}>
-                <label htmlFor={`field-${field}`}>{FIELD_LABELS[field]}</label>
+                <label htmlFor={`field-${field}`}>{FIELD_LABELS[mappingEntityType][field]}</label>
                 <br />
                 <select
                   id={`field-${field}`}
@@ -422,7 +434,7 @@ export default function UploadsPage() {
                 {u.status === "uploaded" && !mappingUploadId && (
                   <>
                     {" "}
-                    <button type="button" onClick={() => startMapping(u.id)}>
+                    <button type="button" onClick={() => startMapping(u.id, u.entity_type)}>
                       Map columns
                     </button>
                   </>

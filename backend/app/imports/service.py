@@ -10,7 +10,7 @@ from dataclasses import dataclass, field as dataclass_field
 from sqlalchemy.orm import Session
 
 from app.imports import detection, file_parser, r2_client
-from app.imports.aliases import CANONICAL_FIELDS, SUPPORTED_ENTITY_TYPES
+from app.imports.aliases import CANONICAL_FIELDS, MINIMUM_MAPPING_RULES, SUPPORTED_ENTITY_TYPES
 from app.imports.detection import FieldCandidate, Row
 from app.imports.exceptions import (
     FileTooLarge,
@@ -152,6 +152,7 @@ def detect_mapping_for_upload(
             business_id=upload.business_id,
             upload_id=upload.id,
             mapping_profile_id=existing.id,
+            entity_type=upload.entity_type,
             status="mapped",
         )
         UploadRepository(db).set_status(upload, status="mapped")
@@ -193,10 +194,8 @@ def confirm_mapping(
         if column is not None and column not in valid_columns:
             raise InvalidFieldMapping(f"'{column}' is not a column in this file")
 
-    if not field_mapping.get("sale_date") or not (
-        field_mapping.get("unit_price") or field_mapping.get("total_amount")
-    ):
-        raise InsufficientMapping()
+    if not MINIMUM_MAPPING_RULES[upload.entity_type](field_mapping):
+        raise InsufficientMapping(upload.entity_type)
 
     column_mapping = {
         "entity_type": upload.entity_type,
@@ -217,6 +216,7 @@ def confirm_mapping(
         business_id=upload.business_id,
         upload_id=upload.id,
         mapping_profile_id=profile.id,
+        entity_type=upload.entity_type,
         status="mapped",
     )
     UploadRepository(db).set_status(upload, status="mapped")

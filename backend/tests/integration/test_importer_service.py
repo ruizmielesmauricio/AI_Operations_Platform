@@ -63,7 +63,11 @@ def _make_mapped_upload(db_session, business_id, filename="sales.csv", field_map
         },
     )
     record = ImportRecordRepository(db_session).create(
-        business_id=business_id, upload_id=upload.id, mapping_profile_id=profile.id, status="mapped"
+        business_id=business_id,
+        upload_id=upload.id,
+        mapping_profile_id=profile.id,
+        entity_type="sales",
+        status="mapped",
     )
     upload = UploadRepository(db_session).set_status(upload, status="mapped")
     return upload, record

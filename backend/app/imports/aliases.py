@@ -11,8 +11,9 @@ CANONICAL_FIELDS/ALIASES, no changes to detection.py's algorithm.
 """
 
 import re
+from collections.abc import Callable
 
-SUPPORTED_ENTITY_TYPES = ("sales",)
+SUPPORTED_ENTITY_TYPES = ("sales", "inventory")
 
 # Field order matters: it's the priority order alias matching resolves
 # ties in (see match_alias) and the order fields are presented for
@@ -27,7 +28,24 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "total_amount",
         "cost_price_at_sale",
         "order_reference",
-    ]
+    ],
+    # A stock-count snapshot, not a transaction: one row per product's
+    # current on-hand quantity. No date/grouping field — see
+    # app/imports/importer.py's reconciliation logic for why (it always
+    # compares against *current* derived stock, not a claimed "as of" date).
+    "inventory": [
+        "product_name",
+        "sku",
+        "quantity_on_hand",
+    ],
+}
+
+# Declarative per-entity-type "is this mapping usable at all" check —
+# app/imports/service.py's confirm_mapping() uses this instead of an
+# if/elif chain, keeping this file's "extend the dicts" promise intact.
+MINIMUM_MAPPING_RULES: dict[str, Callable[[dict[str, str | None]], bool]] = {
+    "sales": lambda m: bool(m.get("sale_date")) and bool(m.get("unit_price") or m.get("total_amount")),
+    "inventory": lambda m: bool(m.get("product_name") or m.get("sku")) and bool(m.get("quantity_on_hand")),
 }
 
 # Every field's canonical name is itself a valid alias (normalized), so
@@ -75,7 +93,22 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "transaction number", "txn id", "txn number", "invoice number",
             "invoice no", "reference number", "reference",
         ],
-    }
+    },
+    "inventory": {
+        "product_name": [
+            "item", "product", "description", "product name", "item description",
+            "item name", "sku description", "product description", "name", "title",
+        ],
+        "sku": [
+            "sku", "product code", "item code", "barcode", "product sku", "item sku",
+            "code", "upc", "item#", "item number",
+        ],
+        "quantity_on_hand": [
+            "qty on hand", "quantity on hand", "stock", "stock level", "stock count",
+            "on hand", "current stock", "inventory count", "quantity in stock",
+            "units in stock", "available stock", "stock qty",
+        ],
+    },
 }
 
 _PUNCTUATION_RE = re.compile(r"[_\-.:]+")

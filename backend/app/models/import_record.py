@@ -33,6 +33,10 @@ class ImportRecord(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     __tablename__ = "import_records"
 
     upload_id: Mapped[object] = mapped_column(Uuid(as_uuid=True), ForeignKey("uploads.id"), nullable=False)
+    # Denormalized from Upload.entity_type (write-once, never mutated after
+    # create_upload) so undo_import() can branch and query without an extra
+    # join through Upload on every call — app/imports/importer.py.
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     mapping_profile_id: Mapped[object | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("import_mapping_profiles.id"), nullable=True
     )

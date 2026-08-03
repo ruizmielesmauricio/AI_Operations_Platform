@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.models.import_record import ImportRecord
@@ -37,6 +37,7 @@ class ImportRecordRepository:
         business_id: uuid.UUID,
         upload_id: uuid.UUID,
         mapping_profile_id: uuid.UUID,
+        entity_type: str,
         status: str = "mapped",
     ) -> ImportRecord:
         # Each confirm-mapping call is "one attempt" (the model's own
@@ -46,6 +47,7 @@ class ImportRecordRepository:
             business_id=business_id,
             upload_id=upload_id,
             mapping_profile_id=mapping_profile_id,
+            entity_type=entity_type,
             status=status,
         )
         self.session.add(record)
@@ -80,3 +82,24 @@ class ImportRecordRepository:
         record.reversed_at = reversed_at
         self.session.flush()
         return record
+
+    def has_later_completed_inventory_import(self, business_id: uuid.UUID, after: datetime) -> bool:
+        """The undo-ordering guard (app/imports/importer.py): an inventory
+        reconciliation's movement magnitude bakes in every movement that
+        preceded it (unlike a sales movement, which is independent) — so
+        undoing anything that ran before a later completed reconciliation
+        would silently corrupt the stock that reconciliation established.
+        Business-wide, not per-product: cheap and guaranteed-safe beats a
+        product-set-intersection query for marginal extra permissiveness.
+        """
+        return self.session.scalar(
+            select(
+                exists().where(
+                    ImportRecord.business_id == business_id,
+                    ImportRecord.entity_type == "inventory",
+                    ImportRecord.status == "completed",
+                    ImportRecord.reversed_at.is_(None),
+                    ImportRecord.updated_at > after,
+                )
+            )
+        )

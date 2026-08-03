@@ -34,6 +34,11 @@ from app.security.tenant import get_current_membership
 # get_current_membership (PR-6.1/6.2), never trusted from a request body.
 router = APIRouter(prefix="/businesses/{business_id}/uploads", tags=["uploads"])
 
+_INSUFFICIENT_MAPPING_MESSAGES = {
+    "sales": "Not enough information to calculate sales — map a sale date and a price field",
+    "inventory": "Not enough information to record stock — map a product name or SKU, and a quantity",
+}
+
 
 def _get_upload_or_404(db: Session, upload_id: uuid.UUID, business_id: uuid.UUID):
     upload = UploadRepository(db).get_for_business(upload_id, business_id)
@@ -156,7 +161,7 @@ def confirm_mapping(
     except InsufficientMapping as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Not enough information to calculate sales — map a sale date and a price field",
+            detail=_INSUFFICIENT_MAPPING_MESSAGES.get(exc.entity_type, str(exc)),
         ) from exc
     return ConfirmMappingResponse(
         import_record_id=record.id, mapping_profile_id=mapping_profile_id, status=record.status

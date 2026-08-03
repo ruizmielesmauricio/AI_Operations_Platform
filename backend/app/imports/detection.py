@@ -45,6 +45,11 @@ _SKU_TOKENS = {"sku", "code", "barcode", "upc"}
 # ambiguous to claim on its own (confirmed by testing: it was winning the
 # column away from "sku" for exactly this reason).
 _ORDER_REFERENCE_TOKENS = {"order", "receipt", "transaction", "txn", "invoice", "reference"}
+# An inventory file commonly has other integer-shaped columns competing
+# for this (reorder point, bin/aisle number, row id) — unlike sales'
+# quantity field, which rarely shares a file with another small-integer
+# column, so a bare parse-rate score is not enough signal on its own here.
+_QUANTITY_ON_HAND_TOKENS = {"stock", "inventory", "onhand", "hand", "qty", "count"}
 # Requires at least one digit (lookahead) rather than stripping spaces and
 # checking alnum shape alone — a plain product-name word ("Blue Widget")
 # is otherwise indistinguishable from a real code once spaces are removed.
@@ -302,6 +307,22 @@ def _score_field(field: str, samples: list[object], header_norm: str) -> float:
         rate = len(valid) / len(samples)
         magnitude_penalty = 0.5 if statistics.median(valid) > 1000 else 1.0
         return rate * magnitude_penalty
+    if field == "quantity_on_hand":
+        # Unlike "quantity" (a sales line-item count, rarely competing with
+        # another small integer column), an inventory file commonly has
+        # reorder points, bin numbers, or row ids also parsing as clean
+        # integers — so this needs the money-fields' name-signal treatment,
+        # not a bare parse rate. No magnitude penalty: a warehouse stock
+        # count can legitimately be in the thousands.
+        parsed = [parse_int(v) for v in samples]
+        valid = [p for p in parsed if p is not None]
+        if not valid:
+            return 0.0
+        rate = len(valid) / len(samples)
+        token_bonus = _token_overlap(header_norm, _QUANTITY_ON_HAND_TOKENS)
+        if token_bonus == 0.0:
+            return 0.6 * rate
+        return 0.7 * rate + 0.3 * token_bonus
     if field in _MONEY_FIELDS:
         if _looks_like_identifier_header(header_norm):
             return 0.0
