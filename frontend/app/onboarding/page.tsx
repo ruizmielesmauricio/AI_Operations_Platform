@@ -117,26 +117,33 @@ export default function OnboardingPage() {
       ) : (
         <ul>
           {businesses.map((b) => {
-            const isActive = subscriptions[b.id]?.status === "active";
+            const status = subscriptions[b.id]?.status ?? null;
+            // A recoverable subscription (past_due, incomplete…) sends the
+            // owner to the Customer Portal to fix it — new payment method,
+            // retry, etc. A canceled subscription is a dead end there (no
+            // "resubscribe" option in the Portal once a subscription has
+            // actually ended), so it's treated the same as no subscription:
+            // a fresh Checkout. Starting a new Checkout on top of a
+            // recoverable one would just create a second, unrelated
+            // subscription, which is why only "canceled"/null fall through.
+            const isRecoverableInPortal = status !== null && status !== "canceled";
             const busy = billingBusyId === b.id;
             return (
               <li key={b.id}>
                 {b.name} — {b.template} ({b.role})
                 {" — "}
-                {isActive ? (
+                {isRecoverableInPortal ? (
                   <>
-                    <span className="status-ok">subscribed</span>{" "}
+                    <span className={status === "active" ? "status-ok" : "status-error"}>
+                      {status === "active" ? "subscribed" : `subscription ${status}`}
+                    </span>{" "}
                     <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
                       {busy ? "Opening…" : "Manage billing"}
                     </button>
                   </>
                 ) : (
                   <>
-                    <span>
-                      {subscriptions[b.id]?.status
-                        ? `subscription ${subscriptions[b.id]?.status}`
-                        : "not subscribed"}
-                    </span>{" "}
+                    <span>{status === "canceled" ? "subscription canceled" : "not subscribed"}</span>{" "}
                     <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
                       {busy ? "Starting…" : "Subscribe"}
                     </button>
