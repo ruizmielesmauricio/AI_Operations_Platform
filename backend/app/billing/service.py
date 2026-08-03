@@ -60,7 +60,14 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         return
 
     if event_type in SUBSCRIPTION_LIFECYCLE_EVENTS:
+        # Stripe does not guarantee delivery order, so this can arrive before
+        # checkout.session.completed. subscription_data.metadata (set at
+        # Checkout creation, see client.create_checkout_session) carries the
+        # same business_id, so a row can still be created from this event.
         status = derive_subscription_status(event_type, obj.get("status"))
+        if subscriptions.get_by_stripe_customer_id(obj["customer"]) is None:
+            business_id = uuid.UUID(obj["metadata"]["business_id"])
+            subscriptions.create(business_id=business_id, stripe_customer_id=obj["customer"])
         subscriptions.upsert_from_stripe(
             stripe_customer_id=obj["customer"],
             stripe_subscription_id=obj["id"],
@@ -69,11 +76,19 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         )
         return
 
-    # invoice.paid / invoice.payment_failed
+    # invoice.paid / invoice.payment_failed. Newer Stripe API versions moved
+    # the subscription reference off the invoice's top level into
+    # parent.subscription_details — see 04_Technology_Stack.md for the
+    # pinned API version. subscription_details.metadata mirrors
+    # subscription_data.metadata for the same delivery-order reason as above.
+    subscription_details = obj["parent"]["subscription_details"]
     status = derive_subscription_status(event_type, None)
+    if subscriptions.get_by_stripe_customer_id(obj["customer"]) is None:
+        business_id = uuid.UUID(subscription_details["metadata"]["business_id"])
+        subscriptions.create(business_id=business_id, stripe_customer_id=obj["customer"])
     subscriptions.upsert_from_stripe(
         stripe_customer_id=obj["customer"],
-        stripe_subscription_id=obj["subscription"],
+        stripe_subscription_id=subscription_details["subscription"],
         status=status,
         current_period_end=_invoice_period_end(obj),
     )

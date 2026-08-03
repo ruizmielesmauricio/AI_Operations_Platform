@@ -44,11 +44,12 @@ def create_billing_portal_session(
     )
 
 
-def construct_webhook_event(payload: bytes, signature_header: str) -> stripe.Event:
+def construct_webhook_event(payload: bytes, signature_header: str) -> dict:
     settings = get_settings()
     try:
-        return stripe.Webhook.construct_event(
+        event = stripe.Webhook.construct_event(
             payload, signature_header, settings.stripe_webhook_secret
         )
     except stripe.SignatureVerificationError as exc:
         raise InvalidWebhookSignature(str(exc)) from exc
+    return event.to_dict()

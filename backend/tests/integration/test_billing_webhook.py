@@ -52,6 +52,34 @@ def test_subscription_updated_syncs_status_and_period_end(db_session, business_i
     assert subscription.current_period_end == period_end
 
 
+def test_subscription_created_before_checkout_completed_creates_subscription(
+    db_session, business_id, monkeypatch
+):
+    # Stripe does not guarantee webhook delivery order; this event has been
+    # observed arriving before checkout.session.completed for the same
+    # purchase.
+    event = _fake_event(
+        "evt_sub_created_1",
+        "customer.subscription.created",
+        {
+            "id": "sub_early",
+            "customer": "cus_early",
+            "status": "active",
+            "items": {"data": []},
+            "metadata": {"business_id": str(business_id)},
+        },
+    )
+    monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
+
+    service.handle_webhook_event(db_session, b"{}", "sig")
+
+    subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_early")
+    assert subscription is not None
+    assert subscription.business_id == business_id
+    assert subscription.status == "active"
+    assert subscription.stripe_subscription_id == "sub_early"
+
+
 def test_payment_failure_marks_past_due(db_session, business_id, monkeypatch):
     SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_789")
     db_session.commit()
@@ -59,7 +87,16 @@ def test_payment_failure_marks_past_due(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_invoice_failed_1",
         "invoice.payment_failed",
-        {"customer": "cus_789", "subscription": "sub_789", "lines": {"data": []}},
+        {
+            "customer": "cus_789",
+            "lines": {"data": []},
+            "parent": {
+                "subscription_details": {
+                    "subscription": "sub_789",
+                    "metadata": {"business_id": str(business_id)},
+                }
+            },
+        },
     )
     monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
 
