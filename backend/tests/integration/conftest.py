@@ -1,6 +1,6 @@
 import pytest
 
-from app.models import Base, ProcessedStripeEvent, Subscription
+from app.models import Base, Business, ProcessedStripeEvent, Subscription
 from app.models.base import SessionLocal, engine
 
 
@@ -20,5 +20,14 @@ def db_session():
     session.rollback()
     session.query(Subscription).delete()
     session.query(ProcessedStripeEvent).delete()
+    session.query(Business).delete()
     session.commit()
     session.close()
+
+
+@pytest.fixture
+def business_id(db_session):
+    business = Business(name="Test Business")
+    db_session.add(business)
+    db_session.commit()
+    return business.id

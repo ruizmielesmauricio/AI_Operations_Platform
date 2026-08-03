@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -12,8 +11,7 @@ def _fake_event(event_id: str, event_type: str, obj: dict) -> dict:
     return {"id": event_id, "type": event_type, "data": {"object": obj}}
 
 
-def test_checkout_session_completed_creates_subscription(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_checkout_session_completed_creates_subscription(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_checkout_1",
         "checkout.session.completed",
@@ -29,8 +27,7 @@ def test_checkout_session_completed_creates_subscription(db_session, monkeypatch
     assert subscription.status == "incomplete"
 
 
-def test_subscription_updated_syncs_status_and_period_end(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_subscription_updated_syncs_status_and_period_end(db_session, business_id, monkeypatch):
     SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_456")
     db_session.commit()
 
@@ -55,8 +52,7 @@ def test_subscription_updated_syncs_status_and_period_end(db_session, monkeypatc
     assert subscription.current_period_end == period_end
 
 
-def test_payment_failure_marks_past_due(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_payment_failure_marks_past_due(db_session, business_id, monkeypatch):
     SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_789")
     db_session.commit()
 
@@ -73,8 +69,7 @@ def test_payment_failure_marks_past_due(db_session, monkeypatch):
     assert subscription.status == "past_due"
 
 
-def test_duplicate_event_id_is_not_reapplied(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_duplicate_event_id_is_not_reapplied(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_dup_1",
         "checkout.session.completed",
