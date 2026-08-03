@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+from functools import lru_cache
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClientError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -22,23 +24,30 @@ class AuthenticatedUser:
     email: str
 
 
-def decode_supabase_jwt(token: str) -> dict:
-    """Verifies a Supabase Auth access token.
+@lru_cache
+def _jwks_client() -> jwt.PyJWKClient:
+    # Supabase signs Auth tokens with the project's asymmetric key (ES256),
+    # not a shared HMAC secret — verifying them needs the project's public
+    # key, published at this well-known JWKS URL. PyJWKClient fetches and
+    # caches it (cache_keys=True) so this is a one-off cost per process, not
+    # a network call on every request. Overridden in tests (see
+    # tests/auth_helpers.py) to avoid a real network dependency there.
+    return jwt.PyJWKClient(f"{settings.supabase_url}/auth/v1/.well-known/jwks.json", cache_keys=True)
 
-    Supabase issues standard JWTs signed with the project's JWT secret
-    (HS256). Verifying them is plain JWT decoding — no Supabase SDK or
-    network call involved — which is what keeps auth decoupled from the
-    database provider (ADR-013): this function only needs the shared
-    secret, never a live connection to Supabase itself.
+
+def decode_supabase_jwt(token: str) -> dict:
+    """Verifies a Supabase Auth access token against the project's published
+    JWKS (ES256) — see _jwks_client above for why this isn't a shared secret.
     """
     try:
+        signing_key = _jwks_client().get_signing_key_from_jwt(token)
         return jwt.decode(
             token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["ES256"],
             audience="authenticated",
         )
-    except jwt.InvalidTokenError as exc:
+    except (jwt.InvalidTokenError, PyJWKClientError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session"
         ) from exc

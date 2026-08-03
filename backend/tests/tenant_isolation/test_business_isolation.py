@@ -1,4 +1,3 @@
-import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -7,17 +6,16 @@ from sqlalchemy.orm import sessionmaker
 from app.api.deps import get_db
 from app.main import app
 from app.models import Base
-from app.settings.config import get_settings
-
-settings = get_settings()
+from tests.auth_helpers import bearer_header, patch_jwks
 
 
 @pytest.fixture()
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
     """A fresh, isolated database per test, wired into the FastAPI app via
     dependency override — proves the real route/dependency wiring, not a
     reimplementation of it.
     """
+    patch_jwks(monkeypatch)
     db_path = tmp_path / "tenant_isolation_test.db"
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
@@ -33,15 +31,6 @@ def client(tmp_path):
     app.dependency_overrides[get_db] = override_get_db
     yield TestClient(app)
     app.dependency_overrides.clear()
-
-
-def bearer_header(user_id: str, email: str) -> dict:
-    token = jwt.encode(
-        {"sub": user_id, "email": email, "aud": "authenticated"},
-        settings.supabase_jwt_secret,
-        algorithm="HS256",
-    )
-    return {"Authorization": f"Bearer {token}"}
 
 
 def test_missing_token_is_rejected(client):

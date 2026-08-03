@@ -24,8 +24,9 @@ business:
 1. Create a free project at [supabase.com](https://supabase.com) (a couple of minutes, no card required).
 2. Copy its Project URL and `anon` public key into `frontend/.env.local` (`NEXT_PUBLIC_SUPABASE_URL`,
    `NEXT_PUBLIC_SUPABASE_ANON_KEY` — see `.env.example`).
-3. Copy the project's JWT secret into `backend/.env` as `SUPABASE_JWT_SECRET` — this is what the
-   API uses to verify the session token the frontend sends it (see `app/security/auth.py`).
+3. Copy the same Project URL into `backend/.env` as `SUPABASE_URL` — the API verifies the session
+   token the frontend sends it against that project's published JWKS, no shared secret needed
+   (see `app/security/auth.py`).
 
 ## Folders
 
