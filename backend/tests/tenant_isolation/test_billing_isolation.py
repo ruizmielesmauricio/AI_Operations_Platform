@@ -75,7 +75,9 @@ def test_checkout_session_uses_verified_email_not_client_input(client_and_sessio
 
     captured = {}
 
-    def fake_create_checkout_session(*, business_id, business_email, success_url, cancel_url):
+    def fake_create_checkout_session(
+        *, business_id, business_email, success_url, cancel_url, existing_stripe_customer_id=None
+    ):
         captured["business_email"] = business_email
         return SimpleNamespace(url="https://checkout.stripe.com/fake")
 
@@ -86,6 +88,35 @@ def test_checkout_session_uses_verified_email_not_client_input(client_and_sessio
     assert response.json()["checkout_url"] == "https://checkout.stripe.com/fake"
     # The email comes from the verified JWT, never anything the client could pass in the body.
     assert captured["business_email"] == "a@example.com"
+
+
+def test_checkout_session_reuses_existing_stripe_customer_on_resubscribe(client_and_session, monkeypatch):
+    # Regression test: resubscribing (e.g. after a cancellation) used to
+    # mint a brand new Stripe Customer every time, which produced a second
+    # subscriptions row for the same business — violating the one-row-per-
+    # business invariant and leaving orphaned duplicate Customers in Stripe.
+    test_client, TestSessionLocal = client_and_session
+    headers = bearer_header("user-a", "a@example.com")
+    business_id = test_client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()["id"]
+
+    db = TestSessionLocal()
+    SubscriptionRepository(db).create(business_id=uuid.UUID(business_id), stripe_customer_id="cus_existing")
+    db.commit()
+    db.close()
+
+    captured = {}
+
+    def fake_create_checkout_session(
+        *, business_id, business_email, success_url, cancel_url, existing_stripe_customer_id=None
+    ):
+        captured["existing_stripe_customer_id"] = existing_stripe_customer_id
+        return SimpleNamespace(url="https://checkout.stripe.com/fake")
+
+    monkeypatch.setattr(client, "create_checkout_session", fake_create_checkout_session)
+    response = test_client.post(f"/businesses/{business_id}/billing/checkout-session", headers=headers)
+
+    assert response.status_code == 200
+    assert captured["existing_stripe_customer_id"] == "cus_existing"
 
 
 def test_portal_session_404s_without_a_subscription(client_and_session):

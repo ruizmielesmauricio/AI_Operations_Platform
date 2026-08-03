@@ -28,9 +28,10 @@ webhook_router = APIRouter(prefix="/billing", tags=["billing"])
 def create_checkout_session(
     membership: Membership = Depends(get_current_membership),
     current_user: AuthenticatedUser = Depends(get_current_user_synced),
+    db: Session = Depends(get_db),
 ) -> CheckoutSessionResponse:
     checkout_url = service.start_checkout(
-        business_id=membership.business_id, business_email=current_user.email
+        db=db, business_id=membership.business_id, business_email=current_user.email
     )
     return CheckoutSessionResponse(checkout_url=checkout_url)
 
