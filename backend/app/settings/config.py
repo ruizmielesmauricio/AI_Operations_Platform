@@ -35,8 +35,11 @@ class Settings(BaseSettings):
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    stripe_price_id: str = ""
 
     resend_api_key: str = ""
+
+    app_base_url: str = "http://localhost:3000"
 
     @property
     def allowed_origins_list(self) -> list[str]:

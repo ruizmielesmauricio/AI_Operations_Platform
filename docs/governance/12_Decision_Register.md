@@ -1,6 +1,6 @@
 # 12_Decision_Register.md
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -121,7 +121,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-008 | Use temporary object storage for uploads and delete files after ingestion by default | Accepted | tech ADR-008 |
 | ADR-009 | Avoid AWS-specific services in the initial low-cost architecture | Accepted | tech ADR-009 |
 | ADR-010 | Render normal dashboard charts in the browser from structured API data | Accepted | tech ADR-010 |
-| ADR-011 | Use Stripe for subscription billing, supporting cards and SEPA Direct Debit | Accepted | tech ADR-011 + gov ADR-004(b) |
+| ADR-011 | Use Stripe for subscription billing, supporting cards and SEPA Direct Debit, with Stripe Tax enabled on Checkout for automatic EU VAT calculation | Accepted | tech ADR-011 + gov ADR-004(b) |
 | ADR-012 | Use a shared database with tenant-scoped rows initially | Accepted | tech ADR-012 |
 | ADR-013 | Use Neon for managed PostgreSQL and Supabase Auth for identity only (auth-only, not database or storage) | Accepted | gov ADR-004(a) |
 | ADR-014 | Separate the platform into specialised engines: Database, Calculation, Machine Learning, AI | Accepted | gov ADR-003 |
@@ -131,6 +131,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 | ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications (no email), and seven-day customer-facing retention | Accepted | new |
 | ADR-020 | Route every conversational-agent question through an intent classifier that selects one of a fixed, approved set of deterministic query functions or an approved help-content knowledge base before any AI generation occurs — no free-form calculation, retrieval, or invention outside these approved sources | Accepted | new |
+| ADR-021 | Do not use Stripe Connect — the platform only charges its own tenants a subscription fee; it does not route payouts to them or facilitate payments between tenants and their customers. Revisit only if a marketplace/payout feature is explicitly planned | Rejected | new |
 
 ---
 
@@ -204,3 +205,4 @@ What evidence would cause this decision to be revisited?
 | 1.4 | 30/07/2026 | Redefined PD-007 and added ADR-019: scheduled reporting is delivered in-app only (not by email), with seven-day availability, on-demand PDF/Word export, idempotent generation, and recovery controls. |
 | 1.5 | 30/07/2026 | Normalized the Prior ID column for PD-007/ADR-019 to match this register's citation convention (`new`, not a work-item name). Corrected `03_System_Architecture.md`, `07_Deployment_Guide.md`, `08_Cost_Analysis.md`, `10_Product_Requirements.md`, and `11_Development_Roadmap.md`, which still described PD-007 as email-delivered after the 1.4 redefinition — all now consistently state in-app-only delivery. Resolved a duplicate "PR-4" section ID in `10_Product_Requirements.md` created when the 1.4 reporting spec was added alongside the existing PR-8. Fixed this table's own out-of-order/duplicate version numbering (the prior 1.3 row appeared twice, once out of chronological order). |
 | 1.6 | 30/07/2026 | Added PD-008 (three-lane conversational agent: business Q&A, report explanation, product/support help), PD-009 (standalone low-stock alerting), and ADR-020 (intent-classifier routing to approved deterministic queries or an approved help-content knowledge base — no free-form AI calculation or invention). Recorded during Phase 2 prototype service scoping. |
+| 1.7 | 30/07/2026 | Clarified ADR-011 to explicitly cover Stripe Tax (automatic EU VAT on Checkout), recorded during initial `backend/app/billing/` implementation. Added ADR-021 (Rejected): Stripe Connect is not in scope — this platform charges tenants a subscription fee, it does not pay out to them. |

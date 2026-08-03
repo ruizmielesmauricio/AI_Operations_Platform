@@ -96,7 +96,7 @@ Chosen for temporary uploaded files and other file objects, not structured appli
 
 ## Billing — Stripe
 
-Chosen for its maturity and support for both card and SEPA Direct Debit, giving EU customers payment method choice at checkout (ADR-011).
+Chosen for its maturity and support for both card and SEPA Direct Debit, giving EU customers payment method choice at checkout, plus Stripe Tax for automatic EU VAT calculation on subscription invoices (ADR-011). Stripe Connect is explicitly out of scope (ADR-021) — the platform charges tenants a subscription fee, it does not route payouts to them.
 
 ## AI — Internal Gateway, Routed via OpenRouter
 
