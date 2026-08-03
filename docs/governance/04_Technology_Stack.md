@@ -173,6 +173,7 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 
 * Which background job library (Celery, Dramatiq, RQ, or database-backed) will be formally selected, and when?
 * Which monitoring stack will be adopted once the pilot phase begins?
+* When should Stripe Tax registration (Ireland domestic, or OSS) be added, given the LTD company isn't yet incorporated? Blocked on incorporation and accountant advice, not an engineering decision — related to Q-028 (`08_Cost_Analysis.md`).
 
 ---
 
@@ -183,3 +184,4 @@ A low fixed-cost, vendor-flexible stack directly supports the unit economics goa
 | 0.1 | TBD | Initial governance-level technology-stack draft. |
 | 0.2 | 30/07/2026 | Clarified Neon as the sole PostgreSQL host, Supabase as authentication only, and Cloudflare R2 as object/file storage rather than a database. |
 | 0.3 | 30/07/2026 | Removed a duplicate self-citation in Out of Scope and the self-referential "(detailed set)" Related Document. |
+| 0.4 | 30/07/2026 | Added open question on when to add Stripe Tax registration, raised during initial Stripe account setup — blocked on LTD incorporation and accountant advice. |
