@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/client";
+import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { Business } from "@/types";
 
 // Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
@@ -13,7 +14,7 @@ const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const [checkingSession, setCheckingSession] = useState(true);
+  const { session, checkingSession } = useRequireSession();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [name, setName] = useState("");
   const [template, setTemplate] = useState(TEMPLATES[0].value);
@@ -22,20 +23,15 @@ export default function OnboardingPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!supabase) {
-      setError("Supabase is not configured yet — set NEXT_PUBLIC_SUPABASE_URL/ANON_KEY in frontend/.env.local.");
-      setCheckingSession(false);
-      return;
-    }
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        router.push("/login");
-        return;
-      }
-      setCheckingSession(false);
+    if (session) {
       apiGet<Business[]>("/businesses").then(setBusinesses).catch(() => undefined);
-    });
-  }, [router]);
+    }
+  }, [session]);
+
+  async function handleLogout() {
+    await supabase?.auth.signOut();
+    router.push("/login");
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,8 +56,19 @@ export default function OnboardingPage() {
     );
   }
 
+  if (!session) {
+    return (
+      <main>
+        <p>Supabase is not configured yet — set NEXT_PUBLIC_SUPABASE_URL/ANON_KEY in frontend/.env.local.</p>
+      </main>
+    );
+  }
+
   return (
     <main>
+      <button type="button" onClick={handleLogout}>
+        Log out
+      </button>
       <h1>Your businesses</h1>
       {businesses.length === 0 ? (
         <p>No business yet — create your first one below.</p>
