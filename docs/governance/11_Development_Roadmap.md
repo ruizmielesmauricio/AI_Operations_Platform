@@ -1,10 +1,10 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.8 (Draft)
+**Version:** 1.1 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 03/08/2026
 
 ---
 
@@ -188,9 +188,9 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 - [x] A5. Tenant isolation enforcement + automated tests (PR-6.1/6.2, ED-008) — built now, not retrofitted
 
 **Stage B — Getting real data in**
-- [ ] B6. Upload data interface (signed URL to R2)
-- [ ] B7. Schema/column detection engine — alias dictionary + structural heuristics, tolerant of any POS export format (PR-2, the "critical section")
-- [ ] B8. Clean data — deterministic normalisation, validation, plain-language rejected-row reporting, transactional import, undo (PR-2.6-2.11)
+- [x] B6. Upload data interface (signed URL to R2)
+- [x] B7. Schema/column detection engine — alias dictionary + structural heuristics, tolerant of any POS export format (PR-2, the "critical section") — v1 scoped to sales transactions only; entity type chosen explicitly at upload time, not auto-detected
+- [x] B8. Clean data — deterministic normalisation, validation, plain-language rejected-row reporting, transactional import, undo (PR-2.6-2.11) — includes SKU/name product matching (auto-create on first sight) and inventory_movements recording per sale, needed for stock-level/popularity tracking; no frontend trigger UI yet, API-verified only
 
 **Stage C — The actual product value**
 - [ ] C9. Core calculations — Retail / Workshop / Financial Performance, unit-tested per formula (PR-3, ED-007)
@@ -218,7 +218,7 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 - [ ] E27. Conversational agent — support lane, with human handoff when unresolved (PR-5.7)
 
 **Stage F — Payments and wrap-up**
-- [ ] F28. Simulate Stripe payments (test mode — PR-7)
+- [x] F28. Simulate Stripe payments (test mode — PR-7)
 - [ ] F29. Test prototype end-to-end (Gate B checklist, below)
 - [ ] F30. Video tutorials — deferred past prototype validation; UI will likely change once tested
 
@@ -462,3 +462,6 @@ This work is governed by PD-007 and ADR-019.
 | 0.6 | 30/07/2026 | Renamed "Change 8 Delivery Work — Scheduled Reporting" to "Phase 3 Detail — Scheduled Reporting Implementation" and labelled it as elaboration on the Phase 3 table, so the heading follows this document's Phase/Gate structure instead of an internal work-item name. |
 | 0.7 | 30/07/2026 | Added the conversational agent's business Q&A and product/support lanes, and low-stock alerting, to Phase 3 (PD-008, PD-009, ADR-020). Named weather-augmented ML forecasting as the concrete example of Phase 7's "Advanced forecasting" trigger. |
 | 0.8 | 30/07/2026 | Added "Phase 2/3 Detail — Prototype Build Sequence": the founder-agreed, ordered 30-item checklist (Stages A-F) actually followed while building the prototype, tracked in place with checkboxes. |
+| 0.9 | 03/08/2026 | Marked F28 (Stripe test-mode payments) complete — Checkout, webhooks, Customer Portal, subscription/invoice edge cases, and dispute handling all verified via live Stripe test-mode testing on localhost. |
+| 1.0 | 03/08/2026 | Marked B6 (upload interface) and B7 (schema/column detection engine) complete. B7 v1 is scoped to sales transactions only, with entity type chosen explicitly at upload time; alias dictionary + structural heuristics + confirmation UI + mapping-profile reuse (PR-2.1-2.5) all verified via automated tests and a live end-to-end browser walkthrough, including reuse on a second upload from the same source. |
+| 1.1 | 03/08/2026 | Marked B8 (clean data / transactional import + undo, PR-2.6-2.11) complete. Includes SKU/name product matching (auto-create on first sight, never falling back from a SKU miss to a name guess) and inventory_movements recording per sale — the previously-missing link needed for stock-level and product-popularity tracking. Verified via automated tests and a live API walkthrough (no frontend trigger UI built yet — flagged as a follow-up). |

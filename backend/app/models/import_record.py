@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PKMixin, TenantScopedMixin, TimestampMixin
@@ -9,9 +9,17 @@ from app.models.base import Base, PKMixin, TenantScopedMixin, TimestampMixin
 class ImportMappingProfile(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     """A saved column mapping for a given upload source, so the second
     upload from the same POS requires zero mapping input (PR-2.5).
+
+    Unique on (business_id, source_signature): without it, "reuse the saved
+    mapping for this source" would be ambiguous about which row to pick.
     """
 
     __tablename__ = "import_mapping_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id", "source_signature", name="uq_import_mapping_profiles_business_signature"
+        ),
+    )
 
     source_signature: Mapped[str] = mapped_column(String(255), nullable=False)
     column_mapping: Mapped[dict] = mapped_column(JSON, nullable=False)

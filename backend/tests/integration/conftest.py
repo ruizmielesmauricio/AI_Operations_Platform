@@ -2,7 +2,19 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Base, Business, ProcessedStripeEvent, Subscription
+from app.models import (
+    Base,
+    Business,
+    ImportMappingProfile,
+    ImportRecord,
+    InventoryMovement,
+    ProcessedStripeEvent,
+    Product,
+    Sale,
+    SaleItem,
+    Subscription,
+    Upload,
+)
 
 
 @pytest.fixture(scope="session")
@@ -27,6 +39,13 @@ def db_session(_engine):
     # Code under test may call session.commit() itself, so tear down by
     # deleting rows rather than relying on a rollback to undo everything.
     session.rollback()
+    session.query(InventoryMovement).delete()
+    session.query(SaleItem).delete()
+    session.query(Sale).delete()
+    session.query(Product).delete()
+    session.query(ImportRecord).delete()
+    session.query(ImportMappingProfile).delete()
+    session.query(Upload).delete()
     session.query(Subscription).delete()
     session.query(ProcessedStripeEvent).delete()
     session.query(Business).delete()

@@ -20,3 +20,7 @@ main {
 .status-error {
   color: #cf222e;
 }
+
+.status-warn {
+  color: #9a6700;
+}

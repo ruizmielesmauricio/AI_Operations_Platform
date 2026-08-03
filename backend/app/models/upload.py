@@ -16,3 +16,6 @@ class Upload(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     uploaded_by: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # What kind of report this is (currently only "sales") — chosen explicitly
+    # by the user at upload time, never auto-detected (see app/imports/aliases.py).
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)

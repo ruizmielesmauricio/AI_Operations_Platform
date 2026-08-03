@@ -132,6 +132,8 @@ export default function OnboardingPage() {
               <li key={b.id}>
                 {b.name} — {b.template} ({b.role})
                 {" — "}
+                <a href={`/uploads?business=${b.id}`}>Upload data</a>
+                {" — "}
                 {isRecoverableInPortal ? (
                   <>
                     <span className={status === "active" ? "status-ok" : "status-error"}>
