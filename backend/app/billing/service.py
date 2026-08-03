@@ -3,15 +3,23 @@ Route handlers stay thin (CLAUDE.md) — this is where that logic lives, one
 level above the Stripe SDK boundary in app/billing/client.py.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from app.billing import client
-from app.billing.status import HANDLED_EVENTS, SUBSCRIPTION_LIFECYCLE_EVENTS, derive_subscription_status
+from app.billing.status import (
+    DISPUTE_EVENTS,
+    HANDLED_EVENTS,
+    SUBSCRIPTION_LIFECYCLE_EVENTS,
+    derive_subscription_status,
+)
 from app.repositories.subscription import ProcessedStripeEventRepository, SubscriptionRepository
 from app.settings.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def start_checkout(*, db: Session, business_id: uuid.UUID, business_email: str) -> str:
@@ -58,6 +66,22 @@ def handle_webhook_event(db: Session, payload: bytes, signature_header: str) -> 
 
 def _apply_event(db: Session, event_type: str, obj: dict) -> None:
     subscriptions = SubscriptionRepository(db)
+
+    if event_type in DISPUTE_EVENTS:
+        # No subscription-status change: whether a dispute means anything
+        # for this business is a merchant judgment call, not something to
+        # automate. This at least makes it visible without a Dashboard
+        # check — a real notification (email/Slack) is future work if
+        # disputes turn out to be more than rare.
+        logger.warning(
+            "Stripe dispute created: id=%s charge=%s amount=%s reason=%s status=%s",
+            obj.get("id"),
+            obj.get("charge"),
+            obj.get("amount"),
+            obj.get("reason"),
+            obj.get("status"),
+        )
+        return
 
     if event_type == "checkout.session.completed":
         business_id = uuid.UUID(obj["metadata"]["business_id"])

@@ -135,6 +135,33 @@ def test_payment_failure_marks_past_due(db_session, business_id, monkeypatch):
     assert subscription.status == "past_due"
 
 
+def test_dispute_created_is_logged_and_does_not_touch_subscription_status(
+    db_session, business_id, monkeypatch, caplog
+):
+    SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_disputed")
+    db_session.commit()
+
+    event = _fake_event(
+        "evt_dispute_1",
+        "charge.dispute.created",
+        {
+            "id": "du_1",
+            "charge": "ch_1",
+            "amount": 100,
+            "reason": "fraudulent",
+            "status": "warning_needs_response",
+        },
+    )
+    monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
+
+    with caplog.at_level("WARNING"):
+        service.handle_webhook_event(db_session, b"{}", "sig")  # must not raise
+
+    assert "du_1" in caplog.text
+    subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_disputed")
+    assert subscription.status == "incomplete"  # unchanged
+
+
 def test_duplicate_event_id_is_not_reapplied(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_dup_1",

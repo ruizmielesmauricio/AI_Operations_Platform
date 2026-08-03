@@ -11,7 +11,14 @@ SUBSCRIPTION_LIFECYCLE_EVENTS = {
 
 INVOICE_EVENTS = {"invoice.paid", "invoice.payment_failed"}
 
-HANDLED_EVENTS = SUBSCRIPTION_LIFECYCLE_EVENTS | INVOICE_EVENTS | {"checkout.session.completed"}
+# Disputes don't map to a subscription status — Stripe/the merchant decides
+# how it resolves, not this platform — so this is logged, not status-mapped.
+# See service._apply_event.
+DISPUTE_EVENTS = {"charge.dispute.created"}
+
+HANDLED_EVENTS = (
+    SUBSCRIPTION_LIFECYCLE_EVENTS | INVOICE_EVENTS | DISPUTE_EVENTS | {"checkout.session.completed"}
+)
 
 
 def derive_subscription_status(event_type: str, subscription_payload_status: str | None) -> str:
