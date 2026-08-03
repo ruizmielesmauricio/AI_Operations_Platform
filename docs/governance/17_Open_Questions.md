@@ -1,6 +1,6 @@
 # 17_Open_Questions.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Company Governance
 **Author:** Founder & CTO
@@ -107,6 +107,7 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-049 | Which assumptions need to be revised before development begins? | `15_Customer_Discovery.md` | |
 | Q-050 | ADR-015 (OpenRouter): what numeric quality/reliability threshold and evaluation test set moves this from Proposed to Accepted? | `12_Decision_Register.md` (Decisions Requiring Action) | Pending decision, not an open-ended question. Same topic as Q-003/Q-012/Q-017. |
 | Q-051 | ADR-016 (Production Events): what third-business-type validation and which document updates (`06_Database_Design.md`, `10_Product_Requirements.md`) move this from Proposed to Accepted? | `12_Decision_Register.md` (Decisions Requiring Action) | Pending decision, not an open-ended question. Same topic as Q-020/Q-022/Q-040. |
+| Q-052 | When should Stripe Tax registration (Ireland domestic, or OSS) be added? Stripe currently charges 0% VAT since no registration exists. | `04_Technology_Stack.md` | Blocked on LTD company incorporation and accountant advice, not an engineering decision. Related to Q-028. |
 
 ---
 
@@ -123,3 +124,4 @@ Questions stay recorded in their **source document** as well — this register d
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 30/07/2026 | Initial register. Consolidated all 49 questions currently listed across `docs/governance/` (00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13, 15), plus the 2 pending-decision items in `12_Decision_Register.md`'s "Decisions Requiring Action" table, into one tracked list with source attribution and cross-references between duplicate topics. Seeded the Resolved Questions section with one already-answered question (first commercial market = Ireland) as the worked example. |
+| 0.2 | 30/07/2026 | Added Q-052 (Stripe Tax registration timing), raised during initial Stripe account setup and blocked on LTD incorporation and accountant advice. |
