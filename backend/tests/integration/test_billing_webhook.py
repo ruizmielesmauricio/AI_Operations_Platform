@@ -49,7 +49,10 @@ def test_subscription_updated_syncs_status_and_period_end(db_session, business_i
     subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_456")
     assert subscription.status == "active"
     assert subscription.stripe_subscription_id == "sub_456"
-    assert subscription.current_period_end == period_end
+    # SQLite (this test's DB) drops tzinfo on read-back, unlike the Postgres
+    # this app actually runs on — normalize before comparing.
+    stored_period_end = subscription.current_period_end.replace(tzinfo=timezone.utc)
+    assert stored_period_end == period_end
 
 
 def test_subscription_created_before_checkout_completed_creates_subscription(

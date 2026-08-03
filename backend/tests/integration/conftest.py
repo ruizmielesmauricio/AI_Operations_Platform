@@ -1,19 +1,28 @@
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.models import Base, Business, ProcessedStripeEvent, Subscription
-from app.models.base import SessionLocal, engine
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _tables():
+@pytest.fixture(scope="session")
+def _engine(tmp_path_factory):
+    # A dedicated SQLite file, never the app's own DATABASE_URL — these tests
+    # used to create_all()/drop_all() against whatever database that pointed
+    # to, which meant running pytest against a local dev setup wiped every
+    # table in it. Models are dialect-portable by design (see PKMixin), so
+    # SQLite here is safe and gets everything the same isolation for free.
+    db_path = tmp_path_factory.mktemp("integration") / "billing_webhook_test.db"
+    engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+    yield engine
+    engine.dispose()
 
 
 @pytest.fixture
-def db_session():
-    session = SessionLocal()
+def db_session(_engine):
+    TestSessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
+    session = TestSessionLocal()
     yield session
     # Code under test may call session.commit() itself, so tear down by
     # deleting rows rather than relying on a rollback to undo everything.
