@@ -88,6 +88,28 @@ def test_running_import_creates_sales_and_returns_a_summary(client):
     assert body["rows_rejected"] == 0
 
 
+def test_upload_list_exposes_the_import_record_summary(client):
+    headers = bearer_header("user-a", "a@example.com")
+    business = _create_business(client, headers, "Shop A")
+    upload_id = _upload_and_confirm(client, headers, business["id"], "sales.csv")
+
+    # Before running: confirm-mapping already created the ImportRecord
+    # (status "mapped"), it just hasn't processed any rows yet.
+    before = client.get(f"/businesses/{business['id']}/uploads", headers=headers).json()
+    row = next(u for u in before if u["id"] == upload_id)
+    assert row["status"] == "mapped"
+    assert row["import_record"]["status"] == "mapped"
+    assert row["import_record"]["rows_total"] == 0
+
+    client.post(f"/businesses/{business['id']}/uploads/{upload_id}/import", headers=headers)
+
+    after = client.get(f"/businesses/{business['id']}/uploads", headers=headers).json()
+    row = next(u for u in after if u["id"] == upload_id)
+    assert row["status"] == "imported"
+    assert row["import_record"]["status"] == "completed"
+    assert row["import_record"]["rows_imported"] == 2
+
+
 def test_cannot_run_import_on_another_business_s_upload(client):
     headers_a = bearer_header("user-a", "a@example.com")
     headers_b = bearer_header("user-b", "b@example.com")

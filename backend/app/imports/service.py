@@ -11,15 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.imports import detection, file_parser, r2_client
 from app.imports.aliases import CANONICAL_FIELDS, SUPPORTED_ENTITY_TYPES
-from app.imports.detection import FieldCandidate
+from app.imports.detection import FieldCandidate, Row
 from app.imports.exceptions import (
     FileTooLarge,
+    HeaderRowNotFound,
     InsufficientMapping,
     InvalidFieldMapping,
     UnsupportedEntityType,
     UnsupportedFileType,
     UploadNotReady,
 )
+from app.imports.file_parser import normalize_cell
 from app.models.import_record import ImportRecord
 from app.models.upload import Upload
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
@@ -40,6 +42,14 @@ _DETECTION_WINDOW_ROWS = 215
 # queue exists yet), so a many-tens-of-MB file is a real risk, not just the
 # parsing logic itself.
 _MAX_DETECTION_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
+# Deliberately wider than detection.py's own 15-row auto-search window —
+# the manual picker exists specifically to rescue files auto-detection
+# couldn't handle, including a header further down than auto-detection
+# ever looked, not just an ambiguous one within that same window. Free to
+# widen: these rows are already read as part of the same bounded window
+# (_DETECTION_WINDOW_ROWS), this only changes how many get echoed back.
+_HEADER_PREVIEW_ROWS = 40
 
 
 def create_upload(
@@ -73,12 +83,16 @@ def mark_uploaded(db: Session, upload: Upload) -> Upload:
 
 @dataclass
 class DetectMappingResult:
-    status: str  # "reused" | "needs_confirmation"
+    status: str  # "reused" | "needs_confirmation" | "header_not_found"
     mapping_profile_id: uuid.UUID | None
     suggested_mapping: dict[str, str | None]
     columns: list[str] = dataclass_field(default_factory=list)
     field_candidates: dict[str, list[FieldCandidate]] = dataclass_field(default_factory=dict)
     unmapped_columns: list[str] = dataclass_field(default_factory=list)
+    # Only populated when status == "header_not_found" — the first ~15 raw
+    # rows, for the frontend to render as a "click the header row" picker
+    # (PR-2.2's escape hatch when auto-detection can't find it confidently).
+    preview_rows: list[list[str]] | None = None
 
 
 def download_checked(storage_key: str) -> bytes:
@@ -90,17 +104,40 @@ def download_checked(storage_key: str) -> bytes:
     return r2_client.download_object(storage_key=storage_key)
 
 
-def _detect(upload: Upload) -> detection.DetectionResult:
+def _read_grid(upload: Upload) -> list[Row]:
     file_bytes = download_checked(upload.storage_key)
-    grid = file_parser.read_rows(file_bytes, upload.original_filename, max_rows=_DETECTION_WINDOW_ROWS)
+    return file_parser.read_rows(file_bytes, upload.original_filename, max_rows=_DETECTION_WINDOW_ROWS)
+
+
+def _detect(upload: Upload, grid: list[Row], header_row_index: int | None) -> detection.DetectionResult:
+    if header_row_index is not None:
+        return detection.detect_mapping_with_header(grid, upload.entity_type, header_row_index)
     return detection.detect_mapping(grid, upload.entity_type)
 
 
-def detect_mapping_for_upload(db: Session, upload: Upload) -> DetectMappingResult:
+def _preview_rows(grid: list[Row]) -> list[list[str]]:
+    return [[normalize_cell(c) for c in row] for row in grid[:_HEADER_PREVIEW_ROWS]]
+
+
+def detect_mapping_for_upload(
+    db: Session, upload: Upload, header_row_index: int | None = None
+) -> DetectMappingResult:
     if upload.status != "uploaded":
         raise UploadNotReady(upload.status)
 
-    result = _detect(upload)
+    grid = _read_grid(upload)
+    try:
+        result = _detect(upload, grid, header_row_index)
+    except HeaderRowNotFound:
+        # Only reachable when header_row_index was None — the manual path
+        # raises InvalidHeaderRowIndex instead, which is a genuine client
+        # bug (stale preview_rows), not something to fall back from.
+        return DetectMappingResult(
+            status="header_not_found",
+            mapping_profile_id=None,
+            suggested_mapping={},
+            preview_rows=_preview_rows(grid),
+        )
     columns = [c for c in result.columns if c]
     existing = ImportMappingProfileRepository(db).get_by_signature(
         upload.business_id, result.source_signature
@@ -135,7 +172,7 @@ def detect_mapping_for_upload(db: Session, upload: Upload) -> DetectMappingResul
 
 
 def confirm_mapping(
-    db: Session, upload: Upload, field_mapping: dict[str, str | None]
+    db: Session, upload: Upload, field_mapping: dict[str, str | None], header_row_index: int | None = None
 ) -> tuple[ImportRecord, uuid.UUID]:
     if upload.status != "uploaded":
         raise UploadNotReady(upload.status)
@@ -143,8 +180,11 @@ def confirm_mapping(
     # Re-run detection rather than trust the client's payload shape/columns
     # past the membership check — a stale frontend or tampered request must
     # fail loudly, not silently under-map or reference a column that isn't
-    # actually in this file.
-    result = _detect(upload)
+    # actually in this file. header_row_index is threaded through from
+    # detect-mapping's manual-pick path (PR-2.2's escape hatch) — omitted
+    # entirely for the normal auto-detected case.
+    grid = _read_grid(upload)
+    result = _detect(upload, grid, header_row_index)
     canonical_fields = set(CANONICAL_FIELDS[upload.entity_type])
     if set(field_mapping.keys()) != canonical_fields:
         raise InvalidFieldMapping("field_mapping must include exactly the canonical fields for this entity type")
@@ -158,7 +198,16 @@ def confirm_mapping(
     ):
         raise InsufficientMapping()
 
-    column_mapping = {"entity_type": upload.entity_type, "engine_version": 1, "fields": field_mapping}
+    column_mapping = {
+        "entity_type": upload.entity_type,
+        "engine_version": 1,
+        "fields": field_mapping,
+        # Not authoritative for reuse — app/imports/importer.py re-detects
+        # the header fresh on each import and only falls back to this if
+        # that re-detection fails, which happens precisely for files that
+        # needed a manual pick here in the first place.
+        "header_row_index": result.header_row_index,
+    }
     profile = ImportMappingProfileRepository(db).upsert(
         business_id=upload.business_id,
         source_signature=result.source_signature,

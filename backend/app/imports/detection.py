@@ -17,7 +17,7 @@ import statistics
 from dataclasses import dataclass, field as dataclass_field
 
 from app.imports.aliases import CANONICAL_FIELDS, match_alias, normalize_header
-from app.imports.exceptions import HeaderRowNotFound, UnsupportedEntityType
+from app.imports.exceptions import HeaderRowNotFound, InvalidHeaderRowIndex, UnsupportedEntityType
 from app.imports.file_parser import normalize_cell
 from app.imports.value_parsers import parse_date, parse_int, parse_money
 
@@ -99,10 +99,25 @@ def compute_source_signature(entity_type: str, columns: list[str]) -> str:
 
 
 def detect_mapping(grid: list[Row], entity_type: str) -> DetectionResult:
+    """Auto-detects the header row, then maps its columns. Raises
+    HeaderRowNotFound if no row scores confidently enough — the caller
+    decides whether to surface that as a hard failure or fall back to
+    detect_mapping_with_header() once the user's picked the row by hand."""
     if entity_type not in CANONICAL_FIELDS:
         raise UnsupportedEntityType(entity_type)
-
     header_row_index = detect_header_row(grid, entity_type)
+    return detect_mapping_with_header(grid, entity_type, header_row_index)
+
+
+def detect_mapping_with_header(grid: list[Row], entity_type: str, header_row_index: int) -> DetectionResult:
+    """Same mapping logic as detect_mapping(), but skips auto-detection —
+    used both internally and for the manual header-row picker fallback
+    (PR-2.2's "let the user point at it" escape hatch)."""
+    if entity_type not in CANONICAL_FIELDS:
+        raise UnsupportedEntityType(entity_type)
+    if not (0 <= header_row_index < len(grid)):
+        raise InvalidHeaderRowIndex(header_row_index, len(grid))
+
     header_row = grid[header_row_index]
     data_rows = grid[header_row_index + 1 :]
     columns = [normalize_cell(c) for c in header_row]

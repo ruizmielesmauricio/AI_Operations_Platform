@@ -31,6 +31,17 @@ class HeaderRowNotFound(Exception):
     the header row (PR-2.2) — the file needs a human to point at it."""
 
 
+class InvalidHeaderRowIndex(Exception):
+    """Raised when a manually-specified header row index is out of range
+    for the file — should only happen if the client is out of sync with
+    the preview rows it was actually shown."""
+
+    def __init__(self, index: int, row_count: int):
+        self.index = index
+        self.row_count = row_count
+        super().__init__(f"Header row index {index} is out of range (file has {row_count} preview rows)")
+
+
 class InsufficientMapping(Exception):
     """Raised when a confirmed mapping doesn't include the minimum fields
     needed to calculate anything (sale_date, and unit_price or total_amount)."""

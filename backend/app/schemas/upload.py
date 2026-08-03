@@ -17,11 +17,27 @@ class UploadCreateResponse(BaseModel):
     upload_url: str
 
 
+class ImportRecordSummary(BaseModel):
+    id: uuid.UUID
+    status: str
+    rows_total: int
+    rows_imported: int
+    rows_rejected: int
+    rejection_summary: dict | None
+    reversed_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
 class UploadOut(BaseModel):
     id: uuid.UUID
     original_filename: str
     entity_type: str
     status: str
     created_at: datetime
+    # None until a mapping's been confirmed — lets the frontend know
+    # whether to show "Map columns", "Run import", or the import summary
+    # + "Undo" without a separate round-trip per upload.
+    import_record: ImportRecordSummary | None = None
 
     model_config = {"from_attributes": True}

@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 1.1 (Draft)
+**Version:** 1.2 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -190,7 +190,7 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 **Stage B — Getting real data in**
 - [x] B6. Upload data interface (signed URL to R2)
 - [x] B7. Schema/column detection engine — alias dictionary + structural heuristics, tolerant of any POS export format (PR-2, the "critical section") — v1 scoped to sales transactions only; entity type chosen explicitly at upload time, not auto-detected
-- [x] B8. Clean data — deterministic normalisation, validation, plain-language rejected-row reporting, transactional import, undo (PR-2.6-2.11) — includes SKU/name product matching (auto-create on first sight) and inventory_movements recording per sale, needed for stock-level/popularity tracking; no frontend trigger UI yet, API-verified only
+- [x] B8. Clean data — deterministic normalisation, validation, plain-language rejected-row reporting, transactional import, undo (PR-2.6-2.11) — includes SKU/name product matching (auto-create on first sight) and inventory_movements recording per sale, needed for stock-level/popularity tracking; frontend "Run import"/"Undo" trigger UI added, and PR-2.2's manual header-row-picker escape hatch built for files auto-detection can't confidently place — both verified live end-to-end
 
 **Stage C — The actual product value**
 - [ ] C9. Core calculations — Retail / Workshop / Financial Performance, unit-tested per formula (PR-3, ED-007)
@@ -465,3 +465,4 @@ This work is governed by PD-007 and ADR-019.
 | 0.9 | 03/08/2026 | Marked F28 (Stripe test-mode payments) complete — Checkout, webhooks, Customer Portal, subscription/invoice edge cases, and dispute handling all verified via live Stripe test-mode testing on localhost. |
 | 1.0 | 03/08/2026 | Marked B6 (upload interface) and B7 (schema/column detection engine) complete. B7 v1 is scoped to sales transactions only, with entity type chosen explicitly at upload time; alias dictionary + structural heuristics + confirmation UI + mapping-profile reuse (PR-2.1-2.5) all verified via automated tests and a live end-to-end browser walkthrough, including reuse on a second upload from the same source. |
 | 1.1 | 03/08/2026 | Marked B8 (clean data / transactional import + undo, PR-2.6-2.11) complete. Includes SKU/name product matching (auto-create on first sight, never falling back from a SKU miss to a name guess) and inventory_movements recording per sale — the previously-missing link needed for stock-level and product-popularity tracking. Verified via automated tests and a live API walkthrough (no frontend trigger UI built yet — flagged as a follow-up). |
+| 1.2 | 03/08/2026 | Closed the two follow-ups flagged in 1.1/1.0: (1) added the frontend "Run import"/"Undo" trigger UI, exposing each upload's import summary and rejected-row reasons; (2) built PR-2.2's manual header-row-picker fallback for files where auto-detection can't confidently place the header, including persisting the picked row so B8's import step (which re-detects fresh each time) falls back to it instead of failing on the same file it already needed help with. Both verified via automated tests and a live end-to-end browser walkthrough. |

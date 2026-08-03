@@ -10,18 +10,23 @@ from app.imports.exceptions import (
     HeaderRowNotFound,
     InsufficientMapping,
     InvalidFieldMapping,
+    InvalidHeaderRowIndex,
     UnsupportedEntityType,
     UnsupportedFileType,
     UploadNotReady,
 )
+from app.models.import_record import ImportRecord
 from app.models.membership import Membership
+from app.models.upload import Upload
+from app.repositories.import_record import ImportRecordRepository
 from app.repositories.upload import UploadRepository
 from app.schemas.import_mapping import (
     ConfirmMappingRequest,
     ConfirmMappingResponse,
+    DetectMappingRequest,
     DetectMappingResponse,
 )
-from app.schemas.upload import UploadCreateRequest, UploadCreateResponse, UploadOut
+from app.schemas.upload import ImportRecordSummary, UploadCreateRequest, UploadCreateResponse, UploadOut
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -35,6 +40,17 @@ def _get_upload_or_404(db: Session, upload_id: uuid.UUID, business_id: uuid.UUID
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload not found")
     return upload
+
+
+def _to_upload_out(upload: Upload, import_record: ImportRecord | None) -> UploadOut:
+    return UploadOut(
+        id=upload.id,
+        original_filename=upload.original_filename,
+        entity_type=upload.entity_type,
+        status=upload.status,
+        created_at=upload.created_at,
+        import_record=ImportRecordSummary.model_validate(import_record) if import_record else None,
+    )
 
 
 @router.post("", response_model=UploadCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -67,7 +83,7 @@ def complete_upload(
 ) -> UploadOut:
     upload = _get_upload_or_404(db, upload_id, membership.business_id)
     upload = service.mark_uploaded(db, upload)
-    return UploadOut.model_validate(upload)
+    return _to_upload_out(upload, None)  # never has an import record yet — just uploaded
 
 
 @router.get("", response_model=list[UploadOut])
@@ -76,18 +92,20 @@ def list_uploads(
     db: Session = Depends(get_db),
 ) -> list[UploadOut]:
     uploads = UploadRepository(db).list_for_business(membership.business_id)
-    return [UploadOut.model_validate(u) for u in uploads]
+    records_by_upload = ImportRecordRepository(db).map_by_upload_id(membership.business_id)
+    return [_to_upload_out(u, records_by_upload.get(u.id)) for u in uploads]
 
 
 @router.post("/{upload_id}/detect-mapping", response_model=DetectMappingResponse)
 def detect_mapping(
     upload_id: uuid.UUID,
+    payload: DetectMappingRequest = DetectMappingRequest(),
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> DetectMappingResponse:
     upload = _get_upload_or_404(db, upload_id, membership.business_id)
     try:
-        result = service.detect_mapping_for_upload(db, upload)
+        result = service.detect_mapping_for_upload(db, upload, payload.header_row_index)
     except UploadNotReady as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except HeaderRowNotFound as exc:
@@ -95,6 +113,8 @@ def detect_mapping(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not find a header row in this file",
         ) from exc
+    except InvalidHeaderRowIndex as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileTooLarge as exc:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
     return DetectMappingResponse(
@@ -104,6 +124,7 @@ def detect_mapping(
         columns=result.columns,
         field_candidates=result.field_candidates,
         unmapped_columns=result.unmapped_columns,
+        preview_rows=result.preview_rows,
     )
 
 
@@ -116,7 +137,9 @@ def confirm_mapping(
 ) -> ConfirmMappingResponse:
     upload = _get_upload_or_404(db, upload_id, membership.business_id)
     try:
-        record, mapping_profile_id = service.confirm_mapping(db, upload, payload.field_mapping)
+        record, mapping_profile_id = service.confirm_mapping(
+            db, upload, payload.field_mapping, payload.header_row_index
+        )
     except UploadNotReady as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except HeaderRowNotFound as exc:
@@ -124,6 +147,8 @@ def confirm_mapping(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not find a header row in this file",
         ) from exc
+    except InvalidHeaderRowIndex as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileTooLarge as exc:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
     except InvalidFieldMapping as exc:

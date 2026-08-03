@@ -24,6 +24,13 @@ class ImportRecordRepository:
             select(ImportRecord).where(ImportRecord.upload_id == upload_id, ImportRecord.business_id == business_id)
         )
 
+    def map_by_upload_id(self, business_id: uuid.UUID) -> dict[uuid.UUID, ImportRecord]:
+        """One query for every ImportRecord in the business, keyed by
+        upload_id — lets list_uploads attach each upload's import status
+        without an N+1 query per row."""
+        records = self.session.scalars(select(ImportRecord).where(ImportRecord.business_id == business_id))
+        return {r.upload_id: r for r in records}
+
     def create(
         self,
         *,

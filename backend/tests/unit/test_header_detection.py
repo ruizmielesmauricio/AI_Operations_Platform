@@ -1,7 +1,7 @@
 import pytest
 
-from app.imports.detection import detect_header_row
-from app.imports.exceptions import HeaderRowNotFound
+from app.imports.detection import detect_header_row, detect_mapping_with_header
+from app.imports.exceptions import HeaderRowNotFound, InvalidHeaderRowIndex
 
 _HEADER = ["Sale Date", "Product Name", "Quantity", "Unit Price", "Total Amount"]
 _DATA_ROWS = [
@@ -58,3 +58,21 @@ def test_header_beyond_the_search_window_is_not_found():
     grid = _grid_with_junk_rows(20)
     with pytest.raises(HeaderRowNotFound):
         detect_header_row(grid, "sales")
+
+
+def test_manual_header_pick_works_even_where_auto_detection_would_fail():
+    # A header the auto-scorer alone wouldn't confidently pick — this is
+    # exactly the case the manual picker exists for (PR-2.2's escape hatch).
+    grid = _grid_with_junk_rows(20)  # header at index 20, outside the auto window
+    with pytest.raises(HeaderRowNotFound):
+        detect_header_row(grid, "sales")
+
+    result = detect_mapping_with_header(grid, "sales", 20)
+    assert result.header_row_index == 20
+    assert result.suggested_mapping["sale_date"] == "Sale Date"
+
+
+def test_manual_header_pick_rejects_an_out_of_range_index():
+    grid = _grid_with_junk_rows(0)
+    with pytest.raises(InvalidHeaderRowIndex):
+        detect_mapping_with_header(grid, "sales", 99)

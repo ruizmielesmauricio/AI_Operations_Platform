@@ -17,7 +17,12 @@ from sqlalchemy.orm import Session
 
 from app.imports import detection, file_parser
 from app.imports import r2_client as r2_client_module
-from app.imports.exceptions import ImportNotReversible, ImportRecordNotReady, MappedColumnMissing
+from app.imports.exceptions import (
+    HeaderRowNotFound,
+    ImportNotReversible,
+    ImportRecordNotReady,
+    MappedColumnMissing,
+)
 from app.imports.file_parser import normalize_cell
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
@@ -315,7 +320,17 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
 
     file_bytes = download_checked(upload.storage_key)
     grid = file_parser.read_rows(file_bytes, upload.original_filename, max_rows=_MAX_IMPORT_ROWS)
-    header_row_index = detection.detect_header_row(grid, upload.entity_type)
+    try:
+        header_row_index = detection.detect_header_row(grid, upload.entity_type)
+    except HeaderRowNotFound:
+        # Falls back to the index confirmed at mapping time, stored
+        # specifically for this case — a file whose header auto-detection
+        # never succeeds (that's why it needed a manual pick in the first
+        # place) would otherwise fail here identically, every time.
+        stored_index = profile.column_mapping.get("header_row_index")
+        if stored_index is None:
+            raise
+        header_row_index = stored_index
     columns = [normalize_cell(c) for c in grid[header_row_index]]
     data_rows = grid[header_row_index + 1 :]
 

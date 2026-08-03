@@ -7,6 +7,9 @@ import type {
   Business,
   ConfirmMappingResponse,
   DetectMappingResponse,
+  ImportRunResponse,
+  ImportUndoResponse,
+  RejectionSummary,
   Upload,
 } from "@/types";
 
@@ -64,6 +67,18 @@ export default function UploadsPage() {
   const [confirming, setConfirming] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
 
+  // Set when auto-detection can't confidently find the header row —
+  // rendered as a "click the header row" picker instead of the normal
+  // field-confirmation form. chosenHeaderRowIndex carries the pick through
+  // to confirm-mapping once the user gets there.
+  const [previewRows, setPreviewRows] = useState<string[][] | null>(null);
+  const [chosenHeaderRowIndex, setChosenHeaderRowIndex] = useState<number | null>(null);
+
+  // Per-upload so running/undoing one row's import doesn't disable another's.
+  const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
+  const [undoingRecordId, setUndoingRecordId] = useState<string | null>(null);
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (session) {
       apiGet<Business[]>("/businesses")
@@ -107,21 +122,31 @@ export default function UploadsPage() {
     return match ? match.confidence : null;
   }
 
-  async function startMapping(uploadId: string) {
+  async function startMapping(uploadId: string, headerRowIndex?: number) {
     setMappingError(null);
     try {
+      const body = headerRowIndex === undefined ? {} : { header_row_index: headerRowIndex };
       const result = await apiPost<DetectMappingResponse>(
         `/businesses/${businessId}/uploads/${uploadId}/detect-mapping`,
-        {}
+        body
       );
       if (result.status === "reused") {
         setNotice("Recognized this file from a previous upload — mapping applied automatically.");
         setMappingUploadId(null);
         setDetection(null);
+        setPreviewRows(null);
         loadUploads(businessId);
         return;
       }
+      if (result.status === "header_not_found") {
+        setMappingUploadId(uploadId);
+        setDetection(null);
+        setPreviewRows(result.preview_rows);
+        return;
+      }
       setMappingUploadId(uploadId);
+      setPreviewRows(null);
+      setChosenHeaderRowIndex(headerRowIndex ?? null);
       setDetection(result);
       setFieldMapping(
         Object.fromEntries(
@@ -133,22 +158,28 @@ export default function UploadsPage() {
     }
   }
 
+  function handlePickHeaderRow(rowIndex: number) {
+    if (mappingUploadId) startMapping(mappingUploadId, rowIndex);
+  }
+
   async function handleConfirmMapping(e: React.FormEvent) {
     e.preventDefault();
     if (!mappingUploadId) return;
     setConfirming(true);
     setMappingError(null);
     try {
-      const payload = Object.fromEntries(
+      const fieldValues = Object.fromEntries(
         FIELD_ORDER.map((field) => [field, fieldMapping[field] || null])
       );
       await apiPost<ConfirmMappingResponse>(
         `/businesses/${businessId}/uploads/${mappingUploadId}/confirm-mapping`,
-        { field_mapping: payload }
+        { field_mapping: fieldValues, header_row_index: chosenHeaderRowIndex }
       );
       setNotice("Mapping saved.");
       setMappingUploadId(null);
       setDetection(null);
+      setPreviewRows(null);
+      setChosenHeaderRowIndex(null);
       loadUploads(businessId);
     } catch {
       setMappingError(
@@ -156,6 +187,38 @@ export default function UploadsPage() {
       );
     } finally {
       setConfirming(false);
+    }
+  }
+
+  async function handleRunImport(uploadId: string) {
+    setRunningUploadId(uploadId);
+    setActionErrors((prev) => ({ ...prev, [uploadId]: "" }));
+    try {
+      await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
+      loadUploads(businessId);
+    } catch {
+      setActionErrors((prev) => ({
+        ...prev,
+        [uploadId]: "Could not run the import. Try again, or check the file hasn't changed.",
+      }));
+    } finally {
+      setRunningUploadId(null);
+    }
+  }
+
+  async function handleUndo(importRecordId: string) {
+    setUndoingRecordId(importRecordId);
+    setActionErrors((prev) => ({ ...prev, [importRecordId]: "" }));
+    try {
+      await apiPost<ImportUndoResponse>(
+        `/businesses/${businessId}/import-records/${importRecordId}/undo`,
+        {}
+      );
+      loadUploads(businessId);
+    } catch {
+      setActionErrors((prev) => ({ ...prev, [importRecordId]: "Could not undo this import." }));
+    } finally {
+      setUndoingRecordId(null);
     }
   }
 
@@ -270,6 +333,33 @@ export default function UploadsPage() {
         </form>
       )}
 
+      {mappingUploadId && previewRows && (
+        <div>
+          <h2>Which row is the header?</h2>
+          <p>
+            We couldn't tell automatically — click the row that has the column names in it
+            (e.g. "Date", "Item", "Price").
+          </p>
+          <table>
+            <tbody>
+              {previewRows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  <td>
+                    <button type="button" onClick={() => handlePickHeaderRow(rowIndex)}>
+                      Use this row
+                    </button>
+                  </td>
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {mappingError && <p className="status-error">{mappingError}</p>}
+        </div>
+      )}
+
       {mappingUploadId && detection && (
         <form onSubmit={handleConfirmMapping}>
           <h2>Confirm what each column means</h2>
@@ -319,22 +409,78 @@ export default function UploadsPage() {
         <p>No uploads yet.</p>
       ) : (
         <ul>
-          {uploads.map((u) => (
-            <li key={u.id}>
-              {u.original_filename} — <span className={u.status === "mapped" ? "status-ok" : ""}>{u.status}</span>{" "}
-              ({new Date(u.created_at).toLocaleString()})
-              {u.status === "uploaded" && !mappingUploadId && (
-                <>
-                  {" "}
-                  <button type="button" onClick={() => startMapping(u.id)}>
-                    Map columns
-                  </button>
-                </>
-              )}
-            </li>
-          ))}
+          {uploads.map((u) => {
+            const record = u.import_record;
+            const isRunning = runningUploadId === u.id;
+            const isUndoing = record ? undoingRecordId === record.id : false;
+            const rowError = actionErrors[u.id] || (record ? actionErrors[record.id] : "");
+            return (
+              <li key={u.id}>
+                {u.original_filename} —{" "}
+                <span className={u.status === "imported" ? "status-ok" : ""}>{u.status}</span>{" "}
+                ({new Date(u.created_at).toLocaleString()})
+                {u.status === "uploaded" && !mappingUploadId && (
+                  <>
+                    {" "}
+                    <button type="button" onClick={() => startMapping(u.id)}>
+                      Map columns
+                    </button>
+                  </>
+                )}
+                {u.status === "mapped" && (
+                  <>
+                    {" "}
+                    <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
+                      {isRunning ? "Running…" : "Run import"}
+                    </button>
+                  </>
+                )}
+                {record && record.status === "completed" && (
+                  <div>
+                    <span className="status-ok">
+                      {record.rows_imported} of {record.rows_total} rows imported
+                    </span>
+                    {record.rows_rejected > 0 && (
+                      <span className="status-warn"> — {record.rows_rejected} skipped</span>
+                    )}
+                    {renderRejectionSummary(record.rejection_summary)}
+                    {" "}
+                    <button type="button" disabled={isUndoing} onClick={() => handleUndo(record.id)}>
+                      {isUndoing ? "Undoing…" : "Undo import"}
+                    </button>
+                  </div>
+                )}
+                {record && record.status === "reversed" && (
+                  <div className="status-warn">
+                    Reversed
+                    {record.reversed_at ? ` on ${new Date(record.reversed_at).toLocaleString()}` : ""}
+                  </div>
+                )}
+                {rowError && <div className="status-error">{rowError}</div>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </main>
+  );
+}
+
+function renderRejectionSummary(summary: RejectionSummary | null) {
+  if (!summary) return null;
+  const reasons = Object.values(summary.reasons ?? {});
+  const warnings = Object.values(summary.warnings ?? {});
+  if (reasons.length === 0 && warnings.length === 0) return null;
+  return (
+    <ul>
+      {reasons.map((r) => (
+        <li key={r.message} className="status-warn">
+          {r.message}
+        </li>
+      ))}
+      {warnings.map((w) => (
+        <li key={w.message}>{w.message}</li>
+      ))}
+    </ul>
   );
 }
