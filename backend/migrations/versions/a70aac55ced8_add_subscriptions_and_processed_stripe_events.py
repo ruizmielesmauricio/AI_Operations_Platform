@@ -1,7 +1,7 @@
 """add subscriptions and processed_stripe_events
 
 Revision ID: a70aac55ced8
-Revises:
+Revises: 35728b95e915
 Create Date: 2026-07-30
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "a70aac55ced8"
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = "35728b95e915"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
