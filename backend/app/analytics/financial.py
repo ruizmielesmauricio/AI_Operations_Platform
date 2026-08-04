@@ -29,6 +29,13 @@ def _quantize_pct(value: Decimal) -> Decimal:
 
 @dataclass(frozen=True)
 class GrossMarginResult:
+    # Total revenue in the period, cost-known or not — kept alongside the
+    # cost-known slices below so a caller can compute "how much revenue is
+    # NOT covered by cost data" (total_revenue - revenue_with_known_cost)
+    # directly, without reconstructing it via cost_data_coverage_pct
+    # division (which breaks at 0% coverage). Stage C10's
+    # incomplete_cost_data finding uses this.
+    total_revenue: Decimal
     revenue_with_known_cost: Decimal
     cogs: Decimal
     gross_profit: Decimal
@@ -72,6 +79,7 @@ def compute_gross_margin(aggregates: list[ProductPeriodAggregate]) -> GrossMargi
     cost_data_coverage_pct = _quantize_pct(revenue_with_known_cost / total_revenue * 100) if total_revenue > 0 else None
 
     return GrossMarginResult(
+        total_revenue=_quantize_money(total_revenue),
         revenue_with_known_cost=_quantize_money(revenue_with_known_cost),
         cogs=_quantize_money(cogs),
         gross_profit=_quantize_money(gross_profit),

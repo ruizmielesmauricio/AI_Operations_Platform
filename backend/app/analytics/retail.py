@@ -60,12 +60,18 @@ class DeadStockEntry:
     product_id: uuid.UUID
     name: str
     stock_on_hand: int
+    # Cash tied up in this dead stock, at cost — None when the product has
+    # no cost_price on record (Stage C10 falls back to ranking by
+    # stock_on_hand alone for these, per compute_inventory_value_at_cost's
+    # same completeness caveat).
+    value_at_cost: Decimal | None
 
 
 def find_dead_stock(
     aggregates_by_product: dict[uuid.UUID, ProductPeriodAggregate],
     stock_by_product: dict[uuid.UUID, int],
     products_by_id: dict[uuid.UUID, str],
+    cost_price_by_product: dict[uuid.UUID, Decimal | None],
 ) -> list[DeadStockEntry]:
     """Products with stock on hand but zero units sold within the
     requested period. Deliberately uses the same period the rest of the
@@ -82,11 +88,14 @@ def find_dead_stock(
         units_sold = aggregate.units_sold if aggregate is not None else 0
         if units_sold > 0:
             continue
+        cost_price = cost_price_by_product.get(product_id)
+        value_at_cost = _quantize_money(cost_price * stock_on_hand) if cost_price is not None else None
         entries.append(
             DeadStockEntry(
                 product_id=product_id,
                 name=products_by_id.get(product_id, "Unknown product"),
                 stock_on_hand=stock_on_hand,
+                value_at_cost=value_at_cost,
             )
         )
     return sorted(entries, key=lambda entry: entry.stock_on_hand, reverse=True)
@@ -136,6 +145,11 @@ class StockCoverRow:
     stock_on_hand: int
     units_sold_in_period: int
     cover_days: Decimal | None
+    # This product's revenue over the same period — how much is actually at
+    # stake if it runs out. Lets a caller (e.g. Stage C10's low_stock rule)
+    # rank "about to run out" products by what they're worth, not just by
+    # how soon they'll run out.
+    revenue_in_period: Decimal
 
 
 def build_stock_cover_report(
@@ -153,6 +167,7 @@ def build_stock_cover_report(
     for product_id, stock_on_hand in stock_by_product.items():
         aggregate = aggregates_by_product.get(product_id)
         units_sold = aggregate.units_sold if aggregate is not None else 0
+        revenue_in_period = _quantize_money(aggregate.revenue) if aggregate is not None else Decimal("0.00")
         cover_days = compute_stock_cover_days(stock_on_hand, units_sold, period_days)
         rows.append(
             StockCoverRow(
@@ -161,6 +176,7 @@ def build_stock_cover_report(
                 stock_on_hand=stock_on_hand,
                 units_sold_in_period=units_sold,
                 cover_days=cover_days,
+                revenue_in_period=revenue_in_period,
             )
         )
     # Sort key's second element is only ever compared between two rows that

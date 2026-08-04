@@ -74,7 +74,7 @@ def get_retail_operations(
 
     top_sellers = rank_top_sellers(aggregates, products_by_id, top_n=_TOP_N)
     stock_cover = build_stock_cover_report(aggregates_by_product, stock_by_product, products_by_id, period.days)
-    dead_stock = find_dead_stock(aggregates_by_product, stock_by_product, products_by_id)
+    dead_stock = find_dead_stock(aggregates_by_product, stock_by_product, products_by_id, cost_price_by_product)
     inventory_value = compute_inventory_value_at_cost(stock_by_product, cost_price_by_product)
 
     total_units_sold = sum(a.units_sold for a in aggregates)

@@ -24,6 +24,7 @@ def test_gross_margin_with_full_cost_coverage():
     ]
     result = compute_gross_margin(aggregates)
 
+    assert result.total_revenue == Decimal("1500.00")
     assert result.revenue_with_known_cost == Decimal("1500.00")
     assert result.cogs == Decimal("800.00")
     assert result.gross_profit == Decimal("700.00")
@@ -40,6 +41,7 @@ def test_gross_margin_flags_partial_cost_data_coverage():
     ]
     result = compute_gross_margin(aggregates)
 
+    assert result.total_revenue == Decimal("1500.00")
     assert result.revenue_with_known_cost == Decimal("1000.00")
     assert result.gross_profit == Decimal("400.00")
     assert result.gross_margin_pct == Decimal("40.0")

@@ -21,6 +21,7 @@ class RevenueOut(BaseModel):
 
 
 class GrossMarginOut(BaseModel):
+    total_revenue: Decimal
     revenue_with_known_cost: Decimal
     cogs: Decimal
     gross_profit: Decimal
@@ -66,6 +67,7 @@ class StockCoverOut(BaseModel):
     stock_on_hand: int
     units_sold_in_period: int
     cover_days: Decimal | None
+    revenue_in_period: Decimal
 
     model_config = {"from_attributes": True}
 
@@ -74,6 +76,7 @@ class DeadStockOut(BaseModel):
     product_id: uuid.UUID
     name: str
     stock_on_hand: int
+    value_at_cost: Decimal | None
 
     model_config = {"from_attributes": True}
 
@@ -92,5 +95,35 @@ class RetailOperationsOut(BaseModel):
     dead_stock: list[DeadStockOut]
     inventory_value: InventoryValueOut
     sell_through_rate: Decimal | None
+
+    model_config = {"from_attributes": True}
+
+
+class FindingOut(BaseModel):
+    type: str
+    severity: str
+    message: str
+    evidence: dict
+    rule_id: str
+    rule_version: int
+
+    model_config = {"from_attributes": True}
+
+
+class RecommendationOut(BaseModel):
+    finding_type: str
+    severity: str
+    title: str
+    description: str
+    evidence: dict
+    impact_score: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class FindingsOut(BaseModel):
+    period: PeriodOut
+    findings: list[FindingOut]
+    recommendations: list[RecommendationOut]
 
     model_config = {"from_attributes": True}
