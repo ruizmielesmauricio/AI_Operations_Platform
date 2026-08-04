@@ -63,3 +63,15 @@ class InventoryMovementRepository:
             )
         )
         self.session.flush()
+
+    def list_product_ids_by_import_record_id(self, business_id: uuid.UUID, import_record_id: uuid.UUID) -> set[uuid.UUID]:
+        """Read before app/imports/importer.py's _undo_inventory_import
+        deletes these rows — Stage C12 needs to know which products an
+        undo touched, to refresh their low-stock alerts afterward."""
+        rows = self.session.scalars(
+            select(InventoryMovement.product_id).where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.import_record_id == import_record_id,
+            )
+        )
+        return set(rows)

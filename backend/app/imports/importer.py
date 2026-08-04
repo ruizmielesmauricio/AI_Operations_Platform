@@ -27,6 +27,7 @@ from app.imports.exceptions import (
 from app.imports.file_parser import normalize_cell
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
+from app.application.alerts import refresh_low_stock_alerts
 from app.models.import_record import ImportRecord
 from app.models.upload import Upload
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
@@ -399,7 +400,7 @@ class ImportResult:
 
 def _write_sales(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedSaleRow]
-) -> tuple[int, dict[str, list[dict]]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     for row in parsed_rows:
         if row.total_amount_mismatch:
@@ -413,6 +414,7 @@ def _write_sales(
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
 
     rows_imported = 0
+    touched_product_ids: set[uuid.UUID] = set()
     for group in group_rows_into_sales(parsed_rows):
         sale = sale_repo.create(
             business_id=upload.business_id,
@@ -457,13 +459,14 @@ def _write_sales(
                     reason="sale",
                     reference_id=item.id,
                 )
+                touched_product_ids.add(product_id)
             rows_imported += 1
-    return rows_imported, warnings
+    return rows_imported, warnings, touched_product_ids
 
 
 def _write_inventory(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedInventoryRow]
-) -> tuple[int, dict[str, list[dict]]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
@@ -505,6 +508,7 @@ def _write_inventory(
         warnings["duplicate_product_in_file"].extend(duplicate_rows)
 
     rows_imported = 0
+    touched_product_ids: set[uuid.UUID] = set()
     for result in write_results:
         if result.delta != 0:
             movement_repo.create(
@@ -514,8 +518,9 @@ def _write_inventory(
                 reason="adjustment",
                 import_record_id=import_record.id,
             )
+            touched_product_ids.add(result.product_id)
         rows_imported += 1
-    return rows_imported, warnings
+    return rows_imported, warnings, touched_product_ids
 
 
 def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
@@ -566,9 +571,9 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
             parsed_rows.append(result)
 
     if upload.entity_type == "sales":
-        rows_imported, warnings = _write_sales(db, upload, import_record, parsed_rows)
+        rows_imported, warnings, touched_product_ids = _write_sales(db, upload, import_record, parsed_rows)
     else:
-        rows_imported, warnings = _write_inventory(db, upload, import_record, parsed_rows)
+        rows_imported, warnings, touched_product_ids = _write_inventory(db, upload, import_record, parsed_rows)
 
     rejection_summary = _build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)
@@ -597,6 +602,17 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         r2_client_module.delete_object(storage_key=upload.storage_key)
     except Exception:
         logger.exception("Failed to delete R2 object after successful import: %s", upload.storage_key)
+
+    # Stage C12 (PD-009/PR-9.1): fire low-stock alerts for whatever this
+    # import actually touched. Same "only after the main commit succeeds,
+    # never let a failure here undo or block a successful import" reasoning
+    # as the R2 cleanup right above — refresh_low_stock_alerts owns its own
+    # commit, so a failure here can't roll back the import that already
+    # committed.
+    try:
+        refresh_low_stock_alerts(db, business_id=upload.business_id, product_ids=touched_product_ids)
+    except Exception:
+        logger.exception("Failed to refresh low-stock alerts after import for business: %s", upload.business_id)
 
     return ImportResult(
         import_record_id=import_record.id,
@@ -627,22 +643,33 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
         raise ImportSupersededByLaterInventoryImport()
 
     if import_record.entity_type == "sales":
-        _undo_sales_import(db, import_record)
+        touched_product_ids = _undo_sales_import(db, import_record)
     else:
-        _undo_inventory_import(db, import_record)
+        touched_product_ids = _undo_inventory_import(db, import_record)
 
     ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
     db.commit()
+
+    # Stage C12 (PD-009/PR-9.1): undoing an import changes stock too (a
+    # sale reversal restores it, an adjustment reversal reverts it) — same
+    # "after the real commit, never let a failure here undo a successful
+    # undo" reasoning as run_import's own refresh call.
+    try:
+        refresh_low_stock_alerts(db, business_id=import_record.business_id, product_ids=touched_product_ids)
+    except Exception:
+        logger.exception("Failed to refresh low-stock alerts after undo for business: %s", import_record.business_id)
+
     return import_record
 
 
-def _undo_sales_import(db: Session, import_record: ImportRecord) -> None:
+def _undo_sales_import(db: Session, import_record: ImportRecord) -> set[uuid.UUID]:
     sale_repo = SaleRepository(db)
     sale_item_repo = SaleItemRepository(db)
     movement_repo = InventoryMovementRepository(db)
 
     sale_ids = sale_repo.list_ids_by_import_record(import_record.business_id, import_record.id)
     sale_item_ids = sale_item_repo.list_ids_by_sale_ids(sale_ids)
+    touched_product_ids = sale_item_repo.list_product_ids_by_sale_ids(sale_ids)
 
     # FK-dependency order, explicit bulk deletes rather than relying on
     # cascade — the test suite runs SQLite, which doesn't enforce FKs by
@@ -655,10 +682,17 @@ def _undo_sales_import(db: Session, import_record: ImportRecord) -> None:
     # place — proving "no other references anywhere" needs a cross-import
     # scan, and the user may have already edited that product since.
 
+    return touched_product_ids
 
-def _undo_inventory_import(db: Session, import_record: ImportRecord) -> None:
+
+def _undo_inventory_import(db: Session, import_record: ImportRecord) -> set[uuid.UUID]:
+    movement_repo = InventoryMovementRepository(db)
+    touched_product_ids = movement_repo.list_product_ids_by_import_record_id(
+        import_record.business_id, import_record.id
+    )
     # No Sale/SaleItem cascade — an inventory import only ever writes
     # "adjustment" InventoryMovement rows, traced directly by
     # import_record_id (reference_id is sales-only). Products left in
     # place, same reasoning as the sales path.
-    InventoryMovementRepository(db).bulk_delete_by_import_record_id(import_record.business_id, import_record.id)
+    movement_repo.bulk_delete_by_import_record_id(import_record.business_id, import_record.id)
+    return touched_product_ids

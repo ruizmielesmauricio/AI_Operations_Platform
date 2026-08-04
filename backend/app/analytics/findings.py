@@ -203,6 +203,25 @@ def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[F
     return findings
 
 
+def resolve_low_stock_threshold(
+    product_threshold: Decimal | None,
+    category_threshold: Decimal | None,
+) -> Decimal:
+    """Product-level override wins; falls back to the category-level
+    override, then to the global default (PR-9.3 — "let the owner
+    configure the threshold per product or category; default provided if
+    unset"). Kept next to evaluate_low_stock rather than in
+    app/application/alerts.py, since it's the same deterministic-rule
+    layer (no DB, no I/O) — Stage C12 just looks the two values up and
+    passes them in.
+    """
+    if product_threshold is not None:
+        return product_threshold
+    if category_threshold is not None:
+        return category_threshold
+    return DEFAULT_LOW_STOCK_THRESHOLD_DAYS
+
+
 def evaluate_low_stock(
     stock_cover: list[StockCoverRow],
     *,

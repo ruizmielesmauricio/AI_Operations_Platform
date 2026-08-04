@@ -41,6 +41,19 @@ class SaleItemRepository:
             return []
         return list(self.session.scalars(select(SaleItem.id).where(SaleItem.sale_id.in_(sale_ids))))
 
+    def list_product_ids_by_sale_ids(self, sale_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+        """Read before app/imports/importer.py's _undo_sales_import deletes
+        these rows — Stage C12 needs to know which products an undo
+        touched, to refresh their low-stock alerts afterward. product_id
+        is nullable on SaleItem, so unmatched-product rows are excluded
+        (nothing to re-evaluate for a product that was never identified)."""
+        if not sale_ids:
+            return set()
+        rows = self.session.scalars(
+            select(SaleItem.product_id).where(SaleItem.sale_id.in_(sale_ids), SaleItem.product_id.isnot(None))
+        )
+        return set(rows)
+
     def bulk_delete_by_sale_ids(self, sale_ids: list[uuid.UUID]) -> None:
         if not sale_ids:
             return

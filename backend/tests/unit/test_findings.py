@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from app.analytics.financial import GrossMarginResult, ProductMarginRow, RevenueTrend
 from app.analytics.findings import (
+    DEFAULT_LOW_STOCK_THRESHOLD_DAYS,
     Finding,
     build_recommendations,
     evaluate_dead_stock,
@@ -11,6 +12,7 @@ from app.analytics.findings import (
     evaluate_low_stock,
     evaluate_products_at_loss,
     evaluate_revenue_decline,
+    resolve_low_stock_threshold,
 )
 from app.analytics.retail import DeadStockEntry, StockCoverRow
 
@@ -212,3 +214,18 @@ def test_build_recommendations_traces_every_recommendation_back_to_its_finding_t
     recommendations = build_recommendations(findings)
     assert recommendations[0].finding_type == "revenue_decline"
     assert recommendations[0].title  # comes from the approved library, non-empty
+
+
+# --- resolve_low_stock_threshold (Stage C12, PR-9.3) -----------------------
+
+
+def test_resolve_low_stock_threshold_product_override_wins():
+    assert resolve_low_stock_threshold(Decimal("3"), Decimal("14")) == Decimal("3")
+
+
+def test_resolve_low_stock_threshold_falls_back_to_category():
+    assert resolve_low_stock_threshold(None, Decimal("14")) == Decimal("14")
+
+
+def test_resolve_low_stock_threshold_falls_back_to_default_when_both_unset():
+    assert resolve_low_stock_threshold(None, None) == DEFAULT_LOW_STOCK_THRESHOLD_DAYS

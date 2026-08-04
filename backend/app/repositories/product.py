@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.product import Product
+from app.models.product import Product, ProductCategory
 
 
 class ProductRepository:
@@ -38,3 +38,17 @@ class ProductRepository:
         self.session.add(product)
         self.session.flush()
         return product
+
+
+class ProductCategoryRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list_for_business(self, business_id: uuid.UUID) -> list[ProductCategory]:
+        # One query for the whole catalogue's categories, same reasoning as
+        # ProductRepository.list_for_business — Stage C12's threshold
+        # resolution needs every category's low_stock_threshold_days at
+        # once, not per-product.
+        return list(
+            self.session.scalars(select(ProductCategory).where(ProductCategory.business_id == business_id))
+        )

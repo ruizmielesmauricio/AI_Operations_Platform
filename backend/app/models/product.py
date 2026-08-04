@@ -8,6 +8,10 @@ class ProductCategory(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     __tablename__ = "product_categories"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Falls back to DEFAULT_LOW_STOCK_THRESHOLD_DAYS (app/analytics/findings.py)
+    # when unset, and to a product-level override when that's set instead —
+    # see resolve_low_stock_threshold. Stage C12, PR-9.3.
+    low_stock_threshold_days: Mapped[object | None] = mapped_column(DECIMAL(6, 2), nullable=True)
 
 
 class Product(Base, PKMixin, TenantScopedMixin, TimestampMixin):
@@ -25,3 +29,6 @@ class Product(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     )
     cost_price: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
     sell_price: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+    # Overrides the category-level threshold (and the global default) when
+    # set. Stage C12, PR-9.3 — see resolve_low_stock_threshold.
+    low_stock_threshold_days: Mapped[object | None] = mapped_column(DECIMAL(6, 2), nullable=True)
