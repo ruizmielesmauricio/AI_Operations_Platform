@@ -19,19 +19,34 @@ def _client():
 
 
 def create_checkout_session(
-    *, business_id: uuid.UUID, business_email: str, success_url: str, cancel_url: str
+    *,
+    business_id: uuid.UUID,
+    business_email: str,
+    success_url: str,
+    cancel_url: str,
+    existing_stripe_customer_id: str | None = None,
 ) -> stripe.checkout.Session:
     settings = get_settings()
+    # Reuse the business's existing Stripe Customer (e.g. resubscribing
+    # after a cancellation) rather than customer_email, which would mint a
+    # new Customer object every time.
+    customer_kwargs = (
+        {"customer": existing_stripe_customer_id}
+        if existing_stripe_customer_id
+        else {"customer_email": business_email}
+    )
     return _client().checkout.Session.create(
         mode="subscription",
-        payment_method_types=["card", "sepa_debit"],
+        # No payment_method_types: Stripe shows whichever methods are
+        # enabled for this account in the Dashboard and eligible for the
+        # customer, rather than a fixed list baked into the integration.
         line_items=[{"price": settings.stripe_price_id, "quantity": 1}],
-        customer_email=business_email,
         automatic_tax={"enabled": True},
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={"business_id": str(business_id)},
         subscription_data={"metadata": {"business_id": str(business_id)}},
+        **customer_kwargs,
     )
 
 
@@ -44,11 +59,12 @@ def create_billing_portal_session(
     )
 
 
-def construct_webhook_event(payload: bytes, signature_header: str) -> stripe.Event:
+def construct_webhook_event(payload: bytes, signature_header: str) -> dict:
     settings = get_settings()
     try:
-        return stripe.Webhook.construct_event(
+        event = stripe.Webhook.construct_event(
             payload, signature_header, settings.stripe_webhook_secret
         )
     except stripe.SignatureVerificationError as exc:
         raise InvalidWebhookSignature(str(exc)) from exc
+    return event.to_dict()

@@ -41,21 +41,31 @@ class SubscriptionRepository:
     def upsert_from_stripe(
         self,
         *,
+        business_id: uuid.UUID,
         stripe_customer_id: str,
-        stripe_subscription_id: str,
-        status: str,
-        current_period_end: datetime | None,
+        stripe_subscription_id: str | None = None,
+        status: str | None = None,
+        current_period_end: datetime | None = None,
     ) -> Subscription:
-        subscription = self.get_by_stripe_customer_id(stripe_customer_id)
+        """One row per business (enforced by a DB unique constraint), keyed
+        on business_id rather than stripe_customer_id — resubscribing after
+        a cancellation gets a brand new Stripe Customer, so the customer id
+        alone can't tell "this business already has a row" from "this is a
+        new business". Fields left as None (e.g. checkout.session.completed
+        knows the customer but not yet a subscription or its status) are
+        left untouched on an existing row, or default sensibly on a new one.
+        """
+        subscription = self.get_by_business_id(business_id)
         if subscription is None:
-            raise ValueError(
-                f"No subscription row for Stripe customer {stripe_customer_id}; "
-                "checkout.session.completed must be processed before subscription "
-                "lifecycle events."
-            )
-        subscription.stripe_subscription_id = stripe_subscription_id
-        subscription.status = status
-        subscription.current_period_end = current_period_end
+            subscription = Subscription(business_id=business_id, status=status or "incomplete")
+            self.session.add(subscription)
+        subscription.stripe_customer_id = stripe_customer_id
+        if stripe_subscription_id is not None:
+            subscription.stripe_subscription_id = stripe_subscription_id
+        if status is not None:
+            subscription.status = status
+        if current_period_end is not None:
+            subscription.current_period_end = current_period_end
         self.session.flush()
         return subscription
 

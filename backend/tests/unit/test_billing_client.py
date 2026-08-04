@@ -53,7 +53,7 @@ def test_construct_webhook_event_rejects_a_bad_signature():
         client.construct_webhook_event(payload, "t=123,v1=deadbeef")
 
 
-def test_create_checkout_session_offers_card_and_sepa_debit(monkeypatch):
+def test_create_checkout_session_does_not_hardcode_payment_method_types(monkeypatch):
     captured = {}
 
     def _fake_create(**kwargs):
@@ -71,6 +71,33 @@ def test_create_checkout_session_offers_card_and_sepa_debit(monkeypatch):
 
     assert session.url == "https://checkout.stripe.com/test"
     assert captured["mode"] == "subscription"
-    assert captured["payment_method_types"] == ["card", "sepa_debit"]
+    # Deliberately absent: omitting it lets Stripe show whichever payment
+    # methods are enabled in the Dashboard, per Stripe's own guidance.
+    assert "payment_method_types" not in captured
     assert captured["automatic_tax"] == {"enabled": True}
     assert captured["line_items"] == [{"price": "price_test_123", "quantity": 1}]
+    assert captured["customer_email"] == "owner@example.com"
+    assert "customer" not in captured
+
+
+def test_create_checkout_session_reuses_an_existing_stripe_customer(monkeypatch):
+    captured = {}
+
+    def _fake_create(**kwargs):
+        captured.update(kwargs)
+        return type("FakeSession", (), {"url": "https://checkout.stripe.com/test"})()
+
+    monkeypatch.setattr(stripe.checkout.Session, "create", _fake_create)
+
+    client.create_checkout_session(
+        business_id=uuid.uuid4(),
+        business_email="owner@example.com",
+        success_url="https://app.example.com/success",
+        cancel_url="https://app.example.com/cancel",
+        existing_stripe_customer_id="cus_existing",
+    )
+
+    # customer (not customer_email) so Checkout attaches to the business's
+    # existing Stripe Customer instead of minting a new one.
+    assert captured["customer"] == "cus_existing"
+    assert "customer_email" not in captured

@@ -27,6 +27,10 @@ npm-debug.log*
 *.pgdata/
 postgres-data/
 
+# --- Local corporate/network CA certs for Docker builds (machine-specific) ---
+backend/certs/*.crt
+frontend/certs/*.crt
+
 # --- Editor / OS ---
 .vscode/
 .idea/

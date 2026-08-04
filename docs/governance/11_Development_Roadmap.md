@@ -1,10 +1,10 @@
 # 11_Development_Roadmap.md
 
-**Version:** 0.7 (Draft)
+**Version:** 1.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 04/08/2026
 
 ---
 
@@ -173,6 +173,55 @@ Proceed only when:
 | Tenant isolation integration tests | ED-008 |
 
 **Explicitly deferred from Phase 2:** billing, email, monitoring, multi-user roles, forecasting.
+
+---
+
+## Phase 2/3 Detail — Prototype Build Sequence
+
+The founder-agreed, ordered build checklist for the free-tier prototype (spans Phase 2 and pulls forward a few Phase 3 items — conversational agent, alerts, Stripe test mode — since testing the full service offering end-to-end was judged more valuable at this stage than strictly following the phase boundary). This is the sequence actually followed; update it in place as items complete rather than tracking progress elsewhere.
+
+**Stage A — Foundation**
+- [x] A1. Create the database (local Postgres via docker-compose)
+- [x] A2. Create the full schema — shared core, canonical entities, bicycle-shop template extension (`06_Database_Design.md`)
+- [x] A3. Authentication (Supabase Auth — backend JWT verification + frontend client)
+- [x] A4. Business signup + template selection (PR-1)
+- [x] A5. Tenant isolation enforcement + automated tests (PR-6.1/6.2, ED-008) — built now, not retrofitted
+
+**Stage B — Getting real data in**
+- [x] B6. Upload data interface (signed URL to R2)
+- [x] B7. Schema/column detection engine — alias dictionary + structural heuristics, tolerant of any POS export format (PR-2, the "critical section") — supports both `sales` and `inventory` entity types (entity type chosen explicitly at upload time, not auto-detected)
+- [x] B8. Clean data — deterministic normalisation, validation, plain-language rejected-row reporting, transactional import, undo (PR-2.6-2.11) — includes SKU/name product matching (auto-create on first sight) and inventory_movements recording per sale, needed for stock-level/popularity tracking; frontend "Run import"/"Undo" trigger UI added, and PR-2.2's manual header-row-picker escape hatch built for files auto-detection can't confidently place — both verified live end-to-end
+- [x] B8b. Inventory upload entity type — stock-count snapshot uploads reconcile against derived stock (stock is never stored directly, only summed from `inventory_movements`) by writing a single `adjustment` movement per product equal to `uploaded_count - current_derived_stock`; guards against corruption if a sales import is undone *after* a later inventory reconciliation has baked its effect into a subsequent adjustment (blocked with a clear error instead of silently under/over-counting stock) — verified via automated tests and a live end-to-end browser walkthrough exercising the undo-guard scenario for real
+
+**Stage C — The actual product value**
+- [ ] C9. Core calculations — Retail / Workshop / Financial Performance, unit-tested per formula (PR-3, ED-007)
+- [ ] C10. Findings & recommendations engine (PR-4)
+- [ ] C11. Charts/dashboard section, browser-rendered from structured API payloads, with drill-down (PR-3.3/3.4)
+- [ ] C12. Low-stock alerts — real-time, deterministic (PD-009, PR-9)
+- [ ] C13. Simple forecasting baseline (seasonal/moving average)
+- [ ] C14. Weather data API integration (free tier — relevant to Irish cycling demand)
+- [ ] C15. ML forecasting models (weather-enhanced, built on the Stage C13 baseline)
+- [ ] C16. Test forecasting model results against held-out data
+
+**Stage D — Reports**
+- [ ] D17. Background job runner / scheduler
+- [ ] D18. Weekly/monthly report generation (PR-8, PD-007, ADR-019)
+
+**Stage E — The AI layer (deliberately last — it only explains what Stages C/D already calculated)**
+- [ ] E19. Set up and connect AI Router (OpenRouter)
+- [ ] E20. Test candidate AI models under GDPR/EU compliance
+- [ ] E21. Select the quality/price threshold (ADR-015)
+- [ ] E22. Code automatic cheapest-model-above-threshold selection
+- [ ] E23. AI output-validation guardrail — blocks any numeric claim not present in the structured input (PR-5.3)
+- [ ] E24. AI explanation layer (PR-5.1)
+- [ ] E25. Conversational agent — business-data Q&A lane (PD-008, ADR-020, PR-5.6)
+- [ ] E26. Build support knowledge base content
+- [ ] E27. Conversational agent — support lane, with human handoff when unresolved (PR-5.7)
+
+**Stage F — Payments and wrap-up**
+- [x] F28. Simulate Stripe payments (test mode — PR-7)
+- [ ] F29. Test prototype end-to-end (Gate B checklist, below)
+- [ ] F30. Video tutorials — deferred past prototype validation; UI will likely change once tested
 
 ---
 
@@ -413,3 +462,9 @@ This work is governed by PD-007 and ADR-019.
 | 0.5 | 30/07/2026 | Fixed the Phase 3 "Scheduled reporting" line, which incorrectly described email delivery — corrected to match the accepted in-app-only design (PD-007/ADR-019). |
 | 0.6 | 30/07/2026 | Renamed "Change 8 Delivery Work — Scheduled Reporting" to "Phase 3 Detail — Scheduled Reporting Implementation" and labelled it as elaboration on the Phase 3 table, so the heading follows this document's Phase/Gate structure instead of an internal work-item name. |
 | 0.7 | 30/07/2026 | Added the conversational agent's business Q&A and product/support lanes, and low-stock alerting, to Phase 3 (PD-008, PD-009, ADR-020). Named weather-augmented ML forecasting as the concrete example of Phase 7's "Advanced forecasting" trigger. |
+| 0.8 | 30/07/2026 | Added "Phase 2/3 Detail — Prototype Build Sequence": the founder-agreed, ordered 30-item checklist (Stages A-F) actually followed while building the prototype, tracked in place with checkboxes. |
+| 0.9 | 03/08/2026 | Marked F28 (Stripe test-mode payments) complete — Checkout, webhooks, Customer Portal, subscription/invoice edge cases, and dispute handling all verified via live Stripe test-mode testing on localhost. |
+| 1.0 | 03/08/2026 | Marked B6 (upload interface) and B7 (schema/column detection engine) complete. B7 v1 is scoped to sales transactions only, with entity type chosen explicitly at upload time; alias dictionary + structural heuristics + confirmation UI + mapping-profile reuse (PR-2.1-2.5) all verified via automated tests and a live end-to-end browser walkthrough, including reuse on a second upload from the same source. |
+| 1.1 | 03/08/2026 | Marked B8 (clean data / transactional import + undo, PR-2.6-2.11) complete. Includes SKU/name product matching (auto-create on first sight, never falling back from a SKU miss to a name guess) and inventory_movements recording per sale — the previously-missing link needed for stock-level and product-popularity tracking. Verified via automated tests and a live API walkthrough (no frontend trigger UI built yet — flagged as a follow-up). |
+| 1.2 | 03/08/2026 | Closed the two follow-ups flagged in 1.1/1.0: (1) added the frontend "Run import"/"Undo" trigger UI, exposing each upload's import summary and rejected-row reasons; (2) built PR-2.2's manual header-row-picker fallback for files where auto-detection can't confidently place the header, including persisting the picked row so B8's import step (which re-detects fresh each time) falls back to it instead of failing on the same file it already needed help with. Both verified via automated tests and a live end-to-end browser walkthrough. |
+| 1.3 | 04/08/2026 | Added B8b: the `inventory` entity type (stock-count snapshot uploads), extending B7's detection engine and B8's import/undo pipeline beyond sales-only. Reconciles a snapshot against derived stock via a single adjustment movement per product, and closes an undo-ordering hazard found during design review that could otherwise let undoing a sales import silently corrupt stock after a later inventory reconciliation. Verified via 156 passing automated tests (unit, integration, tenant isolation) and a live end-to-end browser walkthrough that deliberately exercised the undo-guard bug scenario, confirming it is correctly blocked rather than silently succeeding. |

@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -12,8 +11,7 @@ def _fake_event(event_id: str, event_type: str, obj: dict) -> dict:
     return {"id": event_id, "type": event_type, "data": {"object": obj}}
 
 
-def test_checkout_session_completed_creates_subscription(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_checkout_session_completed_creates_subscription(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_checkout_1",
         "checkout.session.completed",
@@ -29,8 +27,7 @@ def test_checkout_session_completed_creates_subscription(db_session, monkeypatch
     assert subscription.status == "incomplete"
 
 
-def test_subscription_updated_syncs_status_and_period_end(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_subscription_updated_syncs_status_and_period_end(db_session, business_id, monkeypatch):
     SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_456")
     db_session.commit()
 
@@ -43,6 +40,7 @@ def test_subscription_updated_syncs_status_and_period_end(db_session, monkeypatc
             "customer": "cus_456",
             "status": "active",
             "items": {"data": [{"current_period_end": int(period_end.timestamp())}]},
+            "metadata": {"business_id": str(business_id)},
         },
     )
     monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
@@ -52,18 +50,82 @@ def test_subscription_updated_syncs_status_and_period_end(db_session, monkeypatc
     subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_456")
     assert subscription.status == "active"
     assert subscription.stripe_subscription_id == "sub_456"
-    assert subscription.current_period_end == period_end
+    # SQLite (this test's DB) drops tzinfo on read-back, unlike the Postgres
+    # this app actually runs on — normalize before comparing.
+    stored_period_end = subscription.current_period_end.replace(tzinfo=timezone.utc)
+    assert stored_period_end == period_end
 
 
-def test_payment_failure_marks_past_due(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_subscription_created_before_checkout_completed_creates_subscription(
+    db_session, business_id, monkeypatch
+):
+    # Stripe does not guarantee webhook delivery order; this event has been
+    # observed arriving before checkout.session.completed for the same
+    # purchase.
+    event = _fake_event(
+        "evt_sub_created_1",
+        "customer.subscription.created",
+        {
+            "id": "sub_early",
+            "customer": "cus_early",
+            "status": "active",
+            "items": {"data": []},
+            "metadata": {"business_id": str(business_id)},
+        },
+    )
+    monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
+
+    service.handle_webhook_event(db_session, b"{}", "sig")
+
+    subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_early")
+    assert subscription is not None
+    assert subscription.business_id == business_id
+    assert subscription.status == "active"
+    assert subscription.stripe_subscription_id == "sub_early"
+
+
+@pytest.mark.parametrize(
+    "parent",
+    [
+        {"subscription_details": None},
+        None,
+    ],
+    ids=["subscription_details_none", "parent_none"],
+)
+def test_one_off_invoice_payment_failure_is_ignored(db_session, monkeypatch, parent):
+    # A one-off invoice (invoice items billed directly, no subscription
+    # involved) has no real subscription_details. Observed live via `stripe
+    # trigger invoice.payment_failed`, which produced both of these shapes
+    # across separate runs — both previously crashed the webhook with a 500.
+    event = _fake_event(
+        "evt_invoice_failed_oneoff",
+        "invoice.payment_failed",
+        {"customer": "cus_oneoff", "lines": {"data": []}, "parent": parent},
+    )
+    monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
+
+    service.handle_webhook_event(db_session, b"{}", "sig")  # must not raise
+
+    assert SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_oneoff") is None
+
+
+def test_payment_failure_marks_past_due(db_session, business_id, monkeypatch):
     SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_789")
     db_session.commit()
 
     event = _fake_event(
         "evt_invoice_failed_1",
         "invoice.payment_failed",
-        {"customer": "cus_789", "subscription": "sub_789", "lines": {"data": []}},
+        {
+            "customer": "cus_789",
+            "lines": {"data": []},
+            "parent": {
+                "subscription_details": {
+                    "subscription": "sub_789",
+                    "metadata": {"business_id": str(business_id)},
+                }
+            },
+        },
     )
     monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
 
@@ -73,8 +135,34 @@ def test_payment_failure_marks_past_due(db_session, monkeypatch):
     assert subscription.status == "past_due"
 
 
-def test_duplicate_event_id_is_not_reapplied(db_session, monkeypatch):
-    business_id = uuid.uuid4()
+def test_dispute_created_is_logged_and_does_not_touch_subscription_status(
+    db_session, business_id, monkeypatch, caplog
+):
+    SubscriptionRepository(db_session).create(business_id=business_id, stripe_customer_id="cus_disputed")
+    db_session.commit()
+
+    event = _fake_event(
+        "evt_dispute_1",
+        "charge.dispute.created",
+        {
+            "id": "du_1",
+            "charge": "ch_1",
+            "amount": 100,
+            "reason": "fraudulent",
+            "status": "warning_needs_response",
+        },
+    )
+    monkeypatch.setattr(client, "construct_webhook_event", lambda payload, sig: event)
+
+    with caplog.at_level("WARNING"):
+        service.handle_webhook_event(db_session, b"{}", "sig")  # must not raise
+
+    assert "du_1" in caplog.text
+    subscription = SubscriptionRepository(db_session).get_by_stripe_customer_id("cus_disputed")
+    assert subscription.status == "incomplete"  # unchanged
+
+
+def test_duplicate_event_id_is_not_reapplied(db_session, business_id, monkeypatch):
     event = _fake_event(
         "evt_dup_1",
         "checkout.session.completed",
