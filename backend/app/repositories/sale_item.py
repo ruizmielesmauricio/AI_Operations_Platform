@@ -1,10 +1,12 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models.sale import SaleItem
+from app.analytics.types import ProductPeriodAggregate
+from app.models.sale import Sale, SaleItem
 
 
 class SaleItemRepository:
@@ -44,3 +46,51 @@ class SaleItemRepository:
             return
         self.session.execute(delete(SaleItem).where(SaleItem.sale_id.in_(sale_ids)))
         self.session.flush()
+
+    def aggregate_by_product_in_range(
+        self, business_id: uuid.UUID, start: datetime, end: datetime
+    ) -> list[ProductPeriodAggregate]:
+        """Per-product units/revenue/cost totals for [start, end), one
+        query grouped by product_id (mirrors
+        InventoryMovementRepository.sum_by_product_ids). Line items with no
+        matched product_id (SaleItem.product_id is nullable) can't be
+        attributed to any product and are excluded — a product missing
+        from the result had either no sales or only unmatched-product
+        sales in the period; callers must default missing keys themselves.
+
+        revenue_with_known_cost/cogs only sum line items that have a
+        cost_price_at_sale, so a product's margin is never computed
+        against revenue it can't be matched to a cost for (PR-3.6).
+        """
+        known_cost = SaleItem.cost_price_at_sale.isnot(None)
+        line_revenue = SaleItem.quantity * SaleItem.unit_price
+        line_cost = SaleItem.quantity * SaleItem.cost_price_at_sale
+
+        rows = self.session.execute(
+            select(
+                SaleItem.product_id,
+                func.sum(SaleItem.quantity),
+                func.sum(line_revenue),
+                func.sum(case((known_cost, line_revenue), else_=0)),
+                func.sum(case((known_cost, line_cost), else_=0)),
+            )
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(
+                SaleItem.business_id == business_id,
+                SaleItem.product_id.isnot(None),
+                Sale.sold_at >= start,
+                Sale.sold_at < end,
+            )
+            .group_by(SaleItem.product_id)
+        ).all()
+
+        return [
+            ProductPeriodAggregate(
+                product_id=product_id,
+                units_sold=int(units_sold),
+                revenue=Decimal(revenue),
+                revenue_with_known_cost=Decimal(revenue_with_known_cost),
+                cogs=Decimal(cogs),
+            )
+            for product_id, units_sold, revenue, revenue_with_known_cost, cogs in rows
+        ]

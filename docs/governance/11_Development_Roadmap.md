@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 1.4 (Draft)
+**Version:** 1.5 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -195,7 +195,7 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 
 **Stage C — The actual product value**
 - [x] C8b. Schema foundation for multi-vertical calculations (ADR-016, ADR-022, ADR-023) — `repairs`/`repair_parts_used` (bicycle-specific, unused) replaced by the canonical `production_events`/`production_event_inputs`/`production_event_outputs` pattern, covering bike-shop repairs and cafe kitchen production/recipes under one shape; added canonical `inventory_lots` (lot/batch + expiry-date tracking, requested by a real pharmacy prospect) and a pharmacy `prescription_details` template extension. Models + migration only — no repository/service/API/calculation logic yet, that's C9. Verified via the full test suite, the dedicated migration-chain structural test, and applying to local dev Postgres.
-- [ ] C9. Core calculations — Retail / Workshop / Financial Performance, unit-tested per formula (PR-3, ED-007)
+- [x] C9. Core calculations — Retail + Financial Performance, unit-tested per formula (PR-3, ED-007). Workshop (repair) profitability deferred until `production_events` gets a real-time entry workflow and starts generating data. Revenue, gross margin (with a PR-3.5/3.6 cost-data-completeness flag and PR-3.6 revenue/profit distinction), and top/bottom-margin products cover Financial Performance; stock cover, sell-through rate, dead-stock detection, and inventory value at cost cover Retail Operations. Pure formulas live in `app/analytics/`, orchestration in `app/application/`, exposed via two new tenant-scoped GET endpoints. Verified via unit tests on every formula plus an integration test against a real (SQLite) database.
 - [ ] C10. Findings & recommendations engine (PR-4)
 - [ ] C11. Charts/dashboard section, browser-rendered from structured API payloads, with drill-down (PR-3.3/3.4)
 - [ ] C12. Low-stock alerts — real-time, deterministic (PD-009, PR-9)
@@ -470,3 +470,4 @@ This work is governed by PD-007 and ADR-019.
 | 1.2 | 03/08/2026 | Closed the two follow-ups flagged in 1.1/1.0: (1) added the frontend "Run import"/"Undo" trigger UI, exposing each upload's import summary and rejected-row reasons; (2) built PR-2.2's manual header-row-picker fallback for files where auto-detection can't confidently place the header, including persisting the picked row so B8's import step (which re-detects fresh each time) falls back to it instead of failing on the same file it already needed help with. Both verified via automated tests and a live end-to-end browser walkthrough. |
 | 1.3 | 04/08/2026 | Added B8b: the `inventory` entity type (stock-count snapshot uploads), extending B7's detection engine and B8's import/undo pipeline beyond sales-only. Reconciles a snapshot against derived stock via a single adjustment movement per product, and closes an undo-ordering hazard found during design review that could otherwise let undoing a sales import silently corrupt stock after a later inventory reconciliation. Verified via 156 passing automated tests (unit, integration, tenant isolation) and a live end-to-end browser walkthrough that deliberately exercised the undo-guard bug scenario, confirming it is correctly blocked rather than silently succeeding. |
 | 1.4 | 04/08/2026 | Added C8b: schema foundation for multi-vertical calculations. Accepted ADR-016 (Production Events, replacing bicycle-specific `repairs`/`repair_parts_used`), added ADR-022 (`inventory_lots`) and ADR-023 (pharmacy `prescription_details`). Checked off the Phase 0 housekeeping item this depended on; retired the now-moot Phase 7 "Production Events generalisation" trigger row (completed early). Schema/migration only — Stage C9 calculation work is next. |
+| 1.5 | 04/08/2026 | Marked C9 complete: deterministic core calculations for Retail Operations and Financial Performance (PR-3), reading from `sales`/`sale_items`/`inventory_movements`/`products`. Workshop (repair) profitability intentionally deferred until `production_events` has a real-time entry workflow generating data. Every formula unit-tested (ED-007); verified against a real database via a new integration test. |
