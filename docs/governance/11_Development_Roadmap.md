@@ -1,6 +1,6 @@
 # 11_Development_Roadmap.md
 
-**Version:** 1.3 (Draft)
+**Version:** 1.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
@@ -109,8 +109,8 @@ The most important sequencing decision: **customer discovery comes before seriou
 
 - [x] Consolidate the former decision registers into `12_Decision_Register.md`
 - [x] Update `01_Project_Vision.md` to remove the import-template guidance (superseded by PD-006; replaced by the "Low-Friction Use" product principle)
-- [ ] Update `06_Database_Design.md` and `10_Product_Requirements.md` if ADR-016 is accepted
-- [ ] Generate remaining individual decision files in `docs/decisions/`
+- [x] Update `06_Database_Design.md` and `10_Product_Requirements.md` if ADR-016 is accepted — done 04/08/2026; `10_Product_Requirements.md` reviewed and needed no change (no repairs-specific content exists there)
+- [ ] Generate remaining individual decision files in `docs/decisions/` — partially started 04/08/2026: ADR-016, ADR-022, ADR-023 now have files; full historical backfill remains
 
 ---
 
@@ -194,6 +194,7 @@ The founder-agreed, ordered build checklist for the free-tier prototype (spans P
 - [x] B8b. Inventory upload entity type — stock-count snapshot uploads reconcile against derived stock (stock is never stored directly, only summed from `inventory_movements`) by writing a single `adjustment` movement per product equal to `uploaded_count - current_derived_stock`; guards against corruption if a sales import is undone *after* a later inventory reconciliation has baked its effect into a subsequent adjustment (blocked with a clear error instead of silently under/over-counting stock) — verified via automated tests and a live end-to-end browser walkthrough exercising the undo-guard scenario for real
 
 **Stage C — The actual product value**
+- [x] C8b. Schema foundation for multi-vertical calculations (ADR-016, ADR-022, ADR-023) — `repairs`/`repair_parts_used` (bicycle-specific, unused) replaced by the canonical `production_events`/`production_event_inputs`/`production_event_outputs` pattern, covering bike-shop repairs and cafe kitchen production/recipes under one shape; added canonical `inventory_lots` (lot/batch + expiry-date tracking, requested by a real pharmacy prospect) and a pharmacy `prescription_details` template extension. Models + migration only — no repository/service/API/calculation logic yet, that's C9. Verified via the full test suite, the dedicated migration-chain structural test, and applying to local dev Postgres.
 - [ ] C9. Core calculations — Retail / Workshop / Financial Performance, unit-tested per formula (PR-3, ED-007)
 - [ ] C10. Findings & recommendations engine (PR-4)
 - [ ] C11. Charts/dashboard section, browser-rendered from structured API payloads, with drill-down (PR-3.3/3.4)
@@ -353,7 +354,7 @@ Proceed only when:
 | Direct POS integrations | Customer demand for the specific POS |
 | Automated recurring imports | Manual upload friction proven |
 | Second business template | Validated demand in a new vertical |
-| Production Events generalisation (ADR-016) | Second template being built |
+| ~~Production Events generalisation (ADR-016)~~ | ~~Second template being built~~ — completed early, in Phase 2/3 (Stage C8b, 04/08/2026), once cafe and pharmacy were both being actively scoped simultaneously rather than waiting for Phase 7 |
 | Advanced forecasting (e.g. ML models incorporating external signals such as weather — relevant to Irish cycling demand) | Simple methods proven insufficient |
 | Multi-location support | Customer with multiple locations |
 | Custom/additional report scheduling (beyond the default weekly/monthly cadence in PR-8) | Requested repeatedly |
@@ -468,3 +469,4 @@ This work is governed by PD-007 and ADR-019.
 | 1.1 | 03/08/2026 | Marked B8 (clean data / transactional import + undo, PR-2.6-2.11) complete. Includes SKU/name product matching (auto-create on first sight, never falling back from a SKU miss to a name guess) and inventory_movements recording per sale — the previously-missing link needed for stock-level and product-popularity tracking. Verified via automated tests and a live API walkthrough (no frontend trigger UI built yet — flagged as a follow-up). |
 | 1.2 | 03/08/2026 | Closed the two follow-ups flagged in 1.1/1.0: (1) added the frontend "Run import"/"Undo" trigger UI, exposing each upload's import summary and rejected-row reasons; (2) built PR-2.2's manual header-row-picker fallback for files where auto-detection can't confidently place the header, including persisting the picked row so B8's import step (which re-detects fresh each time) falls back to it instead of failing on the same file it already needed help with. Both verified via automated tests and a live end-to-end browser walkthrough. |
 | 1.3 | 04/08/2026 | Added B8b: the `inventory` entity type (stock-count snapshot uploads), extending B7's detection engine and B8's import/undo pipeline beyond sales-only. Reconciles a snapshot against derived stock via a single adjustment movement per product, and closes an undo-ordering hazard found during design review that could otherwise let undoing a sales import silently corrupt stock after a later inventory reconciliation. Verified via 156 passing automated tests (unit, integration, tenant isolation) and a live end-to-end browser walkthrough that deliberately exercised the undo-guard bug scenario, confirming it is correctly blocked rather than silently succeeding. |
+| 1.4 | 04/08/2026 | Added C8b: schema foundation for multi-vertical calculations. Accepted ADR-016 (Production Events, replacing bicycle-specific `repairs`/`repair_parts_used`), added ADR-022 (`inventory_lots`) and ADR-023 (pharmacy `prescription_details`). Checked off the Phase 0 housekeeping item this depended on; retired the now-moot Phase 7 "Production Events generalisation" trigger row (completed early). Schema/migration only — Stage C9 calculation work is next. |

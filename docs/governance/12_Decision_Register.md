@@ -104,6 +104,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-007 | Generate separate weekly and monthly performance reports, delivered **in-app only — never by email** — as seven-day views with notifications; use a reusable deterministic template and offer PDF/Word only on explicit request | Accepted | new |
 | PD-008 | Extend the in-app AI agent to handle three categories of natural-language question through one chat interface — tenant business-data Q&A, scheduled-report explanation, and product/support help — with AI restricted in every case to classifying intent and phrasing an answer, never calculating or inventing one | Accepted | new |
 | PD-009 | Add low-stock alerting as a standalone, real-time in-app notification capability, generated deterministically whenever inventory data changes, independent of the weekly/monthly report cycle | Accepted | new |
+| PD-010 | Support pharmacies as a third business vertical; minimise personal/health data captured in the schema per Company Constitution Principle 7 ("Customer Data Is Sacred"). Full GDPR special-category compliance (legal basis, DPIA, retention/deletion policy) remains open — see Q-053 | Accepted | new |
 
 ---
 
@@ -126,12 +127,14 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-013 | Use Neon for managed PostgreSQL and Supabase Auth for identity only (auth-only, not database or storage) | Accepted | gov ADR-004(a) |
 | ADR-014 | Separate the platform into specialised engines: Database, Calculation, Machine Learning, AI | Accepted | gov ADR-003 |
 | ADR-015 | Route AI requests through OpenRouter behind the internal AI Provider Gateway, selecting cost-effective, EU-compliant models above a defined quality threshold | **Proposed** | new |
-| ADR-016 | Generalise repairs and recipes into a shared canonical "Production Events" entity rather than industry-specific tables | **Proposed** | new |
+| ADR-016 | Generalise repairs and recipes into a shared canonical "Production Events" entity (`production_events`/`production_event_inputs`/`production_event_outputs`) rather than industry-specific tables | Accepted | new |
 | ADR-017 | Use Cloudflare R2 (S3-compatible) for object storage | Accepted | from `04_Technology_Stack.md` |
 | ADR-018 | Deploy via Docker containers to a low-cost VPS, with managed services for stateful components | Accepted | from `07_Deployment_Guide.md` |
 | ADR-019 | Run timezone-aware weekly and monthly reporting as separate idempotent background jobs with retries, independent missing-report recovery, in-app notifications (no email), and seven-day customer-facing retention | Accepted | new |
 | ADR-020 | Route every conversational-agent question through an intent classifier that selects one of a fixed, approved set of deterministic query functions or an approved help-content knowledge base before any AI generation occurs — no free-form calculation, retrieval, or invention outside these approved sources | Accepted | new |
 | ADR-021 | Do not use Stripe Connect — the platform only charges its own tenants a subscription fee; it does not route payouts to them or facilitate payments between tenants and their customers. Revisit only if a marketplace/payout feature is explicitly planned | Rejected | new |
+| ADR-022 | Add a canonical `inventory_lots` (lot/batch + expiry-date) extension to the inventory layer, with a nullable `inventory_lot_id` FK on `inventory_movements` — not pharmacy-specific, since perishables/consumables recur across verticals | Accepted | new |
+| ADR-023 | Add a pharmacy `prescription_details` business-template extension table hanging off `sale_items` (prescription number, prescribing doctor, controlled-substance schedule) — deliberately excludes patient identity/clinical fields | Accepted | new |
 
 ---
 
@@ -156,7 +159,6 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ID | Status | What's Needed to Move to Accepted |
 |---|---|---|
 | ADR-015 (OpenRouter) | Proposed | Define a numeric quality/reliability threshold and evaluation test set (`05_AI_Architecture.md`, Model Evaluation) |
-| ADR-016 (Production Events) | Proposed | Validate the pattern against a third business type; update `06_Database_Design.md` and `10_Product_Requirements.md` |
 
 ---
 
@@ -206,3 +208,4 @@ What evidence would cause this decision to be revisited?
 | 1.5 | 30/07/2026 | Normalized the Prior ID column for PD-007/ADR-019 to match this register's citation convention (`new`, not a work-item name). Corrected `03_System_Architecture.md`, `07_Deployment_Guide.md`, `08_Cost_Analysis.md`, `10_Product_Requirements.md`, and `11_Development_Roadmap.md`, which still described PD-007 as email-delivered after the 1.4 redefinition — all now consistently state in-app-only delivery. Resolved a duplicate "PR-4" section ID in `10_Product_Requirements.md` created when the 1.4 reporting spec was added alongside the existing PR-8. Fixed this table's own out-of-order/duplicate version numbering (the prior 1.3 row appeared twice, once out of chronological order). |
 | 1.6 | 30/07/2026 | Added PD-008 (three-lane conversational agent: business Q&A, report explanation, product/support help), PD-009 (standalone low-stock alerting), and ADR-020 (intent-classifier routing to approved deterministic queries or an approved help-content knowledge base — no free-form AI calculation or invention). Recorded during Phase 2 prototype service scoping. |
 | 1.7 | 30/07/2026 | Clarified ADR-011 to explicitly cover Stripe Tax (automatic EU VAT on Checkout), recorded during initial `backend/app/billing/` implementation. Added ADR-021 (Rejected): Stripe Connect is not in scope — this platform charges tenants a subscription fee, it does not pay out to them. |
+| 1.8 | 04/08/2026 | Accepted ADR-016 (Production Events, implemented as `production_events`/`production_event_inputs`/`production_event_outputs`, replacing the bicycle-specific `repairs`/`repair_parts_used` tables) — the gate was met once a second and third vertical (cafe, pharmacy) began active scoping. Added ADR-022 (`inventory_lots` canonical lot/batch + expiry-date tracking) and ADR-023 (pharmacy `prescription_details` extension, deliberately excluding patient identity/clinical fields). Added PD-010 (supporting pharmacy as a third vertical; data-minimisation decision, not a full GDPR compliance sign-off — see Q-053). Removed the ADR-016 row from "Decisions Requiring Action" now that it's Accepted. |

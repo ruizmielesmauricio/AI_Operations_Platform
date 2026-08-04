@@ -1,10 +1,10 @@
 # 16_Risk_Register.md
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 04/08/2026
 
 ---
 
@@ -74,8 +74,6 @@ Risks stay recorded in their **source document** as well — this register does 
 | R-010 | Some categories (Neon, Supabase, R2) are still relatively young companies compared to hyperscalers. | Standard, portable APIs (SQL, S3) mean migration is possible if needed. | `04_Technology_Stack.md` | Mitigating |
 | R-011 | A cost-first AI routing strategy could degrade explanation quality if the quality threshold is not enforced strictly. | Pair routing with the output validation rules before enabling cost-optimised routing in production. | `05_AI_Architecture.md` | Open |
 | R-012 | Introducing a third-party router (OpenRouter) adds one more vendor dependency. | Sits behind the internal interface and is replaceable without touching business modules. | `05_AI_Architecture.md` | Mitigating |
-| R-013 | Generalising "repairs"/"recipes" into "Production Events" too early, before more than two business types exist, risks over-engineering a pattern that doesn't actually recur cleanly. | Keep extension tables (`repairs`, `recipes`) thin and industry-specific; only invest in the shared layer once a second real customer segment is being actively built. | `06_Database_Design.md` | Mitigating |
-| R-014 | Existing documentation still describes repairs as bicycle-specific and will need updating once the Production Events generalisation (ADR-016) is accepted, to avoid conflicting instructions across the repository. | Tracked as a `11_Development_Roadmap.md` Phase 0 housekeeping item (not yet actioned — depends on ADR-016). | `06_Database_Design.md` | Open |
 | R-015 | A solo founder operating a VPS directly introduces key-person operational risk. | Coolify and documented configuration make the deployment reconstructable by someone else if needed. | `07_Deployment_Guide.md` | Mitigating |
 | R-016 | Multiple external vendors (eight-plus services) increase the number of things that can fail independently. | Uptime Kuma and Sentry provide visibility; every service sits behind a replaceable boundary. | `07_Deployment_Guide.md` | Mitigating |
 | R-017 | Manual DNS/TLS misconfiguration could cause downtime. | Automated certificate renewal via the reverse proxy reduces manual intervention. | `07_Deployment_Guide.md` | Mitigating |
@@ -97,15 +95,16 @@ Risks stay recorded in their **source document** as well — this register does 
 | R-033 | Delaying naming too long means writing marketing material with a placeholder, which wastes effort. | Not yet specified. | `13_Branding_Strategy.md` | Open |
 | R-034 | Registering domains before trademark clearance risks spending on a name that must later be abandoned. | Naming process sequences formal clearance before domain/handle registration. | `13_Branding_Strategy.md` | Mitigating |
 | R-035 | All four shortlisted candidate names (Tara, Nora, Orla, Vera) are real given names, raising the chance of existing registrations in some class. | Formal clearance (CRO, IPOI, EUIPO) is treated as non-optional before any spend. | `13_Branding_Strategy.md` | Mitigating |
+| R-036 | `prescription_details` (ADR-023) stores prescription data, a GDPR Article 9 special category; minimal fields alone do not make it compliant, since it's still linkable to a customer via `sale_items -> sales -> customers`. | Table deliberately excludes patient identity/clinical fields. Full legal basis, DPIA, and retention/deletion policy remain open — see Q-053 — blocked on legal advice, not an engineering decision. | `06_Database_Design.md` | Open |
 
 ---
 
 # Retired Risks
 
-*(none yet — this register was created 30/07/2026 as a snapshot of all risks currently open across the governance set. Retired risks will be listed here with the closing date and the evidence or decision that closed them.)*
-
 | ID | Risk | Source | Retired Date | Reason |
 |---|---|---|---|---|
+| R-013 | Generalising "repairs"/"recipes" into "Production Events" too early, before more than two business types exist, risks over-engineering a pattern that doesn't actually recur cleanly. | `06_Database_Design.md` | 04/08/2026 | ADR-016 accepted once cafe and pharmacy were both being actively scoped, satisfying the stated gate ("only invest once a second real customer segment is being actively built"). |
+| R-014 | Existing documentation still described repairs as bicycle-specific and would need updating once the Production Events generalisation (ADR-016) is accepted. | `06_Database_Design.md` | 04/08/2026 | ADR-016 accepted; `06_Database_Design.md` and `12_Decision_Register.md` updated in the same change. |
 
 ---
 
@@ -114,3 +113,4 @@ Risks stay recorded in their **source document** as well — this register does 
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 30/07/2026 | Initial register. Consolidated all 35 risks currently listed across `docs/governance/` (01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13) into one tracked table with source attribution and status. |
+| 0.2 | 04/08/2026 | Retired R-013 and R-014 (Production Events over-engineering/documentation risks) now that ADR-016 is accepted and the relevant docs are updated. Added R-036: GDPR special-category compliance for the new `prescription_details` table (ADR-023) — open, blocked on legal advice. |

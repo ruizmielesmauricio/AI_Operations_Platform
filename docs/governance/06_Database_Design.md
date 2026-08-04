@@ -1,10 +1,10 @@
 # 06_Database_Design.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 04/08/2026
 
 ---
 
@@ -77,12 +77,15 @@ Shared Core (identical for every business)
 Canonical Operational Entities (reusable, industry-agnostic)
    locations, customers, employees, products, product_categories,
    suppliers, sales, sale_items, inventory_movements,
-   inventory_snapshots, purchase_orders, returns
+   inventory_snapshots, purchase_orders, returns,
+   production_events, production_event_inputs, production_event_outputs,
+   inventory_lots
         |
         v
 Business Template Extensions (industry-specific configuration)
-   bicycle_shop: repairs, mechanics, parts_used, warranty_claims
-   coffee_shop:  recipes, recipe_ingredients, production_batches
+   bicycle_shop: warranty_claims
+   coffee_shop:  recipes, recipe_ingredients
+   pharmacy:     prescription_details
 ```
 
 (Full detail on the core and canonical layers: `06_Database_Design.md`.)
@@ -124,7 +127,9 @@ A coffee-shop template configures this as: input = ingredients, output = a quant
 
 This keeps `sales`, `sale_items`, `inventory_movements`, and `products` completely unchanged between the two business types — only the template-level configuration and a thin extension table differ.
 
-**Status:** Proposed. This generalises the "Repairs" section of `06_Database_Design.md`'s Bicycle-Shop Template into a reusable canonical entity. It requires an update to `06_Database_Design.md` and `10_Product_Requirements.md` once accepted, since both currently describe repairs as bicycle-specific.
+**Status:** Accepted (ADR-016), implemented in `backend/app/models/production_event.py`. The former bicycle-specific `repairs`/`repair_parts_used` tables have been dropped in favour of this canonical entity.
+
+**Third-vertical validation:** pharmacy was scoped alongside cafe as the second and third verticals that triggered accepting this pattern (per this document's own stated gate — "once a second real customer segment is being actively built"). Unlike bike shops and cafes, a standard dispensing pharmacy does **not** need Production Events at all (only a compounding pharmacy, mixing raw ingredients into a custom medication, would) — its real gap is `inventory_lots` (lot/batch + expiry tracking, ADR-022) and a thin `prescription_details` template extension (ADR-023), not a production/consumption pattern. This is a useful negative data point: it confirms Production Events isn't being over-generalised to fit every vertical.
 
 ---
 
@@ -169,7 +174,9 @@ Being able to support a new vertical primarily through configuration rather than
 
 * Use a shared core, canonical operational entities, and business-template extensions as the three-layer database model (Accepted, per ADR-002 and ADR-012 in `12_Decision_Register.md`).
 * Do not build industry-specific schemas as unrelated, parallel structures (Accepted, per Company Constitution Principle 8).
-* Generalise "repairs" and "recipes" into a shared canonical concept (provisionally "Production Events") rather than building each independently (Proposed).
+* Generalise "repairs" and "recipes" into a shared canonical concept, "Production Events" (Accepted, per ADR-016 in `12_Decision_Register.md`), rather than building each independently.
+* Add `inventory_lots` as a canonical lot/batch + expiry-date extension to the inventory layer (Accepted, per ADR-022) — not pharmacy-specific, since perishables/consumables recur across verticals.
+* Add pharmacy's `prescription_details` as a thin business-template extension (Accepted, per ADR-023), deliberately excluding patient identity/clinical fields — see `17_Open_Questions.md` Q-053 for the still-open GDPR compliance question this does not resolve.
 
 ---
 
@@ -181,14 +188,14 @@ Being able to support a new vertical primarily through configuration rather than
 
 **Alternatives Considered:** Building "repairs" as a bicycle-specific table (as currently described in `06_Database_Design.md`) and later building an entirely separate "recipes" table for coffee shops when that vertical is validated. Rejected because it was the exact anti-pattern the Company Constitution warns against ("Build Once, Scale Everywhere"), and would create duplicated profitability logic between the two.
 
-**Future Review Criteria:** Revisit once a third, structurally different business type (e.g., a florist or garden centre) is scoped, to confirm the canonical model still holds without further special-casing.
+**Future Review Criteria:** ~~Revisit once a third, structurally different business type (e.g., a florist or garden centre) is scoped, to confirm the canonical model still holds without further special-casing.~~ Met: pharmacy was scoped as the third vertical (see the Worked Example section above) and confirmed the model generalises correctly — it needed the canonical layer's `inventory_lots`/`prescription_details` extensions, not Production Events, which is itself evidence the pattern isn't over-fit to two examples.
 
 ---
 
 # Risks
 
-* Generalising too early, before more than two business types exist, risks over-engineering a pattern that doesn't actually recur cleanly. Mitigation: keep the extension tables (`repairs`, `recipes`) genuinely thin and industry-specific, and only invest in the shared `production_events` layer once a second real customer segment (beyond bike shops) is being actively built.
-* Existing documentation (`06_Database_Design.md`, `10_Product_Requirements.md`) still describes repairs as bicycle-specific and will need updating once this generalisation is accepted, to avoid conflicting instructions across the repository (per `12_Decision_Register.md`'s Decision Documentation rule).
+* ~~Generalising too early, before more than two business types exist, risks over-engineering a pattern that doesn't actually recur cleanly.~~ Resolved: cafe and pharmacy were both being actively scoped when this was accepted, satisfying the stated gate.
+* `inventory_lots`/`prescription_details` are new and unused by any repository/service/route yet (schema-only, per this change's scope) — the real risk is building calculation logic against them later (Stage C9) without re-validating the shape holds once actual FEFO/prescription workflows are designed.
 
 ---
 
@@ -202,9 +209,9 @@ Being able to support a new vertical primarily through configuration rather than
 
 # Questions Still Open
 
-* Is "Production Events" the right name and shape for this canonical concept, or does it need further refinement once a coffee-shop template is actually built?
-* Should ingredient/parts costing feed directly into the Profitability domain (`02_Operational_Domains.md`) the same way for both business types, or does recipe costing need its own treatment (e.g., waste, shelf-life, batch yield variance)?
-* At what point should this become a formal ADR rather than a proposed pattern in this document?
+* Should ingredient/parts costing feed directly into the Profitability domain (`02_Operational_Domains.md`) the same way for both business types, or does recipe costing need its own treatment (e.g., waste, shelf-life, batch yield variance)? Still open — deferred to Stage C9 calculation work.
+* GDPR special-category compliance for `prescription_details` (legal basis, DPIA, retention/deletion policy) — see `17_Open_Questions.md` Q-053, blocked on legal advice.
+* FEFO (first-expiry-first-out) consumption logic for `inventory_lots` is unbuilt — when Stage C9 designs it, does `inventory_movements.inventory_lot_id` need to become mandatory for lot-tracked products, or stay optional indefinitely?
 
 ---
 
@@ -214,3 +221,4 @@ Being able to support a new vertical primarily through configuration rather than
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; introduced the repairs-vs-recipes worked example and proposed the generalised "Production Events" canonical entity. |
 | 0.2 | 30/07/2026 | Fixed a stale `01_Product_Vision.md` filename reference (now `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document. |
+| 0.3 | 04/08/2026 | Accepted ADR-016 (Production Events): status Proposed → Accepted, implemented in `backend/app/models/production_event.py`, replacing the bicycle-specific `repairs`/`repair_parts_used` tables. Pharmacy was scoped alongside cafe as the second/third verticals that triggered acceptance, and confirmed as the third-vertical validation this document's own review criteria called for. Added ADR-022 (`inventory_lots` canonical lot/batch + expiry tracking) and ADR-023 (pharmacy `prescription_details` extension). Updated the canonical entities list, template extensions list, Current Decisions, Risks, and Questions Still Open accordingly. |
