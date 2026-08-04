@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.sale import Sale
@@ -49,3 +49,16 @@ class SaleRepository:
             return
         self.session.execute(delete(Sale).where(Sale.id.in_(sale_ids)))
         self.session.flush()
+
+    def sum_total_amount_in_range(self, business_id: uuid.UUID, start: datetime, end: datetime) -> Decimal:
+        """Total revenue for [start, end) — used as-is (Stage C9), rather
+        than derived from sale_items, since a sale's total_amount is the
+        authoritative figure and doesn't depend on every line item having
+        a matched product (see SaleItemRepository.aggregate_by_product_in_range,
+        which does exclude unmatched line items)."""
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(Sale.total_amount), 0)).where(
+                Sale.business_id == business_id, Sale.sold_at >= start, Sale.sold_at < end
+            )
+        )
+        return Decimal(total)
