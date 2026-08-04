@@ -1,10 +1,10 @@
 # 17_Open_Questions.md
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 04/08/2026
 
 ---
 
@@ -75,9 +75,7 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-017 | What is the minimum acceptable quality/reliability threshold for AI routing, and how will it be measured before launch? | `05_AI_Architecture.md` | Duplicate topic of Q-012. This document is the canonical source for AI provider routing detail. |
 | Q-018 | Which specific EU regulatory requirements should be encoded as hard constraints on AI model selection, versus soft preferences? | `05_AI_Architecture.md` | Duplicate topic of Q-013. |
 | Q-019 | Should certain customers or plans be able to request a specific AI model tier, overriding the default cost-optimised routing? | `05_AI_Architecture.md` | Duplicate topic of Q-014. |
-| Q-020 | Is "Production Events" the right name and shape for the canonical repairs/recipes concept, or does it need refinement once a coffee-shop template is built? | `06_Database_Design.md` | Feeds ADR-016 (Q-051). |
-| Q-021 | Should ingredient/parts costing feed directly into the Profitability domain the same way for both business types, or does recipe costing need its own treatment? | `06_Database_Design.md` | |
-| Q-022 | At what point should Production Events become a formal ADR rather than a proposed pattern? | `06_Database_Design.md` | See ADR-016 (Q-051) for the current acceptance criteria. |
+| Q-021 | Should ingredient/parts costing feed directly into the Profitability domain the same way for both business types, or does recipe costing need its own treatment? | `06_Database_Design.md` | Still open — deferred to Stage C9 calculation work. |
 | Q-023 | Should staging environment costs be absorbed now, or only introduced once the pilot phase begins? | `07_Deployment_Guide.md` | |
 | Q-024 | At what customer count does self-hosting on a VPS stop being the right tradeoff versus a managed application host? | `07_Deployment_Guide.md` | |
 | Q-025 | Should Redis be introduced now, or deferred until the background job architecture actually requires it? | `07_Deployment_Guide.md` | |
@@ -95,7 +93,6 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-037 | Which POS export formats should be reverse-engineered first? | `10_Product_Requirements.md` | Answer comes from `15_Customer_Discovery.md` Section 8 — same dependency as Q-048. |
 | Q-038 | How many customer interviews are genuinely enough before Gate A — 15, or fewer if patterns emerge clearly? | `11_Development_Roadmap.md` | |
 | Q-039 | Should pilot customers be charged during Phase 4? | `11_Development_Roadmap.md` | Duplicate topic of Q-029/Q-032. |
-| Q-040 | Should the second business template be chosen during Phase 4, to inform ADR-016 before Phase 7? | `11_Development_Roadmap.md` | Related to Q-020/Q-022 and ADR-016 (Q-051). |
 | Q-041 | Company name and product name: separate, or the same? | `13_Branding_Strategy.md` | |
 | Q-042 | Which two naming candidates go forward to formal clearance? | `13_Branding_Strategy.md` | Same underlying question as Q-001. |
 | Q-043 | Should the `.ie` domain be prioritised over `.com` for an Ireland-first launch? | `13_Branding_Strategy.md` | |
@@ -106,8 +103,8 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-048 | Which feature creates the strongest competitive advantage? | `15_Customer_Discovery.md` | Related to Q-037. |
 | Q-049 | Which assumptions need to be revised before development begins? | `15_Customer_Discovery.md` | |
 | Q-050 | ADR-015 (OpenRouter): what numeric quality/reliability threshold and evaluation test set moves this from Proposed to Accepted? | `12_Decision_Register.md` (Decisions Requiring Action) | Pending decision, not an open-ended question. Same topic as Q-003/Q-012/Q-017. |
-| Q-051 | ADR-016 (Production Events): what third-business-type validation and which document updates (`06_Database_Design.md`, `10_Product_Requirements.md`) move this from Proposed to Accepted? | `12_Decision_Register.md` (Decisions Requiring Action) | Pending decision, not an open-ended question. Same topic as Q-020/Q-022/Q-040. |
 | Q-052 | When should Stripe Tax registration (Ireland domestic, or OSS) be added? Stripe currently charges 0% VAT since no registration exists. | `04_Technology_Stack.md` | Blocked on LTD company incorporation and accountant advice, not an engineering decision. Related to Q-028. |
+| Q-053 | Full GDPR special-category compliance for `prescription_details` (ADR-023): legal basis, DPIA, and retention/deletion policy. Minimal fields alone do not resolve this — the table is still linkable to a customer via `sale_items -> sales -> customers`. | `06_Database_Design.md` | Blocked on legal/DPO advice, not an engineering decision — same treatment as Q-052. |
 
 ---
 
@@ -116,6 +113,10 @@ Questions stay recorded in their **source document** as well — this register d
 | ID | Question | Source | Resolution | Resolved Date |
 |---|---|---|---|---|
 | RQ-001 | Which country will be our first commercial market? | Formerly `00_Company_Constitution.md` | Ireland — already established as the first market in `01_Project_Vision.md` ("Independent bike shop in Ireland (initial segment)") and in `CLAUDE.md`. Removed from the Constitution's open questions on 30/07/2026 as duplicative of an already-answered question. | 30/07/2026 |
+| Q-020 | Is "Production Events" the right name and shape for the canonical repairs/recipes concept, or does it need refinement once a coffee-shop template is built? | Formerly `06_Database_Design.md` | ADR-016 Accepted as `production_events`/`production_event_inputs`/`production_event_outputs`, implemented in `backend/app/models/production_event.py`. Refined further via pharmacy validation (see Q-040's resolution) — confirmed the name/shape holds without needing a third table. | 04/08/2026 |
+| Q-022 | At what point should Production Events become a formal ADR rather than a proposed pattern? | Formerly `06_Database_Design.md` | Once a second and third vertical (cafe, pharmacy) began active scoping, per `06_Database_Design.md`'s own stated gate. ADR-016 moved Proposed → Accepted 04/08/2026. | 04/08/2026 |
+| Q-040 | Should the second business template be chosen during Phase 4, to inform ADR-016 before Phase 7? | Formerly `11_Development_Roadmap.md` | Overtaken by events — cafe and pharmacy were both scoped during Phase 2/3 (schema-prep, `11_Development_Roadmap.md` C8b) rather than waiting for Phase 4, since a real pharmacy prospect surfaced the lot/expiry need directly. ADR-016/022/023 accepted as a result. | 04/08/2026 |
+| Q-051 | ADR-016 (Production Events): what third-business-type validation and which document updates move this from Proposed to Accepted? | Formerly `12_Decision_Register.md` (Decisions Requiring Action) | Pharmacy served as the third-vertical validation (and, notably, confirmed it does *not* need Production Events — only `inventory_lots`/`prescription_details`, evidence the pattern isn't over-fit). `06_Database_Design.md` and `12_Decision_Register.md` updated; `10_Product_Requirements.md` reviewed and needs no change (no repairs-specific content exists there). | 04/08/2026 |
 
 ---
 
@@ -125,3 +126,4 @@ Questions stay recorded in their **source document** as well — this register d
 |---------|------|---------|
 | 0.1 | 30/07/2026 | Initial register. Consolidated all 49 questions currently listed across `docs/governance/` (00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13, 15), plus the 2 pending-decision items in `12_Decision_Register.md`'s "Decisions Requiring Action" table, into one tracked list with source attribution and cross-references between duplicate topics. Seeded the Resolved Questions section with one already-answered question (first commercial market = Ireland) as the worked example. |
 | 0.2 | 30/07/2026 | Added Q-052 (Stripe Tax registration timing), raised during initial Stripe account setup and blocked on LTD incorporation and accountant advice. |
+| 0.3 | 04/08/2026 | Resolved Q-020, Q-022, Q-040, Q-051 — ADR-016 (Production Events) accepted, validated against pharmacy as the third vertical. Added Q-053: GDPR special-category compliance for the new `prescription_details` table (ADR-023), blocked on legal advice. |

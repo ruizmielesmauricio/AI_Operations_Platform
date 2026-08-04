@@ -3,21 +3,30 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PKMixin, TenantScopedMixin, TimestampMixin
 
-REASONS = ("sale", "purchase", "adjustment", "return")
+REASONS = ("sale", "purchase", "adjustment", "return", "production_consumption", "production_output")
 
 
 class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     """Stock level is derived by summing movements for a product, rather
     than maintained as a separate snapshot table — one source of truth,
     no risk of the two drifting apart. quantity_delta is negative for a
-    sale, positive for a purchase/return, either sign for an adjustment
-    (an inventory-upload reconciliation against the derived total).
+    sale or production_consumption, positive for a purchase/return/
+    production_output, either sign for an adjustment (an inventory-upload
+    reconciliation against the derived total).
 
-    Two mutually exclusive provenance paths, by reason: a "sale" movement
-    traces back via reference_id -> SaleItem -> Sale -> ImportRecord
-    (app/imports/importer.py); an "adjustment" movement (no SaleItem to
-    reference) traces directly via import_record_id instead. Undo
-    (PR-2.11) picks the right path per ImportRecord.entity_type.
+    Provenance is a set of mutually exclusive nullable FKs, one per reason:
+    - "sale" -> reference_id -> SaleItem -> Sale -> ImportRecord
+      (app/imports/importer.py)
+    - "adjustment" -> import_record_id (no SaleItem to reference)
+    - "production_consumption" -> production_event_input_id (ADR-016;
+      unused by any writer yet — Stage C9 calculation-phase work)
+    - "production_output" -> production_event_output_id (ADR-016; same)
+    Undo (PR-2.11) picks the right path per ImportRecord.entity_type.
+
+    inventory_lot_id (ADR-022) is different in kind from the above: it is
+    orthogonal to reason, not reason-gated — any movement can optionally
+    tag the physical lot/batch it affected. Unused by any writer yet,
+    reserved for future FEFO consumption logic.
     """
 
     __tablename__ = "inventory_movements"
@@ -30,4 +39,13 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     )
     import_record_id: Mapped[object | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("import_records.id"), nullable=True, index=True
+    )
+    production_event_input_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("production_event_inputs.id"), nullable=True, index=True
+    )
+    production_event_output_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("production_event_outputs.id"), nullable=True, index=True
+    )
+    inventory_lot_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("inventory_lots.id"), nullable=True, index=True
     )
