@@ -7,13 +7,26 @@ from app.analytics.types import ProductPeriodAggregate
 _P1, _P2, _P3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
 
-def _aggregate(product_id, *, units_sold, revenue, revenue_with_known_cost, cogs):
+def _aggregate(
+    product_id,
+    *,
+    units_sold,
+    revenue,
+    revenue_with_known_cost,
+    cogs,
+    revenue_with_known_cost_and_tax="0",
+    tax_amount_known="0",
+    cogs_for_known_tax="0",
+):
     return ProductPeriodAggregate(
         product_id=product_id,
         units_sold=units_sold,
         revenue=Decimal(revenue),
         revenue_with_known_cost=Decimal(revenue_with_known_cost),
         cogs=Decimal(cogs),
+        revenue_with_known_cost_and_tax=Decimal(revenue_with_known_cost_and_tax),
+        tax_amount_known=Decimal(tax_amount_known),
+        cogs_for_known_tax=Decimal(cogs_for_known_tax),
     )
 
 
@@ -55,6 +68,60 @@ def test_gross_margin_with_no_data_returns_none_percentages_not_zero():
     assert result.revenue_with_known_cost == Decimal("0.00")
     assert result.gross_margin_pct is None
     assert result.cost_data_coverage_pct is None
+    assert result.net_gross_margin_pct is None
+    assert result.tax_data_coverage_pct is None
+
+
+def test_gross_margin_with_no_tax_data_leaves_net_fields_none():
+    # cost known, tax never mapped — today's gross_margin_pct is
+    # unaffected; the net-of-tax fields have nothing to compute from.
+    aggregates = [
+        _aggregate(_P1, units_sold=10, revenue="1000.00", revenue_with_known_cost="1000.00", cogs="600.00"),
+    ]
+    result = compute_gross_margin(aggregates)
+
+    assert result.gross_margin_pct == Decimal("40.0")
+    assert result.net_gross_profit is None
+    assert result.net_gross_margin_pct is None
+    assert result.tax_data_coverage_pct == Decimal("0.0")  # 0 of 1000 known-cost revenue has known tax
+
+
+def test_gross_margin_computes_net_of_tax_when_fully_known():
+    # revenue 1000 includes 100 of tax; net revenue 900, cost 600 -> net
+    # profit 300, net margin 33.3%, well below the gross (tax-inclusive)
+    # 40.0% — this is exactly the overstatement the net figure corrects.
+    aggregates = [
+        _aggregate(
+            _P1, units_sold=10, revenue="1000.00", revenue_with_known_cost="1000.00", cogs="600.00",
+            revenue_with_known_cost_and_tax="1000.00", tax_amount_known="100.00", cogs_for_known_tax="600.00",
+        ),
+    ]
+    result = compute_gross_margin(aggregates)
+
+    assert result.gross_margin_pct == Decimal("40.0")  # unchanged, still the gross figure
+    assert result.net_gross_profit == Decimal("300.00")  # (1000-100) - 600
+    assert result.net_gross_margin_pct == Decimal("33.3")  # 300 / 900
+    assert result.tax_data_coverage_pct == Decimal("100.0")
+
+
+def test_gross_margin_net_of_tax_excludes_tax_unknown_lines_not_blend_them():
+    aggregates = [
+        # Cost and tax both known -> counts toward the net figure.
+        _aggregate(
+            _P1, units_sold=10, revenue="1000.00", revenue_with_known_cost="1000.00", cogs="600.00",
+            revenue_with_known_cost_and_tax="1000.00", tax_amount_known="100.00", cogs_for_known_tax="600.00",
+        ),
+        # Cost known, tax unknown -> counts toward gross_margin_pct/cost
+        # coverage, but excluded entirely from the net figure.
+        _aggregate(_P2, units_sold=5, revenue="500.00", revenue_with_known_cost="500.00", cogs="200.00"),
+    ]
+    result = compute_gross_margin(aggregates)
+
+    assert result.revenue_with_known_cost == Decimal("1500.00")
+    assert result.gross_margin_pct == Decimal("46.7")  # unaffected — still both products
+    assert result.net_gross_profit == Decimal("300.00")  # only P1
+    assert result.net_gross_margin_pct == Decimal("33.3")
+    assert result.tax_data_coverage_pct == Decimal("66.7")  # 1000 of 1500 known-cost revenue
 
 
 def test_revenue_change_percentage():

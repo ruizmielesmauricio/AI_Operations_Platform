@@ -110,6 +110,13 @@ export interface GrossMargin {
   gross_profit: string;
   gross_margin_pct: string | null;
   cost_data_coverage_pct: string | null;
+  // Margin computed net of tax, over only sales with both a known cost and
+  // a known tax_amount — None until at least one line has both. Prefer
+  // this over gross_margin_pct whenever it's set: gross_margin_pct may
+  // overstate margin for any revenue sourced from a tax-inclusive total.
+  net_gross_profit: string | null;
+  net_gross_margin_pct: string | null;
+  tax_data_coverage_pct: string | null;
 }
 
 export interface ProductMarginRow {

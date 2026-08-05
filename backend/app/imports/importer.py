@@ -62,6 +62,7 @@ class ParsedSaleRow:
     unit_price: Decimal
     cost_price_at_sale: Decimal | None
     order_reference: str | None
+    tax_amount: Decimal | None = None
     total_amount_mismatch: bool = False
 
 
@@ -143,6 +144,11 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         # import with a ZeroDivisionError instead of rejecting just this row.
         return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
 
+    # Optional — when present, lets margin be computed net of tax
+    # (app/analytics/financial.py's net_gross_margin_pct) and sharpens the
+    # mismatch check just below. Never a rejection reason.
+    tax_amount = parse_money(mapped_values.get("tax_amount"))
+
     mismatch = False
     if total_amount_val is not None:
         # The file's total is what was actually charged — trusted over
@@ -155,7 +161,14 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         # silently drifting apart.
         final_unit_price = (total_amount_val / quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
         if unit_price_val is not None:
-            expected = (unit_price_val * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+            # Tax included in the expected figure when known — a shop that
+            # maps price + tax + total together should see this mismatch
+            # mostly disappear, since tax was the actual explanation for
+            # it, not a data problem.
+            expected_before_tax = unit_price_val * quantity
+            expected = (expected_before_tax + (tax_amount or Decimal("0"))).quantize(
+                _CENTS, rounding=ROUND_HALF_UP
+            )
             actual = total_amount_val.quantize(_CENTS, rounding=ROUND_HALF_UP)
             mismatch = abs(expected - actual) > _MISMATCH_TOLERANCE
     else:
@@ -177,6 +190,7 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         unit_price=final_unit_price,
         cost_price_at_sale=cost_price_at_sale,
         order_reference=order_reference,
+        tax_amount=tax_amount,
         total_amount_mismatch=mismatch,
     )
 
@@ -563,6 +577,7 @@ def _write_sales(
                 quantity=row.quantity,
                 unit_price=row.unit_price,
                 cost_price_at_sale=row.cost_price_at_sale,
+                tax_amount=row.tax_amount,
             )
             if product_id is not None:
                 movement_repo.create(

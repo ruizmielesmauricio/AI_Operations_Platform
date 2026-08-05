@@ -22,6 +22,7 @@ class SaleItemRepository:
         quantity: int,
         unit_price: Decimal,
         cost_price_at_sale: Decimal | None,
+        tax_amount: Decimal | None = None,
     ) -> SaleItem:
         # Flush only — app/imports/importer.py owns the single commit.
         item = SaleItem(
@@ -31,6 +32,7 @@ class SaleItemRepository:
             quantity=quantity,
             unit_price=unit_price,
             cost_price_at_sale=cost_price_at_sale,
+            tax_amount=tax_amount,
         )
         self.session.add(item)
         self.session.flush()
@@ -74,8 +76,14 @@ class SaleItemRepository:
         revenue_with_known_cost/cogs only sum line items that have a
         cost_price_at_sale, so a product's margin is never computed
         against revenue it can't be matched to a cost for (PR-3.6).
+
+        revenue_with_known_cost_and_tax/tax_amount_known/cogs_for_known_tax
+        are the same idea one level stricter — cost known AND tax_amount
+        known — so app/analytics/financial.py's net-of-tax margin never
+        blends in a line whose revenue might still include tax.
         """
         known_cost = SaleItem.cost_price_at_sale.isnot(None)
+        known_cost_and_tax = known_cost & SaleItem.tax_amount.isnot(None)
         line_revenue = SaleItem.quantity * SaleItem.unit_price
         line_cost = SaleItem.quantity * SaleItem.cost_price_at_sale
 
@@ -86,6 +94,9 @@ class SaleItemRepository:
                 func.sum(line_revenue),
                 func.sum(case((known_cost, line_revenue), else_=0)),
                 func.sum(case((known_cost, line_cost), else_=0)),
+                func.sum(case((known_cost_and_tax, line_revenue), else_=0)),
+                func.sum(case((known_cost_and_tax, SaleItem.tax_amount), else_=0)),
+                func.sum(case((known_cost_and_tax, line_cost), else_=0)),
             )
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
@@ -104,6 +115,18 @@ class SaleItemRepository:
                 revenue=Decimal(revenue),
                 revenue_with_known_cost=Decimal(revenue_with_known_cost),
                 cogs=Decimal(cogs),
+                revenue_with_known_cost_and_tax=Decimal(revenue_with_known_cost_and_tax),
+                tax_amount_known=Decimal(tax_amount_known),
+                cogs_for_known_tax=Decimal(cogs_for_known_tax),
             )
-            for product_id, units_sold, revenue, revenue_with_known_cost, cogs in rows
+            for (
+                product_id,
+                units_sold,
+                revenue,
+                revenue_with_known_cost,
+                cogs,
+                revenue_with_known_cost_and_tax,
+                tax_amount_known,
+                cogs_for_known_tax,
+            ) in rows
         ]

@@ -20,6 +20,7 @@ def test_layer1_alias_dictionary_resolves_common_pos_headers_at_full_confidence(
         "unit_price": "Unit Price",
         "total_amount": None,
         "cost_price_at_sale": None,
+        "tax_amount": None,
         "order_reference": None,
     }
     for field in ("sale_date", "product_name", "sku", "quantity", "unit_price"):

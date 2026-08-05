@@ -38,3 +38,8 @@ class SaleItem(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     unit_price: Mapped[object] = mapped_column(DECIMAL(12, 2), nullable=False)
     cost_price_at_sale: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+    # Optional, from a mapped Tax/VAT column — lets gross margin be
+    # computed net of tax when known (app/analytics/financial.py's
+    # net_gross_margin_pct), rather than assuming unit_price/total_amount
+    # are already tax-exclusive.
+    tax_amount: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)

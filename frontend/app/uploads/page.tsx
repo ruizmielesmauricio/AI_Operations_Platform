@@ -44,6 +44,7 @@ const FIELD_ORDER: Record<string, string[]> = {
     "unit_price",
     "total_amount",
     "cost_price_at_sale",
+    "tax_amount",
     "order_reference",
   ],
   inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost"],
@@ -60,6 +61,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     unit_price: "Which column is the unit price?",
     total_amount: "Which column is the total amount? (optional if unit price is set)",
     cost_price_at_sale: "Which column is the cost price? (optional)",
+    tax_amount: "Which column is the tax/VAT amount? (optional — lets margin be calculated net of tax)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
   },
   inventory: {

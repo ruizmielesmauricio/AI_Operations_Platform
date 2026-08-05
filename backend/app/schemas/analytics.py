@@ -27,6 +27,9 @@ class GrossMarginOut(BaseModel):
     gross_profit: Decimal
     gross_margin_pct: Decimal | None
     cost_data_coverage_pct: Decimal | None
+    net_gross_profit: Decimal | None
+    net_gross_margin_pct: Decimal | None
+    tax_data_coverage_pct: Decimal | None
 
     model_config = {"from_attributes": True}
 

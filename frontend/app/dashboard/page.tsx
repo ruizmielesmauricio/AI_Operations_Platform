@@ -27,6 +27,7 @@ const DEFINITIONS: Record<string, string> = {
   revenue: "Total sales recorded in the selected period.",
   grossMargin: "Revenue minus the cost of goods sold, as a percentage of revenue with a known cost.",
   costCoverage: "Share of revenue where a cost price was actually recorded — margin below this is only an estimate.",
+  taxCoverage: "Share of cost-known revenue that also has a confirmed tax figure, letting margin be computed net of tax rather than assumed.",
   stockCover: "How many days of stock are left at the recent sales rate. Blank means not enough recent sales to estimate.",
   deadStock: "Products with stock on hand but zero sales in the selected period.",
   sellThrough: "Units sold divided by units sold plus stock still on hand — an approximation, not an exact sell-through rate.",
@@ -162,17 +163,30 @@ function FinancialSection({ data, error }: { data: FinancialPerformance | null; 
   return (
     <Section title="Financial Performance">
       <Stat label="Revenue" title={DEFINITIONS.revenue} value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
-      <Stat
-        label="Gross margin"
-        title={DEFINITIONS.grossMargin}
-        value={formatPct(grossMargin.gross_margin_pct)}
-        note={
-          grossMargin.cost_data_coverage_pct !== null
-            ? `based on ${formatPct(grossMargin.cost_data_coverage_pct)} of revenue with known cost`
-            : "no cost data recorded yet"
-        }
-        noteTitle={DEFINITIONS.costCoverage}
-      />
+      {grossMargin.net_gross_margin_pct !== null ? (
+        // Prefer the net-of-tax figure whenever any tax data is known —
+        // gross_margin_pct below may overstate margin for revenue sourced
+        // from a tax-inclusive total (see net_gross_margin_pct's own docs).
+        <Stat
+          label="Gross margin"
+          title={DEFINITIONS.grossMargin}
+          value={formatPct(grossMargin.net_gross_margin_pct)}
+          note={`net of tax — based on ${formatPct(grossMargin.tax_data_coverage_pct)} of cost-known revenue with confirmed tax figures`}
+          noteTitle={DEFINITIONS.taxCoverage}
+        />
+      ) : (
+        <Stat
+          label="Gross margin"
+          title={DEFINITIONS.grossMargin}
+          value={formatPct(grossMargin.gross_margin_pct)}
+          note={
+            grossMargin.cost_data_coverage_pct !== null
+              ? `based on ${formatPct(grossMargin.cost_data_coverage_pct)} of revenue with known cost — may include tax if your prices/totals are tax-inclusive`
+              : "no cost data recorded yet"
+          }
+          noteTitle={DEFINITIONS.costCoverage}
+        />
+      )}
       {data.products_excluded_from_ranking > 0 && (
         <p className="status-warn">
           {data.products_excluded_from_ranking} product(s) excluded from ranking — no recorded cost price.

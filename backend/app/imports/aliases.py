@@ -27,6 +27,13 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "unit_price",
         "total_amount",
         "cost_price_at_sale",
+        # Optional — when a POS export's total is tax-inclusive (the usual
+        # source of an apparent total_amount_mismatch), mapping this lets
+        # margin be computed net of tax instead of just flagging the
+        # mismatch. Never required (MINIMUM_MAPPING_RULES below doesn't
+        # reference it) — see app/imports/importer.py::validate_and_parse_row
+        # and app/analytics/financial.py's net_gross_margin_pct.
+        "tax_amount",
         "order_reference",
     ],
     # A stock-count snapshot, not a transaction: one row per product's
@@ -126,6 +133,10 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         ],
         "cost_price_at_sale": [
             "cost", "cost price", "unit cost", "cogs", "cost of goods", "item cost",
+        ],
+        "tax_amount": [
+            "tax", "vat", "tax amount", "vat amount", "sales tax", "tax charged",
+            "total tax", "gst",
         ],
         # Groups several imported rows into one multi-item Sale (Sale.order_reference).
         # Deliberately excludes "register"/"register number": a till/register

@@ -34,7 +34,7 @@ _MIN_CONFIDENCE = 0.5
 _CANDIDATES_PER_FIELD = 3
 
 _MONEY_FIELDS = (
-    "unit_price", "total_amount", "cost_price_at_sale", "unit_cost", "price_charged", "labour_cost",
+    "unit_price", "total_amount", "cost_price_at_sale", "unit_cost", "price_charged", "labour_cost", "tax_amount",
 )
 _MONEY_TOKENS = {
     "unit_price": {"price", "unit", "each", "rate"},
@@ -43,6 +43,7 @@ _MONEY_TOKENS = {
     "unit_cost": {"cost", "unit", "landed", "supplier", "buy"},
     "price_charged": {"price", "charge", "amount", "total", "invoice"},
     "labour_cost": {"labour", "labor", "cost"},
+    "tax_amount": {"tax", "vat", "gst"},
 }
 _SKU_TOKENS = {"sku", "code", "barcode", "upc"}
 # Deliberately excludes bare "ref": a column just called "Ref" is at least
