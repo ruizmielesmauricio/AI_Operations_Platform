@@ -37,6 +37,14 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "product_name",
         "sku",
         "quantity_on_hand",
+        # Optional — a stock-count export sometimes carries per-unit cost
+        # alongside the count. Not required (MINIMUM_MAPPING_RULES below
+        # never references it), same "optional, never blocks a row"
+        # treatment as purchases' unit_cost — see
+        # app/imports/importer.py::validate_and_parse_inventory_row. Lets a
+        # shop that never uploads a separate purchases file still set
+        # Product.cost_price.
+        "unit_cost",
     ],
     # A restocking transaction — each row is its own independent fact
     # ("we received N units on this date"), not a reconciliation like
@@ -76,6 +84,13 @@ MINIMUM_MAPPING_RULES: dict[str, Callable[[dict[str, str | None]], bool]] = {
         and bool(m.get("description") or m.get("price_charged") or m.get("labour_cost"))
     ),
 }
+
+# Shared between purchases' unit_cost and inventory's optional unit_cost —
+# one list, not two, so they can't silently drift apart.
+_UNIT_COST_ALIASES = [
+    "unit cost", "cost", "cost price", "cost/unit", "cost each",
+    "purchase price", "supplier price", "landed cost", "buy price",
+]
 
 # Every field's canonical name is itself a valid alias (normalized), so
 # these lists only need to cover real-world variants seen across common
@@ -137,6 +152,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "on hand", "current stock", "inventory count", "quantity in stock",
             "units in stock", "available stock", "stock qty",
         ],
+        "unit_cost": _UNIT_COST_ALIASES,
     },
     "purchases": {
         "purchase_date": [
@@ -155,10 +171,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "qty received", "quantity received", "units received", "qty",
             "quantity", "units", "qty delivered", "restock qty", "amount received",
         ],
-        "unit_cost": [
-            "unit cost", "cost", "cost price", "cost/unit", "cost each",
-            "purchase price", "supplier price", "landed cost", "buy price",
-        ],
+        "unit_cost": _UNIT_COST_ALIASES,
     },
     "repairs": {
         "repair_date": [

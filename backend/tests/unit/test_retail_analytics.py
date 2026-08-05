@@ -7,6 +7,8 @@ from app.analytics.retail import (
     compute_sell_through_rate,
     compute_stock_cover_days,
     find_dead_stock,
+    rank_top_sellers_by_revenue,
+    rank_top_sellers_by_units,
 )
 from app.analytics.types import ProductPeriodAggregate
 
@@ -67,6 +69,41 @@ def test_find_dead_stock_excludes_products_with_no_stock():
     products_by_id = {_P1: "Empty Shelf"}
 
     assert find_dead_stock(aggregates_by_product, stock_by_product, products_by_id, {}) == []
+
+
+def test_rank_top_sellers_by_units_favours_volume_over_price():
+    # A cheap item selling in volume must outrank an expensive item that
+    # barely sold, even though the expensive one made more revenue — this
+    # is the exact case the units/revenue split exists to fix.
+    aggregates = [
+        _aggregate(_P1, units_sold=3, revenue="1500.00"),  # expensive, low volume
+        _aggregate(_P2, units_sold=300, revenue="900.00"),  # cheap, high volume
+    ]
+    products_by_id = {_P1: "Premium Bike", _P2: "Puncture Kit"}
+
+    ranked = rank_top_sellers_by_units(aggregates, products_by_id, top_n=5)
+
+    assert [row.product_id for row in ranked] == [_P2, _P1]
+
+
+def test_rank_top_sellers_by_revenue_favours_price_over_volume():
+    aggregates = [
+        _aggregate(_P1, units_sold=3, revenue="1500.00"),
+        _aggregate(_P2, units_sold=300, revenue="900.00"),
+    ]
+    products_by_id = {_P1: "Premium Bike", _P2: "Puncture Kit"}
+
+    ranked = rank_top_sellers_by_revenue(aggregates, products_by_id, top_n=5)
+
+    assert [row.product_id for row in ranked] == [_P1, _P2]
+
+
+def test_rank_top_sellers_respects_top_n():
+    aggregates = [_aggregate(uuid.uuid4(), units_sold=i, revenue=str(i)) for i in range(1, 8)]
+    products_by_id = {a.product_id: f"Product {a.units_sold}" for a in aggregates}
+
+    assert len(rank_top_sellers_by_units(aggregates, products_by_id, top_n=3)) == 3
+    assert len(rank_top_sellers_by_revenue(aggregates, products_by_id, top_n=3)) == 3
 
 
 def test_build_stock_cover_report_carries_each_products_period_revenue():

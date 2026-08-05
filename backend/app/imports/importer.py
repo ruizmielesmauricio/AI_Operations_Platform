@@ -71,6 +71,7 @@ class ParsedInventoryRow:
     product_name: str | None
     sku: str | None
     quantity_on_hand: int
+    unit_cost: Decimal | None
 
 
 @dataclass
@@ -187,8 +188,15 @@ def validate_and_parse_inventory_row(
         # unparseable" alone wouldn't catch.
         return RejectedRow(row_number, "negative_quantity", _display_raw(mapped_values))
 
+    # Optional, like purchases' unit_cost — never a rejection reason.
+    unit_cost = parse_money(mapped_values.get("unit_cost"))
+
     return ParsedInventoryRow(
-        row_number=row_number, product_name=product_name, sku=sku, quantity_on_hand=quantity_on_hand
+        row_number=row_number,
+        product_name=product_name,
+        sku=sku,
+        quantity_on_hand=quantity_on_hand,
+        unit_cost=unit_cost,
     )
 
 
@@ -379,6 +387,7 @@ class ResolvedInventoryRow:
     product_id: uuid.UUID
     quantity_on_hand: int
     is_new_product: bool  # new product => starting stock is 0 by definition
+    unit_cost: Decimal | None = None
 
 
 @dataclass
@@ -386,6 +395,7 @@ class InventoryWriteResult:
     row_number: int
     product_id: uuid.UUID
     delta: int  # 0 means no movement needed (already matches)
+    unit_cost: Decimal | None = None
 
 
 def reconcile_inventory_rows(
@@ -410,7 +420,7 @@ def reconcile_inventory_rows(
             duplicate_rows.append({"row_number": row.row_number})
         seen.add(row.product_id)
         delta = row.quantity_on_hand - current
-        results.append(InventoryWriteResult(row.row_number, row.product_id, delta))
+        results.append(InventoryWriteResult(row.row_number, row.product_id, delta, unit_cost=row.unit_cost))
         running[row.product_id] = row.quantity_on_hand
     return results, duplicate_rows
 
@@ -562,12 +572,17 @@ def _write_inventory(
                 business_id=upload.business_id,
                 sku=match.create_sku,
                 name=match.create_name,
-                cost_price=None,
+                # Seeded directly here (like purchases does for a new
+                # product), rather than via update_cost_price in pass 2 —
+                # there's no existing row to update yet.
+                cost_price=row.unit_cost,
                 sell_price=None,
             )
             matcher.register_created(product)
             resolved.append(
-                ResolvedInventoryRow(row.row_number, product.id, row.quantity_on_hand, is_new_product=True)
+                ResolvedInventoryRow(
+                    row.row_number, product.id, row.quantity_on_hand, is_new_product=True, unit_cost=row.unit_cost
+                )
             )
         else:
             # Never "none" here — validate_and_parse_inventory_row already
@@ -577,7 +592,9 @@ def _write_inventory(
                     {"row_number": row.row_number, "product_name": row.product_name}
                 )
             resolved.append(
-                ResolvedInventoryRow(row.row_number, match.product_id, row.quantity_on_hand, is_new_product=False)
+                ResolvedInventoryRow(
+                    row.row_number, match.product_id, row.quantity_on_hand, is_new_product=False, unit_cost=row.unit_cost
+                )
             )
 
     existing_ids = [r.product_id for r in resolved if not r.is_new_product]
@@ -598,7 +615,21 @@ def _write_inventory(
                 reason="adjustment",
                 import_record_id=import_record.id,
             )
+            # Stock changed — Stage C12's low-stock alerts need re-evaluating.
             touched_product_ids.add(result.product_id)
+        if result.unit_cost is not None:
+            # Not gated on delta != 0 — a cost-only correction with
+            # unchanged quantity is still a real update. Runs unconditionally
+            # even for a product just created in pass 1 above (already
+            # seeded with this same value) — a harmless redundant overwrite,
+            # kept deliberately uniform rather than special-cased, since
+            # skipping new products here would need re-threading
+            # is_new_product through InventoryWriteResult for no real
+            # benefit. Cost doesn't affect stock-cover/low-stock, so this
+            # never adds to touched_product_ids.
+            product_repo.update_cost_price(
+                business_id=upload.business_id, product_id=result.product_id, cost_price=result.unit_cost
+            )
         rows_imported += 1
     return rows_imported, warnings, touched_product_ids
 

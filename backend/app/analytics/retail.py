@@ -118,15 +118,10 @@ class ProductSalesRow:
     revenue: Decimal
 
 
-def rank_top_sellers(
-    aggregates: list[ProductPeriodAggregate],
-    products_by_id: dict[uuid.UUID, str],
-    *,
-    top_n: int = 5,
+def _build_sales_rows(
+    aggregates: list[ProductPeriodAggregate], products_by_id: dict[uuid.UUID, str]
 ) -> list[ProductSalesRow]:
-    """Top N products by revenue in the period ("what's selling
-    quickly")."""
-    rows = [
+    return [
         ProductSalesRow(
             product_id=a.product_id,
             name=products_by_id.get(a.product_id, "Unknown product"),
@@ -135,6 +130,35 @@ def rank_top_sellers(
         )
         for a in aggregates
     ]
+
+
+def rank_top_sellers_by_units(
+    aggregates: list[ProductPeriodAggregate],
+    products_by_id: dict[uuid.UUID, str],
+    *,
+    top_n: int = 5,
+) -> list[ProductSalesRow]:
+    """Top N products by units sold in the period — "what's actually
+    selling the most" (02_Operational_Domains.md's Retail Operations
+    question). Deliberately separate from rank_top_sellers_by_revenue: a
+    high-price, low-volume item outranking a genuinely popular one on
+    revenue alone would misrepresent what's actually moving."""
+    rows = _build_sales_rows(aggregates, products_by_id)
+    return sorted(rows, key=lambda row: row.units_sold, reverse=True)[:top_n]
+
+
+def rank_top_sellers_by_revenue(
+    aggregates: list[ProductPeriodAggregate],
+    products_by_id: dict[uuid.UUID, str],
+    *,
+    top_n: int = 5,
+) -> list[ProductSalesRow]:
+    """Top N products by revenue in the period — "what's making the most
+    money," the Financial-Performance-adjacent lens. Complements
+    rank_top_sellers_by_units rather than replacing it; a caller wanting
+    only one view should pick deliberately, not rely on this being the
+    default "top sellers.\""""
+    rows = _build_sales_rows(aggregates, products_by_id)
     return sorted(rows, key=lambda row: row.revenue, reverse=True)[:top_n]
 
 

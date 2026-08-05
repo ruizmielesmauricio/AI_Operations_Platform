@@ -170,4 +170,5 @@ def test_get_retail_operations_end_to_end(db_session, business_id):
     assert summary.dead_stock == []  # both products sold in the period
     assert summary.inventory_value.value_at_cost == Decimal("200.00")  # only Chain Lube has a known cost (40 * 5.00)
     assert summary.inventory_value.products_missing_cost == 1  # Bar Tape has stock but no cost_price
-    assert [row.name for row in summary.top_sellers] == ["Chain Lube", "Bar Tape"]
+    assert [row.name for row in summary.top_sellers_by_units] == ["Chain Lube", "Bar Tape"]
+    assert [row.name for row in summary.top_sellers_by_revenue] == ["Chain Lube", "Bar Tape"]

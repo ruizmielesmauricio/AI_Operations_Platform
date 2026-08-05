@@ -90,7 +90,8 @@ class InventoryValueOut(BaseModel):
 
 class RetailOperationsOut(BaseModel):
     period: PeriodOut
-    top_sellers: list[ProductSalesOut]
+    top_sellers_by_units: list[ProductSalesOut]
+    top_sellers_by_revenue: list[ProductSalesOut]
     stock_cover: list[StockCoverOut]
     dead_stock: list[DeadStockOut]
     inventory_value: InventoryValueOut

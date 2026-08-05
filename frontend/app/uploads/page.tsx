@@ -46,7 +46,7 @@ const FIELD_ORDER: Record<string, string[]> = {
     "cost_price_at_sale",
     "order_reference",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost"],
   purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost"],
   repairs: ["repair_date", "description", "price_charged", "labour_cost"],
 };
@@ -66,6 +66,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     product_name: "Which column is the product name? (optional if SKU is set)",
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
+    unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
   },
   purchases: {
     purchase_date: "Which column is the date the stock was received?",

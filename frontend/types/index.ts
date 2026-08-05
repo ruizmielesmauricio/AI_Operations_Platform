@@ -159,7 +159,8 @@ export interface InventoryValue {
 
 export interface RetailOperations {
   period: Period;
-  top_sellers: ProductSalesRow[];
+  top_sellers_by_units: ProductSalesRow[];
+  top_sellers_by_revenue: ProductSalesRow[];
   stock_cover: StockCoverRow[];
   dead_stock: DeadStockRow[];
   inventory_value: InventoryValue;

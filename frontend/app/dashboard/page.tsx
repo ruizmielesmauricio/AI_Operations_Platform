@@ -14,6 +14,7 @@ import type {
   Findings,
   FinancialPerformance,
   ProductMarginRow,
+  ProductSalesRow,
   Recommendation,
   RetailOperations,
   StockCoverRow,
@@ -200,29 +201,7 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
       <Stat label="Inventory value" value={formatMoney(data.inventory_value.value_at_cost)} />
       <Stat label="Sell-through rate" title={DEFINITIONS.sellThrough} value={formatRate(data.sell_through_rate)} />
 
-      <h3>Top sellers</h3>
-      {data.top_sellers.length === 0 ? (
-        <p>No sales in this period.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Units sold</th>
-              <th>Revenue</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.top_sellers.map((row) => (
-              <tr key={row.product_id}>
-                <td>{row.name}</td>
-                <td>{row.units_sold}</td>
-                <td>{formatMoney(row.revenue)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} />
 
       <h3 title={DEFINITIONS.stockCover}>Stock cover</h3>
       {withCover.length > 0 ? (
@@ -244,6 +223,56 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
         <DeadStockTable rows={data.dead_stock} />
       )}
     </Section>
+  );
+}
+
+// "Most sold" and "most revenue" are genuinely different questions (a
+// high-price, low-volume item can dominate revenue without being what's
+// actually popular) — a toggle over both, rather than one ambiguous "top
+// sellers" list ranked by whichever the backend happened to pick.
+function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byRevenue: ProductSalesRow[] }) {
+  const [sortBy, setSortBy] = useState<"units" | "revenue">("units");
+  const rows = sortBy === "units" ? byUnits : byRevenue;
+
+  return (
+    <>
+      <h3>
+        Top sellers{" "}
+        <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
+          (
+          <button type="button" onClick={() => setSortBy("units")} disabled={sortBy === "units"}>
+            most sold
+          </button>{" "}
+          /{" "}
+          <button type="button" onClick={() => setSortBy("revenue")} disabled={sortBy === "revenue"}>
+            most revenue
+          </button>
+          )
+        </span>
+      </h3>
+      {rows.length === 0 ? (
+        <p>No sales in this period.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Units sold</th>
+              <th>Revenue</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.product_id}>
+                <td>{row.name}</td>
+                <td>{row.units_sold}</td>
+                <td>{formatMoney(row.revenue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 
