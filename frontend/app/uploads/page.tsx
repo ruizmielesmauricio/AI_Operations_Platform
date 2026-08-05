@@ -58,10 +58,10 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     product_name: "Which column is the product name?",
     sku: "Which column is the SKU or product code? (optional)",
     quantity: "Which column is the quantity sold?",
-    unit_price: "Which column is the price charged to the customer, per unit? (before tax, if your file separates tax)",
-    total_amount: "Which column is the total actually charged for this line? (include tax if your file's total does — optional if unit price is set)",
-    cost_price_at_sale: "Which column is what YOU paid to get this item — your supplier cost, not the sale price? (optional)",
-    tax_amount: "Which column is the tax/VAT charged to the customer? (optional — lets margin be calculated net of tax)",
+    unit_price: "Which column is the price per unit? (optional)",
+    total_amount: "Which column is the final total for this line? (optional if unit price is set)",
+    cost_price_at_sale: "Which column is your cost for this item? (optional)",
+    tax_amount: "Which column is the tax/VAT amount? (optional)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
   },
   inventory: {
@@ -81,7 +81,26 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     repair_date: "Which column is the repair date?",
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
-    labour_cost: "Which column is what this job cost YOU in labour — not what you charged the customer? (optional)",
+    labour_cost: "Which column is your labour cost for this job? (optional)",
+  },
+};
+
+// Secondary explanatory text, rendered smaller/muted below the question
+// (see the .hint CSS class) — kept separate from FIELD_LABELS above so
+// the primary question stays short and scannable. Only fields where the
+// short question alone leaves real ambiguity get one.
+const FIELD_HINTS: Record<string, Record<string, string>> = {
+  sales: {
+    unit_price: "What the customer paid for one item — before tax, if your file has a separate tax column.",
+    total_amount:
+      "The actual amount charged for this line — e.g. €36.90 for 3 items at €10 plus €6.90 tax. " +
+      "Include tax if your file's total does. Leave this blank if you don't have one — " +
+      "we'll calculate it from price × quantity instead.",
+    cost_price_at_sale: "What YOU paid your supplier for this item — not the price you charged the customer.",
+    tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
+  },
+  repairs: {
+    labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
   },
 };
 
@@ -429,9 +448,13 @@ export default function UploadsPage() {
             const samples = sampleValuesFor(selected);
             const confidence = confidenceFor(field, selected);
             const needsDoubleCheck = confidence !== null && confidence < HIGH_CONFIDENCE;
+            const hint = FIELD_HINTS[mappingEntityType]?.[field];
             return (
               <div key={field}>
-                <label htmlFor={`field-${field}`}>{FIELD_LABELS[mappingEntityType][field]}</label>
+                <label htmlFor={`field-${field}`}>
+                  {FIELD_LABELS[mappingEntityType][field]}
+                  {hint && <span className="hint">{hint}</span>}
+                </label>
                 <br />
                 <select
                   id={`field-${field}`}
