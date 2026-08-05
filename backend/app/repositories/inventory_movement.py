@@ -19,6 +19,7 @@ class InventoryMovementRepository:
         reason: str,
         reference_id: uuid.UUID | None = None,
         import_record_id: uuid.UUID | None = None,
+        purchase_reference: str | None = None,
     ) -> InventoryMovement:
         # Flush only — app/imports/importer.py owns the single commit.
         movement = InventoryMovement(
@@ -28,6 +29,7 @@ class InventoryMovementRepository:
             reason=reason,
             reference_id=reference_id,
             import_record_id=import_record_id,
+            purchase_reference=purchase_reference,
         )
         self.session.add(movement)
         self.session.flush()
@@ -63,6 +65,21 @@ class InventoryMovementRepository:
             )
         )
         self.session.flush()
+
+    def list_existing_purchase_references(self, business_id: uuid.UUID) -> set[str]:
+        """Every non-null purchase_reference already used by this
+        business's purchase movements, across all prior imports — one
+        query, not N+1. Used to reject a re-uploaded/overlapping purchases
+        file per row instead of silently double-counting stock received
+        (app/imports/importer.py::_write_purchases)."""
+        rows = self.session.scalars(
+            select(InventoryMovement.purchase_reference).where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.reason == "purchase",
+                InventoryMovement.purchase_reference.isnot(None),
+            )
+        )
+        return set(rows)
 
     def list_product_ids_by_import_record_id(self, business_id: uuid.UUID, import_record_id: uuid.UUID) -> set[uuid.UUID]:
         """Read before app/imports/importer.py's _undo_inventory_import

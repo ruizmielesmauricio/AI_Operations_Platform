@@ -48,8 +48,8 @@ const FIELD_ORDER: Record<string, string[]> = {
     "order_reference",
   ],
   inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost"],
-  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost"],
-  repairs: ["repair_date", "description", "price_charged", "labour_cost"],
+  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost", "purchase_reference"],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -76,12 +76,14 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_received: "Which column is the quantity received?",
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
+    purchase_reference: "Which column is the PO or invoice number? (optional)",
   },
   repairs: {
     repair_date: "Which column is the repair date?",
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
     labour_cost: "Which column is your labour cost for this job? (optional)",
+    repair_reference: "Which column is the job or invoice number? (optional)",
   },
 };
 
@@ -98,9 +100,17 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
       "we'll calculate it from price × quantity instead.",
     cost_price_at_sale: "What YOU paid your supplier for this item — not the price you charged the customer.",
     tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
+    order_reference:
+      "Prevents accidentally importing the same order twice if you re-upload a file that overlaps an earlier one.",
+  },
+  purchases: {
+    purchase_reference:
+      "Prevents accidentally importing the same purchase twice if you re-upload a file that overlaps an earlier one.",
   },
   repairs: {
     labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
+    repair_reference:
+      "Prevents accidentally importing the same repair twice if you re-upload a file that overlaps an earlier one.",
   },
 };
 

@@ -63,6 +63,12 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "sku",
         "quantity_received",
         "unit_cost",
+        # Optional — a PO/invoice number, if the export has one. Lets a
+        # re-uploaded/overlapping file be rejected instead of silently
+        # double-counting stock received. Never required
+        # (MINIMUM_MAPPING_RULES below never references it) — see
+        # app/imports/importer.py::validate_and_parse_purchase_row.
+        "purchase_reference",
     ],
     # One row per finished repair, from a shop's own workshop log/export —
     # treated the same as sales at the row level, not the line-item level
@@ -72,6 +78,9 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "description",
         "price_charged",
         "labour_cost",
+        # Optional — same reasoning as purchases' purchase_reference above,
+        # for workshop revenue instead of stock.
+        "repair_reference",
     ],
 }
 
@@ -183,6 +192,9 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "quantity", "units", "qty delivered", "restock qty", "amount received",
         ],
         "unit_cost": _UNIT_COST_ALIASES,
+        "purchase_reference": [
+            "po number", "purchase order", "po", "invoice number", "reference", "order number",
+        ],
     },
     "repairs": {
         "repair_date": [
@@ -200,6 +212,9 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         ],
         "labour_cost": [
             "labour cost", "labor cost", "internal cost", "labour charge",
+        ],
+        "repair_reference": [
+            "job number", "invoice number", "reference", "work order", "ticket number",
         ],
     },
 }

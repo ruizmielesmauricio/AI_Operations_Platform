@@ -83,6 +83,7 @@ class ParsedPurchaseRow:
     sku: str | None
     quantity_received: int
     unit_cost: Decimal | None
+    reference: str | None = None
 
 
 @dataclass
@@ -92,6 +93,7 @@ class ParsedRepairRow:
     description: str | None
     price_charged: Decimal | None
     labour_cost: Decimal | None
+    reference: str | None = None
 
 
 @dataclass
@@ -255,6 +257,10 @@ def validate_and_parse_purchase_row(
         return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
 
     unit_cost = parse_money(mapped_values.get("unit_cost"))
+    # Optional — never a rejection reason. Normalized here (not left for
+    # the write step) so a reference that's only whitespace apart from an
+    # existing one is still recognised as the same reference.
+    reference = _normalize_reference(_blank_to_none(mapped_values.get("purchase_reference")))
 
     return ParsedPurchaseRow(
         row_number=row_number,
@@ -262,6 +268,7 @@ def validate_and_parse_purchase_row(
         product_name=product_name,
         sku=sku,
         quantity_received=quantity_received,
+        reference=reference,
         unit_cost=unit_cost,
     )
 
@@ -280,12 +287,15 @@ def validate_and_parse_repair_row(
         # A bare date with nothing else carries no usable content.
         return RejectedRow(row_number, "missing_repair_detail", _display_raw(mapped_values))
 
+    reference = _normalize_reference(_blank_to_none(mapped_values.get("repair_reference")))
+
     return ParsedRepairRow(
         row_number=row_number,
         repair_date=repair_date,
         description=description,
         price_charged=price_charged,
         labour_cost=labour_cost,
+        reference=reference,
     )
 
 
@@ -302,7 +312,7 @@ def group_rows_into_sales(rows: list[ParsedSaleRow]) -> list[list[ParsedSaleRow]
     groups: list[list[ParsedSaleRow]] = []
     group_by_ref: dict[str, list[ParsedSaleRow]] = {}
     for row in rows:
-        ref = _normalize_order_reference(row.order_reference)
+        ref = _normalize_reference(row.order_reference)
         if ref is None:
             groups.append([row])
             continue
@@ -314,7 +324,7 @@ def group_rows_into_sales(rows: list[ParsedSaleRow]) -> list[list[ParsedSaleRow]
     return groups
 
 
-def _normalize_order_reference(value: str | None) -> str | None:
+def _normalize_reference(value: str | None) -> str | None:
     if value is None:
         return None
     collapsed = re.sub(r"\s+", " ", value.strip())
@@ -470,6 +480,12 @@ _REJECTION_MESSAGE_TEMPLATES = {
     # _REJECTION_MESSAGE_TEMPLATES is one flat dict keyed by code, not by
     # entity type).
     "non_positive_quantity": "quantity must be greater than zero",
+    # Shared by sales/purchases/repairs — a re-uploaded or overlapping file
+    # reusing a reference (order/PO/job number) already imported earlier
+    # for this business. Rejected outright rather than double-counting
+    # revenue/stock/repairs (see the list_existing_*_references repository
+    # methods this check is built on).
+    "duplicate_reference": "this reference was already used in an earlier import",
 }
 _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
@@ -525,9 +541,43 @@ class ImportResult:
     rejection_summary: dict | None = None
 
 
+# Duplicate-reference rejections are discovered at write time (they need a
+# DB lookup against prior imports, which pure parse-time validation has no
+# access to), so there's no original `mapped_values` dict left to build
+# RejectedRow.raw from — these reconstruct a reasonable display dict from
+# the already-parsed row instead. Not byte-identical to a parse-time
+# rejection's raw dict, but enough to find the row in the file.
+def _sale_row_display(row: ParsedSaleRow) -> dict[str, str]:
+    return {
+        "sale_date": row.sale_date.isoformat(),
+        "product_name": row.product_name or "",
+        "sku": row.sku or "",
+        "quantity": str(row.quantity),
+        "order_reference": row.order_reference or "",
+    }
+
+
+def _purchase_row_display(row: ParsedPurchaseRow) -> dict[str, str]:
+    return {
+        "purchase_date": row.purchase_date.isoformat(),
+        "product_name": row.product_name or "",
+        "sku": row.sku or "",
+        "quantity_received": str(row.quantity_received),
+        "purchase_reference": row.reference or "",
+    }
+
+
+def _repair_row_display(row: ParsedRepairRow) -> dict[str, str]:
+    return {
+        "repair_date": row.repair_date.isoformat(),
+        "description": row.description or "",
+        "repair_reference": row.reference or "",
+    }
+
+
 def _write_sales(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedSaleRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     for row in parsed_rows:
         if row.total_amount_mismatch:
@@ -539,10 +589,22 @@ def _write_sales(
     movement_repo = InventoryMovementRepository(db)
 
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    existing_refs = sale_repo.list_existing_order_references(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
+    duplicate_rejections: list[RejectedRow] = []
     for group in group_rows_into_sales(parsed_rows):
+        ref = _normalize_reference(group[0].order_reference)
+        if ref is not None and ref in existing_refs:
+            # Reject the whole group, not just its first row — a
+            # multi-line sale sharing one order_reference is one economic
+            # event; importing half of it would be its own kind of wrong.
+            duplicate_rejections.extend(
+                RejectedRow(row.row_number, "duplicate_reference", _sale_row_display(row)) for row in group
+            )
+            continue
+
         sale = sale_repo.create(
             business_id=upload.business_id,
             sold_at=datetime.combine(group_sold_at(group), datetime.min.time(), tzinfo=timezone.utc),
@@ -589,12 +651,17 @@ def _write_sales(
                 )
                 touched_product_ids.add(product_id)
             rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+    return rows_imported, warnings, touched_product_ids, duplicate_rejections
 
 
 def _write_inventory(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedInventoryRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
+    # No duplicate-reference detection here (out of scope — a stock-count
+    # upload is a reconciliation snapshot, not a transactional fact, so
+    # re-uploading the same one is already a harmless zero-delta no-op by
+    # construction; see reconcile_inventory_rows). The 4th element below is
+    # always empty — kept only so _WRITE_FNS stays uniform for run_import.
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
@@ -669,21 +736,34 @@ def _write_inventory(
                 business_id=upload.business_id, product_id=result.product_id, cost_price=result.unit_cost
             )
         rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+    return rows_imported, warnings, touched_product_ids, []
 
 
 def _write_purchases(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedPurchaseRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    existing_refs = movement_repo.list_existing_purchase_references(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
     cost_updated_products: set[uuid.UUID] = set()
+    duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
+        if row.reference is not None and row.reference in existing_refs:
+            duplicate_rejections.append(RejectedRow(row.row_number, "duplicate_reference", _purchase_row_display(row)))
+            continue
+        if row.reference is not None:
+            # Folded straight into the same set so a second occurrence of
+            # this reference LATER in this same file is caught too, not
+            # just one from an earlier upload — purchases rows aren't
+            # grouped the way sales rows are, so within-file duplication
+            # is a real, separate risk here.
+            existing_refs.add(row.reference)
+
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
         if match.action == "create":
             product = product_repo.create(
@@ -717,18 +797,29 @@ def _write_purchases(
             quantity_delta=row.quantity_received,
             reason="purchase",
             import_record_id=import_record.id,
+            purchase_reference=row.reference,
         )
         touched_product_ids.add(product_id)
         rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+    return rows_imported, warnings, touched_product_ids, duplicate_rejections
 
 
 def _write_repairs(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedRepairRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     event_repo = ProductionEventRepository(db)
+    existing_refs = event_repo.list_existing_repair_references(upload.business_id)
     rows_imported = 0
+    duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
+        if row.reference is not None and row.reference in existing_refs:
+            duplicate_rejections.append(RejectedRow(row.row_number, "duplicate_reference", _repair_row_display(row)))
+            continue
+        if row.reference is not None:
+            # Same reasoning as purchases: repairs rows aren't grouped, so
+            # a second occurrence later in this same file needs catching too.
+            existing_refs.add(row.reference)
+
         # These are historical, already-finished jobs from an export, not
         # live in-progress repairs — status="completed" (not the model's
         # "open" default, reserved for a possible future real-time entry
@@ -747,12 +838,13 @@ def _write_repairs(
             customer_id=None,
             performed_by_id=None,
             import_record_id=import_record.id,
+            repair_reference=row.reference,
         )
         rows_imported += 1
     # No InventoryMovement written (v1 has no parts-consumed detail), so
     # nothing for refresh_low_stock_alerts to do — an empty set is a
     # correct, cheap no-op there.
-    return rows_imported, {}, set()
+    return rows_imported, {}, set(), duplicate_rejections
 
 
 def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
@@ -802,9 +894,15 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         else:
             parsed_rows.append(result)
 
-    rows_imported, warnings, touched_product_ids = _WRITE_FNS[upload.entity_type](
+    rows_imported, warnings, touched_product_ids, duplicate_rejections = _WRITE_FNS[upload.entity_type](
         db, upload, import_record, parsed_rows
     )
+    # Duplicate-reference rejections are discovered at write time (they
+    # need a DB lookup against prior imports, unlike every other rejection
+    # reason above, which is pure parse-time validation) — folded into the
+    # same rejections list so rows_total/rows_rejected below account for
+    # them exactly like any other invalid row.
+    rejections.extend(duplicate_rejections)
 
     rejection_summary = _build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)

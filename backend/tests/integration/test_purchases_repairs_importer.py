@@ -174,6 +174,73 @@ def test_undo_purchase_import_bulk_deletes_by_import_record_id(db_session, busin
     assert any(p.cost_price == Decimal("4.75") for p in products)
 
 
+def test_purchase_row_reusing_a_reference_from_an_earlier_import_is_rejected(db_session, business_id, _fake_r2):
+    content = "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n".encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
+    upload1, record1 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"],
+        content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload1, record1)
+
+    upload2, record2 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"],
+        content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 0
+    assert result.rows_rejected == 1
+    assert result.rejection_summary["reasons"]["duplicate_reference"]["count"] == 1
+
+    movements = db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)).all()
+    assert len(movements) == 1  # nothing new written — no double-counted stock
+
+
+def test_purchase_rows_sharing_a_reference_within_one_file_second_row_is_rejected(db_session, business_id, _fake_r2):
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n"
+        "2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n"
+        "2026-01-06,Bar Tape,BT-200,20,3.00,PO-1\n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"],
+        content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 1
+    assert result.rejection_summary["reasons"]["duplicate_reference"]["count"] == 1
+
+
+def test_undo_then_reupload_a_purchase_with_the_same_reference_succeeds(db_session, business_id, _fake_r2):
+    content = "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n".encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"]
+    upload1, record1 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload1, record1)
+
+    undone = undo_import(db_session, record1)
+    assert undone.status == "reversed"
+
+    upload2, record2 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 1  # succeeds exactly as the first import did
+
+
 def test_undoing_a_purchase_import_is_blocked_by_a_later_inventory_reconciliation(db_session, business_id, _fake_r2):
     """Same hazard class as sales: a purchase movement is order-independent
     on its own, but can still be retroactively baked into a later inventory
@@ -240,6 +307,78 @@ def test_undo_repair_import_bulk_deletes_events_and_touches_no_products(db_sessi
 
     assert undone.status == "reversed"
     assert db_session.scalars(select(ProductionEvent).where(ProductionEvent.business_id == business_id)).all() == []
+
+
+def test_repair_row_reusing_a_reference_from_an_earlier_import_is_rejected(db_session, business_id, _fake_r2):
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Job Number\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,JOB-1\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "repair_reference": "Job Number"}
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Job Number"]
+    upload1, record1 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload1, record1)
+
+    upload2, record2 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 0
+    assert result.rows_rejected == 1
+    assert result.rejection_summary["reasons"]["duplicate_reference"]["count"] == 1
+
+    events = db_session.scalars(select(ProductionEvent).where(ProductionEvent.business_id == business_id)).all()
+    assert len(events) == 1  # nothing new written — no double-counted workshop revenue
+
+
+def test_repair_rows_sharing_a_reference_within_one_file_second_row_is_rejected(db_session, business_id, _fake_r2):
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Job Number\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,JOB-1\n"
+        "2026-01-06,Fixed a puncture,15.00,,JOB-1\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "repair_reference": "Job Number"}
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Job Number"]
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 1
+    assert result.rejection_summary["reasons"]["duplicate_reference"]["count"] == 1
+
+
+def test_undo_then_reupload_a_repair_with_the_same_reference_succeeds(db_session, business_id, _fake_r2):
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Job Number\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,JOB-1\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "repair_reference": "Job Number"}
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Job Number"]
+    upload1, record1 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload1, record1)
+
+    undone = undo_import(db_session, record1)
+    assert undone.status == "reversed"
+
+    upload2, record2 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 1  # succeeds exactly as the first import did
 
 
 def test_undoing_a_repair_import_is_never_blocked_by_a_later_inventory_reconciliation(db_session, business_id, _fake_r2):

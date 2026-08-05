@@ -49,3 +49,9 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     inventory_lot_id: Mapped[object | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("inventory_lots.id"), nullable=True, index=True
     )
+    # The source file's PO/invoice number, if it has one — only ever set
+    # for reason="purchase" rows written by the "purchases" upload entity
+    # type. Lets a re-uploaded/overlapping file be rejected per row instead
+    # of silently double-counting stock received (see
+    # app/imports/importer.py's list_existing_purchase_references).
+    purchase_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -27,6 +27,7 @@ class ProductionEventRepository:
         customer_id: uuid.UUID | None,
         performed_by_id: uuid.UUID | None,
         import_record_id: uuid.UUID | None,
+        repair_reference: str | None = None,
     ) -> ProductionEvent:
         # Flush only — app/imports/importer.py owns the single commit.
         event = ProductionEvent(
@@ -41,6 +42,7 @@ class ProductionEventRepository:
             customer_id=customer_id,
             performed_by_id=performed_by_id,
             import_record_id=import_record_id,
+            repair_reference=repair_reference,
         )
         self.session.add(event)
         self.session.flush()
@@ -61,6 +63,21 @@ class ProductionEventRepository:
             return
         self.session.execute(delete(ProductionEvent).where(ProductionEvent.id.in_(event_ids)))
         self.session.flush()
+
+    def list_existing_repair_references(self, business_id: uuid.UUID) -> set[str]:
+        """Every non-null repair_reference already used by this business's
+        repairs, across all prior imports — one query, not N+1. Used to
+        reject a re-uploaded/overlapping repairs file per row instead of
+        silently double-counting workshop revenue
+        (app/imports/importer.py::_write_repairs)."""
+        rows = self.session.scalars(
+            select(ProductionEvent.repair_reference).where(
+                ProductionEvent.business_id == business_id,
+                ProductionEvent.event_type == "repair",
+                ProductionEvent.repair_reference.isnot(None),
+            )
+        )
+        return set(rows)
 
     def aggregate_completed_repairs_in_range(
         self, business_id: uuid.UUID, start: datetime, end: datetime

@@ -11,6 +11,8 @@ from app.imports.importer import (
 
 _PURCHASE_COLUMNS = {"purchase_date": 0, "product_name": 1, "sku": 2, "quantity_received": 3, "unit_cost": 4}
 _REPAIR_COLUMNS = {"repair_date": 0, "description": 1, "price_charged": 2, "labour_cost": 3}
+_PURCHASE_COLUMNS_WITH_REF = {**_PURCHASE_COLUMNS, "purchase_reference": 5}
+_REPAIR_COLUMNS_WITH_REF = {**_REPAIR_COLUMNS, "repair_reference": 4}
 
 
 def _parse_purchase(row, columns=_PURCHASE_COLUMNS, row_number=1):
@@ -73,6 +75,29 @@ def test_purchase_row_zero_or_negative_quantity_is_rejected_with_a_distinct_code
         assert result.code == "non_positive_quantity"
 
 
+def test_purchase_row_without_a_reference_column_is_accepted():
+    # No reference mapped at all — never a rejection reason on its own.
+    result = _parse_purchase(["2026-01-05", "Chain Lube", "CL-100", "50", "4.75"])
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.reference is None
+
+
+def test_purchase_row_reference_parses_when_mapped():
+    result = _parse_purchase(
+        ["2026-01-05", "Chain Lube", "CL-100", "50", "4.75", "PO-42"], columns=_PURCHASE_COLUMNS_WITH_REF
+    )
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.reference == "PO-42"
+
+
+def test_purchase_row_blank_reference_is_accepted_as_none():
+    result = _parse_purchase(
+        ["2026-01-05", "Chain Lube", "CL-100", "50", "4.75", ""], columns=_PURCHASE_COLUMNS_WITH_REF
+    )
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.reference is None
+
+
 # --- repairs ----------------------------------------------------------
 
 
@@ -109,3 +134,17 @@ def test_repair_row_with_no_detail_at_all_is_rejected():
     result = _parse_repair(["2026-01-05", "", "", ""])
     assert isinstance(result, RejectedRow)
     assert result.code == "missing_repair_detail"
+
+
+def test_repair_row_without_a_reference_column_is_accepted():
+    result = _parse_repair(["2026-01-05", "Replaced brake pads", "45.00", "20.00"])
+    assert isinstance(result, ParsedRepairRow)
+    assert result.reference is None
+
+
+def test_repair_row_reference_parses_when_mapped():
+    result = _parse_repair(
+        ["2026-01-05", "Replaced brake pads", "45.00", "20.00", "JOB-9"], columns=_REPAIR_COLUMNS_WITH_REF
+    )
+    assert isinstance(result, ParsedRepairRow)
+    assert result.reference == "JOB-9"

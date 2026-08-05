@@ -50,6 +50,16 @@ class SaleRepository:
         self.session.execute(delete(Sale).where(Sale.id.in_(sale_ids)))
         self.session.flush()
 
+    def list_existing_order_references(self, business_id: uuid.UUID) -> set[str]:
+        """Every non-null order_reference already used by this business,
+        across all prior imports — one query, not N+1. Used to reject a
+        re-uploaded/overlapping sales file per group instead of silently
+        double-counting revenue (app/imports/importer.py::_write_sales)."""
+        rows = self.session.scalars(
+            select(Sale.order_reference).where(Sale.business_id == business_id, Sale.order_reference.isnot(None))
+        )
+        return set(rows)
+
     def sum_total_amount_in_range(self, business_id: uuid.UUID, start: datetime, end: datetime) -> Decimal:
         """Total revenue for [start, end) — used as-is (Stage C9), rather
         than derived from sale_items, since a sale's total_amount is the
