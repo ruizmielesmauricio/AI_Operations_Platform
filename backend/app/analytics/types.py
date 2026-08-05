@@ -1,5 +1,6 @@
 """Shared dataclasses passed between the repository layer and the pure
-formulas in app/analytics/financial.py and app/analytics/retail.py.
+formulas in app/analytics/financial.py, app/analytics/retail.py, and
+app/analytics/workshop.py.
 """
 
 import uuid
@@ -27,3 +28,29 @@ class ProductPeriodAggregate:
     revenue: Decimal
     revenue_with_known_cost: Decimal
     cogs: Decimal
+
+
+@dataclass(frozen=True)
+class RepairPeriodTotals:
+    """Business-wide totals for completed repairs in a period, as summed
+    from production_events — no per-product breakdown (a repair isn't tied
+    to one product the way a sale_item is), so this is a single row, not a
+    group_by result.
+
+    price_charged and labour_cost are both nullable on ProductionEvent (a
+    repairs-file row is accepted with only one of description/price/labour
+    present — see validate_and_parse_repair_row), so revenue and margin
+    need the same known/unknown split as ProductPeriodAggregate:
+    - revenue counts every repair with a known price_charged, regardless
+      of whether labour_cost is also known.
+    - labour_cost_known_revenue/labour_cost only count repairs where BOTH
+      are known — margin is never computed against a price that has no
+      matching labour cost to net against, or vice versa.
+    """
+
+    repair_count: int
+    repairs_with_known_price: int
+    revenue: Decimal
+    repairs_with_known_price_and_labour: int
+    labour_cost_known_revenue: Decimal
+    labour_cost: Decimal

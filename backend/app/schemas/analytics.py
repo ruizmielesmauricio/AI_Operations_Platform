@@ -99,6 +99,27 @@ class RetailOperationsOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WorkshopMarginOut(BaseModel):
+    repair_count: int
+    revenue: Decimal
+    revenue_coverage_pct: Decimal | None
+    labour_cost: Decimal
+    gross_profit: Decimal
+    gross_margin_pct: Decimal | None
+    labour_cost_coverage_pct: Decimal | None
+    average_ticket: Decimal | None
+
+    model_config = {"from_attributes": True}
+
+
+class WorkshopPerformanceOut(BaseModel):
+    period: PeriodOut
+    revenue: RevenueOut
+    margin: WorkshopMarginOut
+
+    model_config = {"from_attributes": True}
+
+
 class FindingOut(BaseModel):
     type: str
     severity: str

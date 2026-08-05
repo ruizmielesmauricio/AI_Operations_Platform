@@ -8,8 +8,9 @@ from app.api.deps import get_db
 from app.application.financial_performance import get_financial_performance
 from app.application.findings import get_findings
 from app.application.retail_operations import get_retail_operations
+from app.application.workshop_performance import get_workshop_performance
 from app.models.membership import Membership
-from app.schemas.analytics import FindingsOut, FinancialPerformanceOut, RetailOperationsOut
+from app.schemas.analytics import FindingsOut, FinancialPerformanceOut, RetailOperationsOut, WorkshopPerformanceOut
 from app.security.tenant import get_current_membership
 
 router = APIRouter(prefix="/businesses/{business_id}/analytics", tags=["analytics"])
@@ -37,6 +38,18 @@ def retail_operations(
 ) -> RetailOperationsOut:
     summary = get_retail_operations(db, business_id=business_id, start_date=start, end_date=end)
     return RetailOperationsOut.model_validate(summary)
+
+
+@router.get("/workshop-performance", response_model=WorkshopPerformanceOut)
+def workshop_performance(
+    business_id: uuid.UUID,
+    start: date | None = None,
+    end: date | None = None,
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> WorkshopPerformanceOut:
+    summary = get_workshop_performance(db, business_id=business_id, start_date=start, end_date=end)
+    return WorkshopPerformanceOut.model_validate(summary)
 
 
 @router.get("/findings", response_model=FindingsOut)

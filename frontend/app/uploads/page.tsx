@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPost } from "@/lib/api/client";
+import { AppNav } from "@/components/AppNav";
+import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type {
-  Business,
   ConfirmMappingResponse,
   DetectMappingResponse,
   ImportRunResponse,
@@ -85,8 +86,7 @@ const NOT_PRESENT = "";
 
 export default function UploadsPage() {
   const { session, checkingSession } = useRequireSession();
-  const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [businessId, setBusinessId] = useState<string>("");
+  const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [freshness, setFreshness] = useState<UploadFreshnessEntry[]>([]);
   const [entityType, setEntityType] = useState(ENTITY_TYPES[0].value);
@@ -117,19 +117,6 @@ export default function UploadsPage() {
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
   const [undoingRecordId, setUndoingRecordId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (session) {
-      apiGet<Business[]>("/businesses")
-        .then((rows) => {
-          setBusinesses(rows);
-          const requested = new URLSearchParams(window.location.search).get("business");
-          const preselect = rows.find((b) => b.id === requested)?.id;
-          setBusinessId((current) => current || preselect || rows[0]?.id || "");
-        })
-        .catch(() => undefined);
-    }
-  }, [session]);
 
   const loadUploads = useCallback((id: string) => {
     apiGet<Upload[]>(`/businesses/${id}/uploads`)
@@ -334,6 +321,7 @@ export default function UploadsPage() {
 
   return (
     <main>
+      <AppNav businessId={businessId} />
       <h1>Upload data</h1>
 
       {freshness.length > 0 && (
