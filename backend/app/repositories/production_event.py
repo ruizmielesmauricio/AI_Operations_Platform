@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
+from app.analytics.types import RepairPeriodTotals
 from app.models.production_event import ProductionEvent
 
 
@@ -60,3 +61,41 @@ class ProductionEventRepository:
             return
         self.session.execute(delete(ProductionEvent).where(ProductionEvent.id.in_(event_ids)))
         self.session.flush()
+
+    def aggregate_completed_repairs_in_range(
+        self, business_id: uuid.UUID, start: datetime, end: datetime
+    ) -> RepairPeriodTotals:
+        """One query, business-wide (no group_by — a repair has no product
+        to break down by). completed_at is the filter field: the repairs
+        importer sets it equal to opened_at (a periodic export has no
+        separate "opened" timestamp to offer), so it's the one reliable
+        date on a completed repair, mirroring Sale.sold_at's role."""
+        known_price = ProductionEvent.price_charged.isnot(None)
+        known_both = known_price & ProductionEvent.labour_cost.isnot(None)
+
+        row = self.session.execute(
+            select(
+                func.count(ProductionEvent.id),
+                func.sum(case((known_price, 1), else_=0)),
+                func.sum(case((known_price, ProductionEvent.price_charged), else_=0)),
+                func.sum(case((known_both, 1), else_=0)),
+                func.sum(case((known_both, ProductionEvent.price_charged), else_=0)),
+                func.sum(case((known_both, ProductionEvent.labour_cost), else_=0)),
+            ).where(
+                ProductionEvent.business_id == business_id,
+                ProductionEvent.event_type == "repair",
+                ProductionEvent.status == "completed",
+                ProductionEvent.completed_at >= start,
+                ProductionEvent.completed_at < end,
+            )
+        ).one()
+
+        repair_count, repairs_with_known_price, revenue, repairs_with_known_both, labour_known_revenue, labour_cost = row
+        return RepairPeriodTotals(
+            repair_count=int(repair_count or 0),
+            repairs_with_known_price=int(repairs_with_known_price or 0),
+            revenue=Decimal(revenue or 0),
+            repairs_with_known_price_and_labour=int(repairs_with_known_both or 0),
+            labour_cost_known_revenue=Decimal(labour_known_revenue or 0),
+            labour_cost=Decimal(labour_cost or 0),
+        )

@@ -24,3 +24,29 @@ main {
 .status-warn {
   color: #9a6700;
 }
+
+.status-info {
+  color: #57606a;
+}
+
+/* Dashboard needs more room than the default 640px form-width pages
+   (uploads, auth) for charts/tables — opt-in via a class rather than
+   widening `main` globally. */
+.wide {
+  max-width: 960px;
+}
+
+section {
+  margin: 2.5rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.25rem 0.75rem 0.25rem 0;
+}
