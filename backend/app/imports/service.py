@@ -122,8 +122,16 @@ def _preview_rows(grid: list[Row]) -> list[list[str]]:
 def detect_mapping_for_upload(
     db: Session, upload: Upload, header_row_index: int | None = None
 ) -> DetectMappingResult:
-    if upload.status != "uploaded":
+    # "mapped" is a remap attempt (a confirmed-but-not-yet-run upload getting
+    # its mapping fixed) — first-time mapping only ever starts from
+    # "uploaded". Remapping an upload whose import already ran (status
+    # "imported", whether reversed or not) stays unsupported: the source
+    # file is deleted from R2 right after a successful import (ADR-008),
+    # so there's nothing left here to re-read — that case's recovery path
+    # is re-uploading the file, unchanged.
+    if upload.status not in ("uploaded", "mapped"):
         raise UploadNotReady(upload.status)
+    is_remap = upload.status == "mapped"
 
     grid = _read_grid(upload)
     try:
@@ -139,29 +147,36 @@ def detect_mapping_for_upload(
             preview_rows=_preview_rows(grid),
         )
     columns = [c for c in result.columns if c]
-    existing = ImportMappingProfileRepository(db).get_by_signature(
-        upload.business_id, result.source_signature
-    )
-    if existing is not None:
-        # The saved mapping is what gets used going forward, not a fresh
-        # (possibly different) heuristic guess — reuse means zero input,
-        # not "here's another suggestion" (PR-2.5). That promise means the
-        # upload is actually finished here, not left at "uploaded" waiting
-        # for a confirmation step that will never come.
-        ImportRecordRepository(db).create(
-            business_id=upload.business_id,
-            upload_id=upload.id,
-            mapping_profile_id=existing.id,
-            entity_type=upload.entity_type,
-            status="mapped",
+
+    # Skipped on remap: confirm_mapping's own upsert() already saved the
+    # user's just-rejected mapping as this exact source's profile, so the
+    # normal reuse check would find it and silently reapply the same
+    # mistake via the "reused" fast path, before the user ever sees the
+    # form again — defeating the point of remapping.
+    if not is_remap:
+        existing = ImportMappingProfileRepository(db).get_by_signature(
+            upload.business_id, result.source_signature
         )
-        UploadRepository(db).set_status(upload, status="mapped")
-        return DetectMappingResult(
-            status="reused",
-            mapping_profile_id=existing.id,
-            suggested_mapping=existing.column_mapping["fields"],
-            columns=columns,
-        )
+        if existing is not None:
+            # The saved mapping is what gets used going forward, not a fresh
+            # (possibly different) heuristic guess — reuse means zero input,
+            # not "here's another suggestion" (PR-2.5). That promise means the
+            # upload is actually finished here, not left at "uploaded" waiting
+            # for a confirmation step that will never come.
+            ImportRecordRepository(db).create(
+                business_id=upload.business_id,
+                upload_id=upload.id,
+                mapping_profile_id=existing.id,
+                entity_type=upload.entity_type,
+                status="mapped",
+            )
+            UploadRepository(db).set_status(upload, status="mapped")
+            return DetectMappingResult(
+                status="reused",
+                mapping_profile_id=existing.id,
+                suggested_mapping=existing.column_mapping["fields"],
+                columns=columns,
+            )
     return DetectMappingResult(
         status="needs_confirmation",
         mapping_profile_id=None,
@@ -175,7 +190,9 @@ def detect_mapping_for_upload(
 def confirm_mapping(
     db: Session, upload: Upload, field_mapping: dict[str, str | None], header_row_index: int | None = None
 ) -> tuple[ImportRecord, uuid.UUID]:
-    if upload.status != "uploaded":
+    # See detect_mapping_for_upload's docstring note — same relaxed
+    # precondition, same "imported" scope boundary.
+    if upload.status not in ("uploaded", "mapped"):
         raise UploadNotReady(upload.status)
 
     # Re-run detection rather than trust the client's payload shape/columns
@@ -212,6 +229,11 @@ def confirm_mapping(
         source_signature=result.source_signature,
         column_mapping=column_mapping,
     )
+    # No-op on a first-time confirm (nothing to delete yet). On a remap,
+    # removes the previous attempt's record first — preserves "exactly one
+    # ImportRecord per Upload" (get_for_upload/map_by_upload_id both assume
+    # this), rather than leaving a stale "mapped, zero rows" row behind.
+    ImportRecordRepository(db).delete_for_upload(upload.business_id, upload.id)
     record = ImportRecordRepository(db).create(
         business_id=upload.business_id,
         upload_id=upload.id,
