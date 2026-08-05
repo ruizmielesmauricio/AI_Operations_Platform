@@ -18,6 +18,7 @@ from app.imports.exceptions import (
 from app.models.import_record import ImportRecord
 from app.models.membership import Membership
 from app.models.upload import Upload
+from app.imports.aliases import SUPPORTED_ENTITY_TYPES
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.upload import UploadRepository
 from app.schemas.import_mapping import (
@@ -26,7 +27,13 @@ from app.schemas.import_mapping import (
     DetectMappingRequest,
     DetectMappingResponse,
 )
-from app.schemas.upload import ImportRecordSummary, UploadCreateRequest, UploadCreateResponse, UploadOut
+from app.schemas.upload import (
+    ImportRecordSummary,
+    UploadCreateRequest,
+    UploadCreateResponse,
+    UploadFreshnessEntry,
+    UploadOut,
+)
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -37,6 +44,11 @@ router = APIRouter(prefix="/businesses/{business_id}/uploads", tags=["uploads"])
 _INSUFFICIENT_MAPPING_MESSAGES = {
     "sales": "Not enough information to calculate sales — map a sale date and a price field",
     "inventory": "Not enough information to record stock — map a product name or SKU, and a quantity",
+    "purchases": (
+        "Not enough information to record this restock — map a date, a product name or SKU, "
+        "and a quantity received"
+    ),
+    "repairs": "Not enough information to record this repair — map a date, and a description, price, or labour cost",
 }
 
 
@@ -99,6 +111,18 @@ def list_uploads(
     uploads = UploadRepository(db).list_for_business(membership.business_id)
     records_by_upload = ImportRecordRepository(db).map_by_upload_id(membership.business_id)
     return [_to_upload_out(u, records_by_upload.get(u.id)) for u in uploads]
+
+
+@router.get("/freshness", response_model=list[UploadFreshnessEntry])
+def get_upload_freshness(
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> list[UploadFreshnessEntry]:
+    latest = ImportRecordRepository(db).latest_completed_by_entity_type(membership.business_id)
+    return [
+        UploadFreshnessEntry(entity_type=et, last_completed_at=latest.get(et))
+        for et in SUPPORTED_ENTITY_TYPES
+    ]
 
 
 @router.post("/{upload_id}/detect-mapping", response_model=DetectMappingResponse)

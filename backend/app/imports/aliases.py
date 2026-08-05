@@ -13,7 +13,7 @@ CANONICAL_FIELDS/ALIASES, no changes to detection.py's algorithm.
 import re
 from collections.abc import Callable
 
-SUPPORTED_ENTITY_TYPES = ("sales", "inventory")
+SUPPORTED_ENTITY_TYPES = ("sales", "inventory", "purchases", "repairs")
 
 # Field order matters: it's the priority order alias matching resolves
 # ties in (see match_alias) and the order fields are presented for
@@ -38,6 +38,26 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "sku",
         "quantity_on_hand",
     ],
+    # A restocking transaction — each row is its own independent fact
+    # ("we received N units on this date"), not a reconciliation like
+    # "inventory" above. No order/PO-level grouping (unlike sales'
+    # order_reference): each row becomes its own InventoryMovement.
+    "purchases": [
+        "purchase_date",
+        "product_name",
+        "sku",
+        "quantity_received",
+        "unit_cost",
+    ],
+    # One row per finished repair, from a shop's own workshop log/export —
+    # treated the same as sales at the row level, not the line-item level
+    # (no parts-consumed detail here; see app/models/production_event.py).
+    "repairs": [
+        "repair_date",
+        "description",
+        "price_charged",
+        "labour_cost",
+    ],
 }
 
 # Declarative per-entity-type "is this mapping usable at all" check —
@@ -46,6 +66,15 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
 MINIMUM_MAPPING_RULES: dict[str, Callable[[dict[str, str | None]], bool]] = {
     "sales": lambda m: bool(m.get("sale_date")) and bool(m.get("unit_price") or m.get("total_amount")),
     "inventory": lambda m: bool(m.get("product_name") or m.get("sku")) and bool(m.get("quantity_on_hand")),
+    "purchases": lambda m: (
+        bool(m.get("purchase_date"))
+        and bool(m.get("product_name") or m.get("sku"))
+        and bool(m.get("quantity_received"))
+    ),
+    "repairs": lambda m: (
+        bool(m.get("repair_date"))
+        and bool(m.get("description") or m.get("price_charged") or m.get("labour_cost"))
+    ),
 }
 
 # Every field's canonical name is itself a valid alias (normalized), so
@@ -107,6 +136,46 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "qty on hand", "quantity on hand", "stock", "stock level", "stock count",
             "on hand", "current stock", "inventory count", "quantity in stock",
             "units in stock", "available stock", "stock qty",
+        ],
+    },
+    "purchases": {
+        "purchase_date": [
+            "purchase date", "date received", "received date", "delivery date",
+            "restock date", "po date", "order date", "date",
+        ],
+        "product_name": [
+            "item", "product", "description", "product name", "item description",
+            "item name", "sku description", "product description", "name", "title",
+        ],
+        "sku": [
+            "sku", "product code", "item code", "barcode", "product sku", "item sku",
+            "code", "upc", "item#", "item number",
+        ],
+        "quantity_received": [
+            "qty received", "quantity received", "units received", "qty",
+            "quantity", "units", "qty delivered", "restock qty", "amount received",
+        ],
+        "unit_cost": [
+            "unit cost", "cost", "cost price", "cost/unit", "cost each",
+            "purchase price", "supplier price", "landed cost", "buy price",
+        ],
+    },
+    "repairs": {
+        "repair_date": [
+            "repair date", "date repaired", "date completed", "completion date",
+            "job date", "service date", "invoice date", "date",
+        ],
+        "description": [
+            "description", "repair description", "work performed", "job description",
+            "work done", "notes", "service description",
+        ],
+        "price_charged": [
+            "price charged", "amount charged", "charge", "invoice amount",
+            "invoice total", "total charged", "repair price", "service price",
+            "amount", "total",
+        ],
+        "labour_cost": [
+            "labour cost", "labor cost", "internal cost", "labour charge",
         ],
     },
 }

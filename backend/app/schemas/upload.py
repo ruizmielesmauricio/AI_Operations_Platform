@@ -29,6 +29,16 @@ class ImportRecordSummary(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UploadFreshnessEntry(BaseModel):
+    """One entity_type's "how stale is this data" reading — the restock-
+    freshness indicator (app/api/uploads.py's /freshness route). Computed
+    on request, not persisted/scheduled (no background job runner exists
+    yet — see 11_Development_Roadmap.md Stage D17)."""
+
+    entity_type: str
+    last_completed_at: datetime | None
+
+
 class UploadOut(BaseModel):
     id: uuid.UUID
     original_filename: str

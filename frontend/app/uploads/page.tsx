@@ -11,7 +11,15 @@ import type {
   ImportUndoResponse,
   RejectionSummary,
   Upload,
+  UploadFreshnessEntry,
 } from "@/types";
+
+// Past this many days since the last completed upload, the freshness
+// indicator switches to its warning style — matches the "upload weekly"
+// cadence a restocking shop is nudged toward. Purely a passive, on-request
+// indicator (no push/email notification — no scheduler exists yet to fire
+// one; see 11_Development_Roadmap.md Stage D17).
+const STALE_AFTER_DAYS = 7;
 
 // Client-side hint only (the `accept` attribute) — the backend is the
 // actual gate on which extensions are allowed (PR-2.1, app/imports/service.py).
@@ -20,6 +28,8 @@ const ACCEPTED_EXTENSIONS = ".csv,.xls,.xlsx";
 const ENTITY_TYPES = [
   { value: "sales", label: "Sales transactions" },
   { value: "inventory", label: "Inventory / stock count" },
+  { value: "purchases", label: "Purchases / restocking" },
+  { value: "repairs", label: "Repairs" },
 ];
 
 // Keyed by entity_type — order matters within each: it's the order fields
@@ -36,6 +46,8 @@ const FIELD_ORDER: Record<string, string[]> = {
     "order_reference",
   ],
   inventory: ["product_name", "sku", "quantity_on_hand"],
+  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost"],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -54,6 +66,19 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
   },
+  purchases: {
+    purchase_date: "Which column is the date the stock was received?",
+    product_name: "Which column is the product name? (optional if SKU is set)",
+    sku: "Which column is the SKU or product code? (optional if product name is set)",
+    quantity_received: "Which column is the quantity received?",
+    unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
+  },
+  repairs: {
+    repair_date: "Which column is the repair date?",
+    description: "Which column describes the work performed? (optional if price or labour cost is set)",
+    price_charged: "Which column is the price charged to the customer? (optional)",
+    labour_cost: "Which column is the labour cost? (optional)",
+  },
 };
 
 const NOT_PRESENT = "";
@@ -63,6 +88,7 @@ export default function UploadsPage() {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [businessId, setBusinessId] = useState<string>("");
   const [uploads, setUploads] = useState<Upload[]>([]);
+  const [freshness, setFreshness] = useState<UploadFreshnessEntry[]>([]);
   const [entityType, setEntityType] = useState(ENTITY_TYPES[0].value);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -111,9 +137,18 @@ export default function UploadsPage() {
       .catch(() => undefined);
   }, []);
 
+  const loadFreshness = useCallback((id: string) => {
+    apiGet<UploadFreshnessEntry[]>(`/businesses/${id}/uploads/freshness`)
+      .then(setFreshness)
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
-    if (businessId) loadUploads(businessId);
-  }, [businessId, loadUploads]);
+    if (businessId) {
+      loadUploads(businessId);
+      loadFreshness(businessId);
+    }
+  }, [businessId, loadUploads, loadFreshness]);
 
   function sampleValuesFor(column: string): string[] {
     if (!detection) return [];
@@ -208,6 +243,7 @@ export default function UploadsPage() {
     try {
       await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
       loadUploads(businessId);
+      loadFreshness(businessId);
     } catch {
       setActionErrors((prev) => ({
         ...prev,
@@ -227,6 +263,7 @@ export default function UploadsPage() {
         {}
       );
       loadUploads(businessId);
+      loadFreshness(businessId);
     } catch {
       setActionErrors((prev) => ({ ...prev, [importRecordId]: "Could not undo this import." }));
     } finally {
@@ -298,6 +335,19 @@ export default function UploadsPage() {
   return (
     <main>
       <h1>Upload data</h1>
+
+      {freshness.length > 0 && (
+        <ul>
+          {freshness.map((entry) => {
+            const label = ENTITY_TYPES.find((t) => t.value === entry.entity_type)?.label ?? entry.entity_type;
+            return (
+              <li key={entry.entity_type} className={freshnessClass(entry.last_completed_at)}>
+                {label}: {freshnessText(entry.last_completed_at)}
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
       {businesses.length > 1 && (
         <div>
@@ -476,6 +526,24 @@ export default function UploadsPage() {
       )}
     </main>
   );
+}
+
+function daysSince(isoTimestamp: string): number {
+  const elapsedMs = Date.now() - new Date(isoTimestamp).getTime();
+  return Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
+}
+
+function freshnessText(lastCompletedAt: string | null): string {
+  if (!lastCompletedAt) return "never uploaded";
+  const days = daysSince(lastCompletedAt);
+  if (days <= 0) return "last uploaded today";
+  if (days === 1) return "last uploaded 1 day ago";
+  return `last uploaded ${days} days ago`;
+}
+
+function freshnessClass(lastCompletedAt: string | null): string {
+  if (!lastCompletedAt) return "status-warn";
+  return daysSince(lastCompletedAt) > STALE_AFTER_DAYS ? "status-warn" : "";
 }
 
 function renderRejectionSummary(summary: RejectionSummary | null) {

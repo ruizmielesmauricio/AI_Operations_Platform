@@ -39,6 +39,25 @@ class ProductRepository:
         self.session.flush()
         return product
 
+    def update_cost_price(
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal
+    ) -> Product | None:
+        """First update path on Product ever — written by the "purchases"
+        entity type (app/imports/importer.py::_write_purchases), which is
+        explicitly the natural place to learn/refresh a product's current
+        cost. Unconditionally overwrites (cost_price has no other refresh
+        path, and the latest purchase price should win). Flush only —
+        app/imports/importer.py owns the single commit.
+        """
+        product = self.session.scalar(
+            select(Product).where(Product.id == product_id, Product.business_id == business_id)
+        )
+        if product is None:
+            return None
+        product.cost_price = cost_price
+        self.session.flush()
+        return product
+
 
 class ProductCategoryRepository:
     def __init__(self, session: Session):

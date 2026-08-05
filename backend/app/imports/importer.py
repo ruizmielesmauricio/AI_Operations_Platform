@@ -34,6 +34,7 @@ from app.repositories.import_mapping_profile import ImportMappingProfileReposito
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.product import ProductRepository
+from app.repositories.production_event import ProductionEventRepository
 from app.repositories.sale import SaleRepository
 from app.repositories.sale_item import SaleItemRepository
 from app.repositories.upload import UploadRepository
@@ -70,6 +71,25 @@ class ParsedInventoryRow:
     product_name: str | None
     sku: str | None
     quantity_on_hand: int
+
+
+@dataclass
+class ParsedPurchaseRow:
+    row_number: int  # spreadsheet-visible, 1-indexed
+    purchase_date: date
+    product_name: str | None
+    sku: str | None
+    quantity_received: int
+    unit_cost: Decimal | None
+
+
+@dataclass
+class ParsedRepairRow:
+    row_number: int  # spreadsheet-visible, 1-indexed
+    repair_date: date
+    description: str | None
+    price_charged: Decimal | None
+    labour_cost: Decimal | None
 
 
 @dataclass
@@ -169,6 +189,64 @@ def validate_and_parse_inventory_row(
 
     return ParsedInventoryRow(
         row_number=row_number, product_name=product_name, sku=sku, quantity_on_hand=quantity_on_hand
+    )
+
+
+def validate_and_parse_purchase_row(
+    row_number: int, mapped_values: dict[str, object]
+) -> ParsedPurchaseRow | RejectedRow:
+    purchase_date = parse_date(mapped_values.get("purchase_date"))
+    if purchase_date is None:
+        return RejectedRow(row_number, "missing_date", _display_raw(mapped_values))
+
+    product_name = _blank_to_none(mapped_values.get("product_name"))
+    sku = _blank_to_none(mapped_values.get("sku"))
+    if not product_name and not sku:
+        return RejectedRow(row_number, "missing_product_identifier", _display_raw(mapped_values))
+
+    quantity_received = parse_int(mapped_values.get("quantity_received"))
+    if quantity_received is None:
+        return RejectedRow(row_number, "missing_quantity", _display_raw(mapped_values))
+    if quantity_received <= 0:
+        # A non-positive receipt isn't a purchase fact — that's a "return",
+        # a different reason (reserved on InventoryMovement, not written by
+        # this entity type). Distinct code from sales' "invalid_quantity"
+        # (which means unparseable, not merely non-positive) — this one
+        # parsed fine, it's just semantically wrong for this field.
+        return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
+
+    unit_cost = parse_money(mapped_values.get("unit_cost"))
+
+    return ParsedPurchaseRow(
+        row_number=row_number,
+        purchase_date=purchase_date,
+        product_name=product_name,
+        sku=sku,
+        quantity_received=quantity_received,
+        unit_cost=unit_cost,
+    )
+
+
+def validate_and_parse_repair_row(
+    row_number: int, mapped_values: dict[str, object]
+) -> ParsedRepairRow | RejectedRow:
+    repair_date = parse_date(mapped_values.get("repair_date"))
+    if repair_date is None:
+        return RejectedRow(row_number, "missing_date", _display_raw(mapped_values))
+
+    description = _blank_to_none(mapped_values.get("description"))
+    price_charged = parse_money(mapped_values.get("price_charged"))
+    labour_cost = parse_money(mapped_values.get("labour_cost"))
+    if description is None and price_charged is None and labour_cost is None:
+        # A bare date with nothing else carries no usable content.
+        return RejectedRow(row_number, "missing_repair_detail", _display_raw(mapped_values))
+
+    return ParsedRepairRow(
+        row_number=row_number,
+        repair_date=repair_date,
+        description=description,
+        price_charged=price_charged,
+        labour_cost=labour_cost,
     )
 
 
@@ -346,6 +424,8 @@ _REJECTION_MESSAGE_TEMPLATES = {
     "missing_product_identifier": "no product name or SKU found",
     "missing_quantity": "no stock count found",
     "negative_quantity": "stock count can't be negative",
+    "missing_repair_detail": "no description, price, or labour cost found",
+    "non_positive_quantity": "quantity received must be greater than zero",
 }
 _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
@@ -523,6 +603,89 @@ def _write_inventory(
     return rows_imported, warnings, touched_product_ids
 
 
+def _write_purchases(
+    db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedPurchaseRow]
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+    warnings: dict[str, list[dict]] = defaultdict(list)
+    product_repo = ProductRepository(db)
+    movement_repo = InventoryMovementRepository(db)
+    matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+
+    rows_imported = 0
+    touched_product_ids: set[uuid.UUID] = set()
+    cost_updated_products: set[uuid.UUID] = set()
+    for row in parsed_rows:
+        match = matcher.resolve(sku=row.sku, product_name=row.product_name)
+        if match.action == "create":
+            product = product_repo.create(
+                business_id=upload.business_id,
+                sku=match.create_sku,
+                name=match.create_name,
+                cost_price=row.unit_cost,
+                sell_price=None,
+            )
+            matcher.register_created(product)
+            product_id = product.id
+        else:
+            # Never "none" here — validate_and_parse_purchase_row already
+            # rejects rows with no sku and no product_name before this point.
+            product_id = match.product_id
+            if match.name_mismatch:
+                warnings["product_name_mismatch"].append(
+                    {"row_number": row.row_number, "product_name": row.product_name}
+                )
+            if row.unit_cost is not None:
+                if product_id in cost_updated_products:
+                    warnings["duplicate_product_in_file"].append({"row_number": row.row_number})
+                product_repo.update_cost_price(
+                    business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost
+                )
+                cost_updated_products.add(product_id)
+
+        movement_repo.create(
+            business_id=upload.business_id,
+            product_id=product_id,
+            quantity_delta=row.quantity_received,
+            reason="purchase",
+            import_record_id=import_record.id,
+        )
+        touched_product_ids.add(product_id)
+        rows_imported += 1
+    return rows_imported, warnings, touched_product_ids
+
+
+def _write_repairs(
+    db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedRepairRow]
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+    event_repo = ProductionEventRepository(db)
+    rows_imported = 0
+    for row in parsed_rows:
+        # These are historical, already-finished jobs from an export, not
+        # live in-progress repairs — status="completed" (not the model's
+        # "open" default, reserved for a possible future real-time entry
+        # screen), completed_at set to the same date since a periodic
+        # export has no separate "opened" timestamp to offer.
+        opened_at = datetime.combine(row.repair_date, datetime.min.time(), tzinfo=timezone.utc)
+        event_repo.create(
+            business_id=upload.business_id,
+            event_type="repair",
+            description=row.description,
+            status="completed",
+            opened_at=opened_at,
+            completed_at=opened_at,
+            labour_cost=row.labour_cost,
+            price_charged=row.price_charged,
+            customer_id=None,
+            performed_by_id=None,
+            import_record_id=import_record.id,
+        )
+        rows_imported += 1
+    # No InventoryMovement written (v1 has no parts-consumed detail), so
+    # nothing for refresh_low_stock_alerts to do — an empty set is a
+    # correct, cheap no-op there.
+    return rows_imported, {}, set()
+
+
 def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
     if upload.status != "mapped" or import_record.status != "mapped":
         raise ImportRecordNotReady(import_record.status)
@@ -555,9 +718,9 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         except ValueError:
             raise MappedColumnMissing(source_column)
 
-    parse_row = validate_and_parse_row if upload.entity_type == "sales" else validate_and_parse_inventory_row
+    parse_row = _PARSE_ROW_FNS[upload.entity_type]
 
-    parsed_rows: list[ParsedSaleRow | ParsedInventoryRow] = []
+    parsed_rows: list[ParsedSaleRow | ParsedInventoryRow | ParsedPurchaseRow | ParsedRepairRow] = []
     rejections: list[RejectedRow] = []
     for offset, row in enumerate(data_rows):
         if not any(normalize_cell(c) != "" for c in row):
@@ -570,10 +733,9 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         else:
             parsed_rows.append(result)
 
-    if upload.entity_type == "sales":
-        rows_imported, warnings, touched_product_ids = _write_sales(db, upload, import_record, parsed_rows)
-    else:
-        rows_imported, warnings, touched_product_ids = _write_inventory(db, upload, import_record, parsed_rows)
+    rows_imported, warnings, touched_product_ids = _WRITE_FNS[upload.entity_type](
+        db, upload, import_record, parsed_rows
+    )
 
     rejection_summary = _build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)
@@ -628,24 +790,27 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
     if import_record.status != "completed" or import_record.reversed_at is not None:
         raise ImportNotReversible(import_record.status, import_record.reversed_at)
 
-    # A sales movement's magnitude (-quantity) is independent of everything
-    # else in the ledger, so undoing one has always been safe unconditionally.
-    # An adjustment movement's magnitude is NOT independent — it's
-    # uploaded_qty minus stock-at-the-moment-it-ran, which bakes in every
-    # movement before it. Undoing anything (sales or inventory) that ran
+    # A sales/purchase movement's magnitude (-quantity / +quantity_received)
+    # is independent of everything else in the ledger, so undoing one has
+    # always been safe unconditionally. An adjustment movement's magnitude
+    # is NOT independent — it's uploaded_qty minus stock-at-the-moment-it-
+    # ran, which bakes in every movement before it. Undoing anything that
+    # writes InventoryMovement rows (sales, inventory, purchases) and ran
     # before a later, still-in-effect inventory reconciliation would
     # silently corrupt the stock that reconciliation established. Checked
     # globally, before the entity-type branch below, because this can
-    # corrupt a *sales* undo too, not just an inventory one.
-    if ImportRecordRepository(db).has_later_completed_inventory_import(
+    # corrupt a *sales* or *purchases* undo too, not just an inventory one.
+    #
+    # "repairs" is deliberately exempt: it writes zero InventoryMovement
+    # rows (v1 has no parts-consumed detail), so it can never be affected by
+    # or corrupt a later inventory reconciliation — the guard would be a
+    # pure, incorrect false-positive block for it, not a safety margin.
+    if import_record.entity_type != "repairs" and ImportRecordRepository(db).has_later_completed_inventory_import(
         import_record.business_id, after=import_record.updated_at
     ):
         raise ImportSupersededByLaterInventoryImport()
 
-    if import_record.entity_type == "sales":
-        touched_product_ids = _undo_sales_import(db, import_record)
-    else:
-        touched_product_ids = _undo_inventory_import(db, import_record)
+    touched_product_ids = _UNDO_FNS[import_record.entity_type](db, import_record)
 
     ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
     db.commit()
@@ -685,14 +850,52 @@ def _undo_sales_import(db: Session, import_record: ImportRecord) -> set[uuid.UUI
     return touched_product_ids
 
 
-def _undo_inventory_import(db: Session, import_record: ImportRecord) -> set[uuid.UUID]:
+def _undo_movement_import(db: Session, import_record: ImportRecord) -> set[uuid.UUID]:
+    """Shared by "inventory" and "purchases" — both write nothing but
+    InventoryMovement rows traced directly by import_record_id (reference_id
+    is sales-only), so undoing either is the same operation: bulk-delete by
+    import_record_id. Products left in place, same reasoning as the sales
+    path. (Named for what it does, not either entity type specifically —
+    was _undo_inventory_import before "purchases" needed the identical body.)
+    """
     movement_repo = InventoryMovementRepository(db)
     touched_product_ids = movement_repo.list_product_ids_by_import_record_id(
         import_record.business_id, import_record.id
     )
-    # No Sale/SaleItem cascade — an inventory import only ever writes
-    # "adjustment" InventoryMovement rows, traced directly by
-    # import_record_id (reference_id is sales-only). Products left in
-    # place, same reasoning as the sales path.
     movement_repo.bulk_delete_by_import_record_id(import_record.business_id, import_record.id)
     return touched_product_ids
+
+
+def _undo_repairs_import(db: Session, import_record: ImportRecord) -> set[uuid.UUID]:
+    event_repo = ProductionEventRepository(db)
+    event_ids = event_repo.list_ids_by_import_record(import_record.business_id, import_record.id)
+    event_repo.bulk_delete_by_ids(event_ids)
+    # No InventoryMovement ever written by a repairs import — nothing for
+    # refresh_low_stock_alerts to do.
+    return set()
+
+
+# Dispatch tables — one binary if/else per concern outgrew itself once a
+# third and fourth entity type arrived. Pure refactor for "sales"/
+# "inventory": same functions, same behavior, so no existing test needed to
+# change for those two.
+_PARSE_ROW_FNS = {
+    "sales": validate_and_parse_row,
+    "inventory": validate_and_parse_inventory_row,
+    "purchases": validate_and_parse_purchase_row,
+    "repairs": validate_and_parse_repair_row,
+}
+
+_WRITE_FNS = {
+    "sales": _write_sales,
+    "inventory": _write_inventory,
+    "purchases": _write_purchases,
+    "repairs": _write_repairs,
+}
+
+_UNDO_FNS = {
+    "sales": _undo_sales_import,
+    "inventory": _undo_movement_import,
+    "purchases": _undo_movement_import,
+    "repairs": _undo_repairs_import,
+}

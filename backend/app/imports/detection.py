@@ -33,11 +33,16 @@ _HIGH_CONFIDENCE = 0.85
 _MIN_CONFIDENCE = 0.5
 _CANDIDATES_PER_FIELD = 3
 
-_MONEY_FIELDS = ("unit_price", "total_amount", "cost_price_at_sale")
+_MONEY_FIELDS = (
+    "unit_price", "total_amount", "cost_price_at_sale", "unit_cost", "price_charged", "labour_cost",
+)
 _MONEY_TOKENS = {
     "unit_price": {"price", "unit", "each", "rate"},
     "total_amount": {"total", "amount", "grand", "net", "sum", "revenue", "subtotal"},
     "cost_price_at_sale": {"cost", "cogs"},
+    "unit_cost": {"cost", "unit", "landed", "supplier", "buy"},
+    "price_charged": {"price", "charge", "amount", "total", "invoice"},
+    "labour_cost": {"labour", "labor", "cost"},
 }
 _SKU_TOKENS = {"sku", "code", "barcode", "upc"}
 # Deliberately excludes bare "ref": a column just called "Ref" is at least
@@ -50,6 +55,11 @@ _ORDER_REFERENCE_TOKENS = {"order", "receipt", "transaction", "txn", "invoice", 
 # quantity field, which rarely shares a file with another small-integer
 # column, so a bare parse-rate score is not enough signal on its own here.
 _QUANTITY_ON_HAND_TOKENS = {"stock", "inventory", "onhand", "hand", "qty", "count"}
+# A purchase-order export commonly has other small-integer columns
+# competing too (a PO/line number, a reorder point) — same reasoning as
+# quantity_on_hand, not "quantity" (which rarely shares a file with another
+# small-integer column).
+_QUANTITY_RECEIVED_TOKENS = {"received", "qty", "quantity", "units", "delivered", "restock", "ordered"}
 # Requires at least one digit (lookahead) rather than stripping spaces and
 # checking alnum shape alone — a plain product-name word ("Blue Widget")
 # is otherwise indistinguishable from a real code once spaces are removed.
@@ -297,7 +307,10 @@ def _token_overlap(header_norm: str, tokens: set[str]) -> float:
 def _score_field(field: str, samples: list[object], header_norm: str) -> float:
     if len(samples) < _MIN_SAMPLES_FOR_SCORING:
         return 0.0
-    if field == "sale_date":
+    if field in ("sale_date", "purchase_date", "repair_date"):
+        # Pure date-parseability, entity-agnostic — folding purchase_date/
+        # repair_date into the same check as sale_date changes nothing for
+        # sales (only one of the three is ever in a given file's field list).
         return sum(1 for v in samples if parse_date(v) is not None) / len(samples)
     if field == "quantity":
         parsed = [parse_int(v) for v in samples]
@@ -320,6 +333,20 @@ def _score_field(field: str, samples: list[object], header_norm: str) -> float:
             return 0.0
         rate = len(valid) / len(samples)
         token_bonus = _token_overlap(header_norm, _QUANTITY_ON_HAND_TOKENS)
+        if token_bonus == 0.0:
+            return 0.6 * rate
+        return 0.7 * rate + 0.3 * token_bonus
+    if field == "quantity_received":
+        # Mirrors quantity_on_hand exactly, not "quantity" — a purchase-
+        # order export commonly has other small-integer columns competing
+        # (PO/line number, reorder point). No magnitude penalty: a bulk
+        # restock delivery can legitimately be in the hundreds/thousands.
+        parsed = [parse_int(v) for v in samples]
+        valid = [p for p in parsed if p is not None]
+        if not valid:
+            return 0.0
+        rate = len(valid) / len(samples)
+        token_bonus = _token_overlap(header_norm, _QUANTITY_RECEIVED_TOKENS)
         if token_bonus == 0.0:
             return 0.6 * rate
         return 0.7 * rate + 0.3 * token_bonus

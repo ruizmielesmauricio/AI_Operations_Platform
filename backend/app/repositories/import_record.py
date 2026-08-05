@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.models.import_record import ImportRecord
@@ -103,3 +103,20 @@ class ImportRecordRepository:
                 )
             )
         )
+
+    def latest_completed_by_entity_type(self, business_id: uuid.UUID) -> dict[str, datetime]:
+        """The restock-freshness indicator (app/api/uploads.py's /freshness
+        route): one grouped query returning each entity_type's most recent
+        completed, unreversed import — a reversed import's data is no
+        longer in effect, so it shouldn't count as "recently uploaded."
+        """
+        rows = self.session.execute(
+            select(ImportRecord.entity_type, func.max(ImportRecord.updated_at))
+            .where(
+                ImportRecord.business_id == business_id,
+                ImportRecord.status == "completed",
+                ImportRecord.reversed_at.is_(None),
+            )
+            .group_by(ImportRecord.entity_type)
+        ).all()
+        return {entity_type: updated_at for entity_type, updated_at in rows}

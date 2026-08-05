@@ -41,6 +41,11 @@ export interface Upload {
   import_record: ImportRecordSummary | null;
 }
 
+export interface UploadFreshnessEntry {
+  entity_type: string;
+  last_completed_at: string | null;
+}
+
 export interface ImportRunResponse {
   import_record_id: string;
   status: string;

@@ -22,9 +22,15 @@ event_type is a denormalized discriminator (same rationale as
 ImportRecord.entity_type) so queries/UI can filter without joining through
 Business.template.
 
-Schema-only for now: no repository, service, or API route consumes these
-tables yet (mirrors how Repair/RepairPartUsed existed unused before this).
-That's Stage C9 (calculation-phase) work.
+`ProductionEvent` is written by the "repairs" upload entity type
+(app/imports/importer.py::_write_repairs) — a shop's own repair log/export,
+uploaded periodically, one row per finished repair. It's ingested as
+event_type="repair", status="completed" (not the model's "open" default,
+which is reserved for a possible future real-time entry screen), with
+customer_id/performed_by_id left NULL (no reliable matching key for a free-
+text name, same reasoning sales never got customer-matching). No parts-
+consumed detail is captured this way — `ProductionEventInput`/
+`ProductionEventOutput` remain schema-only, unconsumed by any writer yet.
 """
 
 
@@ -47,6 +53,13 @@ class ProductionEvent(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # Only meaningful for event_type="repair" — a production_batch's value
     # is realised later, when its output sells normally via a sale_item.
     price_charged: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+    # Which import created this row, if any (nullable — a future real-time
+    # entry screen won't have one). Mirrors Sale.import_record_id — undo
+    # (app/imports/importer.py) uses this to find and remove exactly the
+    # rows one "repairs" import created.
+    import_record_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("import_records.id"), nullable=True, index=True
+    )
 
 
 class ProductionEventInput(Base, PKMixin, TenantScopedMixin, TimestampMixin):
