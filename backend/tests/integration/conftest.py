@@ -12,6 +12,7 @@ from app.models import (
     ProcessedStripeEvent,
     Product,
     ProductCategory,
+    ProductionEvent,
     Sale,
     SaleItem,
     Subscription,
@@ -42,6 +43,7 @@ def db_session(_engine):
     # deleting rows rather than relying on a rollback to undo everything.
     session.rollback()
     session.query(Alert).delete()
+    session.query(ProductionEvent).delete()
     session.query(InventoryMovement).delete()
     session.query(SaleItem).delete()
     session.query(Sale).delete()
