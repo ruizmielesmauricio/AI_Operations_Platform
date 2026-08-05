@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.models.import_record import ImportRecord
@@ -23,6 +23,20 @@ class ImportRecordRepository:
         return self.session.scalar(
             select(ImportRecord).where(ImportRecord.upload_id == upload_id, ImportRecord.business_id == business_id)
         )
+
+    def delete_for_upload(self, business_id: uuid.UUID, upload_id: uuid.UUID) -> None:
+        """Called before creating a fresh ImportRecord on remap (a confirmed-
+        but-not-yet-run upload getting its mapping fixed) — preserves the
+        "exactly one ImportRecord per Upload" invariant get_for_upload() and
+        map_by_upload_id() both rely on. No-ops on a first-time confirm,
+        where there's nothing to delete yet.
+        """
+        self.session.execute(
+            delete(ImportRecord).where(
+                ImportRecord.business_id == business_id, ImportRecord.upload_id == upload_id
+            )
+        )
+        self.session.flush()
 
     def map_by_upload_id(self, business_id: uuid.UUID) -> dict[uuid.UUID, ImportRecord]:
         """One query for every ImportRecord in the business, keyed by

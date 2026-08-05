@@ -477,11 +477,14 @@ export default function UploadsPage() {
                     </button>
                   </>
                 )}
-                {u.status === "mapped" && (
+                {u.status === "mapped" && !mappingUploadId && (
                   <>
                     {" "}
                     <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
                       {isRunning ? "Running…" : "Run import"}
+                    </button>{" "}
+                    <button type="button" disabled={isRunning} onClick={() => startMapping(u.id, u.entity_type)}>
+                      Remap
                     </button>
                   </>
                 )}

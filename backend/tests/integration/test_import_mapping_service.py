@@ -3,8 +3,9 @@ from sqlalchemy import select
 
 from app.imports import detection, r2_client, service
 from app.imports.exceptions import InsufficientMapping, InvalidFieldMapping, UploadNotReady
-from app.models.import_record import ImportMappingProfile
+from app.models.import_record import ImportMappingProfile, ImportRecord
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
+from app.repositories.import_record import ImportRecordRepository
 from app.repositories.upload import UploadRepository
 
 _HEADER = ["Order Date", "Item Description", "SKU", "Qty", "Unit Price"]
@@ -145,3 +146,66 @@ def test_confirm_mapping_rejects_the_wrong_key_shape(db_session, business_id):
 
     with pytest.raises(InvalidFieldMapping):
         service.confirm_mapping(db_session, upload, {"sale_date": "Order Date"})
+
+
+# --- Remapping a confirmed-but-not-yet-run upload -------------------------
+
+
+def test_detect_mapping_allows_a_mapped_upload_to_remap(db_session, business_id):
+    upload = _make_uploaded(db_session, business_id)
+    wrong_mapping = dict(_FULL_FIELD_MAPPING, sku=None, product_name="SKU")  # deliberately swapped
+    service.confirm_mapping(db_session, upload, wrong_mapping)
+
+    refreshed = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    assert refreshed.status == "mapped"
+
+    result = service.detect_mapping_for_upload(db_session, refreshed)
+
+    # Must NOT silently reapply the just-saved (wrong) profile via the
+    # "reused" fast path — the whole point of remapping is that the user
+    # gets to see and fix the form.
+    assert result.status == "needs_confirmation"
+    assert result.suggested_mapping["sale_date"] == "Order Date"
+
+
+def test_confirm_mapping_on_a_remap_replaces_the_import_record(db_session, business_id):
+    upload = _make_uploaded(db_session, business_id)
+    wrong_mapping = dict(_FULL_FIELD_MAPPING, sku=None)
+    first_record, first_profile_id = service.confirm_mapping(db_session, upload, wrong_mapping)
+
+    refreshed = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    corrected_record, corrected_profile_id = service.confirm_mapping(db_session, refreshed, _FULL_FIELD_MAPPING)
+
+    assert corrected_record.id != first_record.id
+    records = db_session.scalars(
+        select(ImportRecord).where(ImportRecord.business_id == business_id, ImportRecord.upload_id == upload.id)
+    ).all()
+    assert len(records) == 1  # the wrong attempt's record is gone, not orphaned
+    assert records[0].id == corrected_record.id
+
+    # The same source's saved profile was corrected in place too (upsert),
+    # not left pointing at the wrong mapping for a future upload.
+    assert corrected_profile_id == first_profile_id
+    profile = ImportMappingProfileRepository(db_session).get_by_id(business_id, corrected_profile_id)
+    assert profile.column_mapping["fields"]["sku"] == "SKU"
+
+    final = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    assert final.status == "mapped"
+
+
+def test_cannot_remap_an_upload_whose_import_already_ran(db_session, business_id):
+    upload = _make_uploaded(db_session, business_id)
+    service.confirm_mapping(db_session, upload, _FULL_FIELD_MAPPING)
+    mapped = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    UploadRepository(db_session).set_status(mapped, status="imported")
+
+    imported = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    with pytest.raises(UploadNotReady):
+        service.detect_mapping_for_upload(db_session, imported)
+    with pytest.raises(UploadNotReady):
+        service.confirm_mapping(db_session, imported, _FULL_FIELD_MAPPING)
+
+
+def test_delete_for_upload_is_a_no_op_when_nothing_exists(db_session, business_id):
+    upload = _make_uploaded(db_session, business_id)
+    ImportRecordRepository(db_session).delete_for_upload(business_id, upload.id)  # must not raise
