@@ -475,7 +475,7 @@ _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
     "total_amount_mismatch": (
         "had a total that didn't match price × quantity — used the file's total "
-        "(expected if it includes tax and unit price doesn't; no action needed)"
+        "(expected if it includes tax your unit price doesn't, or a per-line discount; no action needed)"
     ),
     "duplicate_product_in_file": "the same product appeared more than once — used the last value",
 }

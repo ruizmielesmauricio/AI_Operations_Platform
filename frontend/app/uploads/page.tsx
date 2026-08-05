@@ -58,10 +58,10 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     product_name: "Which column is the product name?",
     sku: "Which column is the SKU or product code? (optional)",
     quantity: "Which column is the quantity sold?",
-    unit_price: "Which column is the unit price?",
-    total_amount: "Which column is the total amount? (optional if unit price is set)",
-    cost_price_at_sale: "Which column is the cost price? (optional)",
-    tax_amount: "Which column is the tax/VAT amount? (optional — lets margin be calculated net of tax)",
+    unit_price: "Which column is the price charged to the customer, per unit? (before tax, if your file separates tax)",
+    total_amount: "Which column is the total actually charged for this line? (include tax if your file's total does — optional if unit price is set)",
+    cost_price_at_sale: "Which column is what YOU paid to get this item — your supplier cost, not the sale price? (optional)",
+    tax_amount: "Which column is the tax/VAT charged to the customer? (optional — lets margin be calculated net of tax)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
   },
   inventory: {
@@ -81,7 +81,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     repair_date: "Which column is the repair date?",
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
-    labour_cost: "Which column is the labour cost? (optional)",
+    labour_cost: "Which column is what this job cost YOU in labour — not what you charged the customer? (optional)",
   },
 };
 
@@ -417,6 +417,13 @@ export default function UploadsPage() {
         <form onSubmit={handleConfirmMapping}>
           <h2>Confirm what each column means</h2>
           <p>We matched most columns automatically — check them, and fix anything that's wrong.</p>
+          {(mappingEntityType === "sales" || mappingEntityType === "repairs") && (
+            <p className="status-warn">
+              Prices below split into two sides — what the <strong>customer</strong> paid (price, total, tax)
+              versus what <strong>you</strong> paid to get the item or do the job (cost price / labour cost).
+              Double-check you haven&apos;t swapped them.
+            </p>
+          )}
           {FIELD_ORDER[mappingEntityType].map((field) => {
             const selected = fieldMapping[field] ?? "";
             const samples = sampleValuesFor(selected);

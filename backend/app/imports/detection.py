@@ -143,9 +143,41 @@ def detect_mapping_with_header(grid: list[Row], entity_type: str, header_row_ind
     field_for_column: dict[int, str] = {}
     field_candidates: dict[str, list[FieldCandidate]] = {f: [] for f in fields}
 
-    # Layer 1: alias dictionary — deterministic, first matching column wins.
+    # Layer 1a: exact canonical-name match, checked across ALL columns
+    # before any alias/synonym match is considered — deliberately
+    # independent of column order. A column literally named "total_amount"
+    # must always win the total_amount field, even if some other column
+    # earlier in the file (e.g. "Subtotal") happens to appear in
+    # total_amount's alias list as a fuzzy synonym. Without this pass, a
+    # file with both a genuine "Subtotal" and a genuine "Total Amount"
+    # column would silently claim total_amount for the wrong one purely
+    # because it came first — confirmed as a real bug via a POS export
+    # shape with both columns, where the true total (tax-inclusive) was
+    # being shadowed by the pre-tax subtotal.
     for col_idx, header in enumerate(columns):
         if not header:
+            continue
+        normalized = normalize_header(header)
+        for f in fields:
+            if f in column_for_field:
+                continue
+            if normalized == normalize_header(f):
+                column_for_field[f] = col_idx
+                field_for_column[col_idx] = f
+                field_candidates[f].append(
+                    FieldCandidate(
+                        source_column=header,
+                        confidence=1.0,
+                        source="alias",
+                        sample_values=_sample_display_values(data_rows, col_idx),
+                    )
+                )
+                break
+
+    # Layer 1b: alias dictionary — deterministic, first matching column
+    # wins among whatever's left after exact-name matches are claimed.
+    for col_idx, header in enumerate(columns):
+        if not header or col_idx in field_for_column:
             continue
         matched_field = match_alias(header, entity_type)
         if matched_field and matched_field not in column_for_field:
