@@ -134,16 +134,33 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
             return RejectedRow(row_number, "invalid_quantity", _display_raw(mapped_values))
         quantity = parsed_quantity
 
+    if quantity <= 0:
+        # Same reasoning as purchases' non_positive_quantity — a zero/
+        # negative quantity isn't a valid sale fact. Also load-bearing now:
+        # total_amount_val can be divided by quantity below whenever
+        # total_amount is present (not only when unit_price is absent, as
+        # before), so an unguarded quantity of 0 would crash the whole
+        # import with a ZeroDivisionError instead of rejecting just this row.
+        return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
+
     mismatch = False
-    if unit_price_val is not None:
-        final_unit_price = unit_price_val
-        if total_amount_val is not None:
+    if total_amount_val is not None:
+        # The file's total is what was actually charged — trusted over
+        # unit_price × quantity, which is often the pre-tax figure (a
+        # common source of an apparent "mismatch" that isn't a data
+        # error). unit_price is only the fallback when total_amount isn't
+        # present at all. This also keeps Sale.total_amount
+        # (group_total_amount sums unit_price × quantity across a group)
+        # consistent with this row's own unit_price, rather than the two
+        # silently drifting apart.
+        final_unit_price = (total_amount_val / quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+        if unit_price_val is not None:
             expected = (unit_price_val * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
             actual = total_amount_val.quantize(_CENTS, rounding=ROUND_HALF_UP)
             mismatch = abs(expected - actual) > _MISMATCH_TOLERANCE
     else:
-        # total_amount_val is guaranteed non-None here (else missing_price above).
-        final_unit_price = (total_amount_val / quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+        # unit_price_val is guaranteed non-None here (else missing_price above).
+        final_unit_price = unit_price_val
 
     cost_price_at_sale = parse_money(mapped_values.get("cost_price_at_sale"))
 
@@ -435,11 +452,17 @@ _REJECTION_MESSAGE_TEMPLATES = {
     "missing_quantity": "no stock count found",
     "negative_quantity": "stock count can't be negative",
     "missing_repair_detail": "no description, price, or labour cost found",
-    "non_positive_quantity": "quantity received must be greater than zero",
+    # Shared by sales and purchases (not entity-specific wording, since
+    # _REJECTION_MESSAGE_TEMPLATES is one flat dict keyed by code, not by
+    # entity type).
+    "non_positive_quantity": "quantity must be greater than zero",
 }
 _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
-    "total_amount_mismatch": "had a total that didn't match price × quantity — used price × quantity",
+    "total_amount_mismatch": (
+        "had a total that didn't match price × quantity — used the file's total "
+        "(expected if it includes tax and unit price doesn't; no action needed)"
+    ),
     "duplicate_product_in_file": "the same product appeared more than once — used the last value",
 }
 

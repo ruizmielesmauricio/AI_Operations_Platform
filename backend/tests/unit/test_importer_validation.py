@@ -77,6 +77,24 @@ def test_mismatched_total_amount_is_flagged_but_not_rejected():
     assert result.total_amount_mismatch is True
 
 
+def test_total_amount_wins_over_unit_price_when_both_present():
+    # The file's total is trusted over unit_price × quantity when they
+    # disagree — e.g. a tax-inclusive total vs. a pre-tax unit price is a
+    # common, expected mismatch, not a data error to override.
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3}
+    result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "9.99", "3", "50.00"], columns))
+    assert isinstance(result, ParsedSaleRow)
+    assert result.unit_price == Decimal("16.67")  # 50.00 / 3, not 9.99
+
+
+def test_zero_or_negative_quantity_is_rejected():
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3}
+    for qty in ("0", "-2"):
+        result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "9.99", qty, "50.00"], columns))
+        assert isinstance(result, RejectedRow)
+        assert result.code == "non_positive_quantity"
+
+
 def test_garbled_cost_price_is_never_a_rejection():
     columns = dict(_COLUMNS, cost_price_at_sale=5)
     result = validate_and_parse_row(
