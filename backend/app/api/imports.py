@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/businesses/{business_id}", tags=["imports"])
 @router.post("/uploads/{upload_id}/import", response_model=ImportRunResponse)
 def run_import(
     upload_id: uuid.UUID,
+    include_purchases_before_last_stock_count: bool = Query(False),
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> ImportRunResponse:
@@ -39,7 +40,12 @@ def run_import(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No mapping confirmed for this upload yet")
 
     try:
-        result = importer.run_import(db, upload, import_record)
+        result = importer.run_import(
+            db,
+            upload,
+            import_record,
+            include_purchases_before_last_stock_count=include_purchases_before_last_stock_count,
+        )
     except ImportRecordNotReady as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except HeaderRowNotFound as exc:

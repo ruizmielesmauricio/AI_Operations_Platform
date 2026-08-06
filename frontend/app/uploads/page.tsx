@@ -149,6 +149,10 @@ export default function UploadsPage() {
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
   const [undoingRecordId, setUndoingRecordId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  // Per-upload, purchases only — unchecked by default (rows dated before
+  // the last stock count are excluded unless the client explicitly says
+  // they should count anyway).
+  const [includeStalePurchases, setIncludeStalePurchases] = useState<Record<string, boolean>>({});
 
   const loadUploads = useCallback((id: string) => {
     apiGet<Upload[]>(`/businesses/${id}/uploads`)
@@ -260,7 +264,8 @@ export default function UploadsPage() {
     setRunningUploadId(uploadId);
     setActionErrors((prev) => ({ ...prev, [uploadId]: "" }));
     try {
-      await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
+      const qs = includeStalePurchases[uploadId] ? "?include_purchases_before_last_stock_count=true" : "";
+      await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import${qs}`, {});
       loadUploads(businessId);
       loadFreshness(businessId);
     } catch {
@@ -522,6 +527,25 @@ export default function UploadsPage() {
                 )}
                 {u.status === "mapped" && !mappingUploadId && (
                   <>
+                    {u.entity_type === "purchases" && (
+                      <div>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={includeStalePurchases[u.id] || false}
+                            onChange={(e) =>
+                              setIncludeStalePurchases((prev) => ({ ...prev, [u.id]: e.target.checked }))
+                            }
+                          />{" "}
+                          Include purchases dated before your last stock count
+                        </label>
+                        <span className="hint">
+                          Unchecked by default — a delivery dated before your most recent stock count is usually
+                          already reflected in that count, so it&apos;s excluded to avoid counting it twice. Check
+                          this only if you&apos;re sure it should be added anyway.
+                        </span>
+                      </div>
+                    )}
                     {" "}
                     <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
                       {isRunning ? "Running…" : "Run import"}

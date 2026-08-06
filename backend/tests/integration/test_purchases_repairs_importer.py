@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -314,6 +315,92 @@ def test_undoing_a_purchase_import_is_blocked_by_a_later_inventory_reconciliatio
 
     with pytest.raises(ImportSupersededByLaterInventoryImport):
         undo_import(db_session, purchase_record)
+
+
+# --- purchases-vs-last-stock-count guard ---------------------------------
+
+
+def test_purchase_dated_before_last_stock_count_is_rejected_by_default(db_session, business_id, _fake_r2):
+    # 2 days' margin (not 1) so this can never flake around a UTC/Dublin
+    # midnight boundary — the guard's own boundary precision is a separate
+    # concern from this test's job of proving the guard fires at all.
+    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
+    upload1, inventory_record = _make_inventory_upload(
+        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
+    )
+    run_import(db_session, upload1, inventory_record)  # "now" becomes the last stock count's effective date
+
+    stale_date = (date.today() - timedelta(days=2)).isoformat()
+    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
+    upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
+
+    result = run_import(db_session, upload2, purchase_record)
+
+    assert result.rows_imported == 0
+    assert result.rows_rejected == 1
+    assert result.rejection_summary["reasons"]["purchase_predates_last_stock_count"]["count"] == 1
+
+    movements = db_session.scalars(
+        select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase")
+    ).all()
+    assert movements == []  # nothing added — stock unaffected
+
+
+def test_purchase_dated_before_last_stock_count_imports_with_the_override(db_session, business_id, _fake_r2):
+    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
+    upload1, inventory_record = _make_inventory_upload(
+        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
+    )
+    run_import(db_session, upload1, inventory_record)
+
+    stale_date = (date.today() - timedelta(days=2)).isoformat()
+    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
+    upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
+
+    result = run_import(db_session, upload2, purchase_record, include_purchases_before_last_stock_count=True)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 0
+
+    movements = db_session.scalars(
+        select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase")
+    ).all()
+    assert len(movements) == 1
+    assert movements[0].quantity_delta == 50
+
+
+def test_purchase_dates_are_unaffected_when_the_business_has_never_had_a_stock_count(db_session, business_id, _fake_r2):
+    # No inventory import at all — the guard must be a complete no-op,
+    # regardless of how old the purchase date is.
+    stale_date = (date.today() - timedelta(days=365)).isoformat()
+    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
+    upload, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
+
+    result = run_import(db_session, upload, purchase_record)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 0
+
+
+def test_an_undone_stock_count_does_not_trigger_the_guard(db_session, business_id, _fake_r2):
+    # latest_completed_by_entity_type (which this guard reuses) already
+    # excludes reversed imports — a stock count that was itself undone was
+    # never really "the truth," so it shouldn't suppress a purchase either.
+    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
+    upload1, inventory_record = _make_inventory_upload(
+        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
+    )
+    run_import(db_session, upload1, inventory_record)
+    undo_import(db_session, inventory_record)
+
+    stale_date = (date.today() - timedelta(days=2)).isoformat()
+    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
+    upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
+
+    result = run_import(db_session, upload2, purchase_record)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 0
 
 
 # --- repairs ------------------------------------------------------------
