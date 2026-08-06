@@ -16,6 +16,7 @@ def test_clean_inventory_export_resolves_via_alias():
         "sku": "SKU",
         "quantity_on_hand": "Stock Level",
         "unit_cost": None,
+        "as_of_date": None,
     }
 
 

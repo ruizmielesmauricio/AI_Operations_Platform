@@ -1,4 +1,6 @@
-from sqlalchemy import ForeignKey, Integer, String, Uuid
+from datetime import date
+
+from sqlalchemy import Date, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PKMixin, TenantScopedMixin, TimestampMixin
@@ -56,3 +58,28 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # instead of silently double-counting stock received (see
     # app/imports/importer.py's list_existing_purchase_reference_product_pairs).
     purchase_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # The calendar date this movement's underlying event actually
+    # happened — sale_date for a sale, purchase_date for a purchase, the
+    # stock-count's as-of date for an adjustment (defaults to the upload's
+    # processing date when the file doesn't carry one). NOT a UTC
+    # timestamp conversion: these are plain business-local calendar dates
+    # taken directly from the source file, same as ParsedSaleRow.sale_date/
+    # ParsedPurchaseRow.purchase_date already are.
+    #
+    # This is what makes derived stock (InventoryMovementRepository.
+    # sum_by_product_ids) order-independent — correct no matter what
+    # sequence files get uploaded/processed in, which matters just as much
+    # for a future automated feed as it does for today's manual uploads.
+    # NULL on rows written before this field existed (backfilled
+    # best-effort by the migration that added it) — treated as "always
+    # include," the same behavior this system had before event_date
+    # existed at all.
+    event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Only ever set for reason="adjustment" rows — the exact count that
+    # reconciliation established (the uploaded row's quantity_on_hand,
+    # stored directly rather than re-derived later by re-summing history).
+    # This, paired with event_date, is the baseline sum_by_product_ids
+    # anchors to; quantity_delta on an adjustment row stays purely
+    # informational (how big the correction was) once this is set.
+    resulting_quantity_on_hand: Mapped[int | None] = mapped_column(Integer, nullable=True)

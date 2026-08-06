@@ -13,6 +13,7 @@ from app.models.product import Product
 from app.models.production_event import ProductionEvent
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
+from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.product import ProductRepository
 from app.repositories.upload import UploadRepository
 
@@ -317,36 +318,19 @@ def test_undoing_a_purchase_import_is_blocked_by_a_later_inventory_reconciliatio
         undo_import(db_session, purchase_record)
 
 
-# --- purchases-vs-last-stock-count guard ---------------------------------
+# --- date-aware stock (order-independent) ---------------------------------
 
 
-def test_purchase_dated_before_last_stock_count_is_rejected_by_default(db_session, business_id, _fake_r2):
-    # 2 days' margin (not 1) so this can never flake around a UTC/Dublin
-    # midnight boundary — the guard's own boundary precision is a separate
-    # concern from this test's job of proving the guard fires at all.
-    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
-    upload1, inventory_record = _make_inventory_upload(
-        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
-    )
-    run_import(db_session, upload1, inventory_record)  # "now" becomes the last stock count's effective date
-
-    stale_date = (date.today() - timedelta(days=2)).isoformat()
-    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
-    upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
-
-    result = run_import(db_session, upload2, purchase_record)
-
-    assert result.rows_imported == 0
-    assert result.rows_rejected == 1
-    assert result.rejection_summary["reasons"]["purchase_predates_last_stock_count"]["count"] == 1
-
-    movements = db_session.scalars(
-        select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase")
-    ).all()
-    assert movements == []  # nothing added — stock unaffected
-
-
-def test_purchase_dated_before_last_stock_count_imports_with_the_override(db_session, business_id, _fake_r2):
+def test_purchase_dated_before_last_stock_count_still_imports_but_does_not_affect_current_stock(
+    db_session, business_id, _fake_r2
+):
+    # Supersedes the old reject/override guard (v1.18): the row always
+    # imports now (movement written, cost updated, reference dedup
+    # applies) — the date-aware stock calculation itself is what excludes
+    # its quantity from current stock, automatically, correctly,
+    # regardless of upload order. A plain informational warning explains
+    # why. 2 days' margin (not 1) so this can never flake around a
+    # UTC/Dublin midnight boundary.
     inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
     upload1, inventory_record = _make_inventory_upload(
         db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
@@ -357,21 +341,49 @@ def test_purchase_dated_before_last_stock_count_imports_with_the_override(db_ses
     purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
     upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
 
-    result = run_import(db_session, upload2, purchase_record, include_purchases_before_last_stock_count=True)
+    result = run_import(db_session, upload2, purchase_record)
 
     assert result.rows_imported == 1
     assert result.rows_rejected == 0
+    assert result.rejection_summary["warnings"]["purchase_excluded_from_current_stock"]["count"] == 1
 
+    # The movement is real (written, quantity intact) — it's the
+    # *calculation* that excludes it, not the write path.
     movements = db_session.scalars(
         select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase")
     ).all()
     assert len(movements) == 1
     assert movements[0].quantity_delta == 50
 
+    chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    current_stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [chain_lube.id])
+    assert current_stock[chain_lube.id] == 40  # unaffected by the pre-count purchase — no double count
+
+
+def test_purchase_dated_after_last_stock_count_is_added_on_top_normally(db_session, business_id, _fake_r2):
+    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
+    upload1, inventory_record = _make_inventory_upload(
+        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
+    )
+    run_import(db_session, upload1, inventory_record)
+
+    fresh_date = (date.today() + timedelta(days=2)).isoformat()
+    purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{fresh_date},Chain Lube,CL-100,50,4.75\n".encode()
+    upload2, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
+
+    result = run_import(db_session, upload2, purchase_record)
+
+    assert result.rows_imported == 1
+    assert result.rejection_summary is None  # no warning — this one counts
+
+    chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    current_stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [chain_lube.id])
+    assert current_stock[chain_lube.id] == 90  # 40 + 50, added on top correctly
+
 
 def test_purchase_dates_are_unaffected_when_the_business_has_never_had_a_stock_count(db_session, business_id, _fake_r2):
-    # No inventory import at all — the guard must be a complete no-op,
-    # regardless of how old the purchase date is.
+    # No inventory import at all — nothing excludes anything, regardless
+    # of how old the purchase date is.
     stale_date = (date.today() - timedelta(days=365)).isoformat()
     purchase_content = f"Date,Product,SKU,Qty Received,Unit Cost\n{stale_date},Chain Lube,CL-100,50,4.75\n".encode()
     upload, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
@@ -380,12 +392,14 @@ def test_purchase_dates_are_unaffected_when_the_business_has_never_had_a_stock_c
 
     assert result.rows_imported == 1
     assert result.rows_rejected == 0
+    assert result.rejection_summary is None
 
 
-def test_an_undone_stock_count_does_not_trigger_the_guard(db_session, business_id, _fake_r2):
-    # latest_completed_by_entity_type (which this guard reuses) already
-    # excludes reversed imports — a stock count that was itself undone was
-    # never really "the truth," so it shouldn't suppress a purchase either.
+def test_an_undone_stock_count_does_not_exclude_a_purchase(db_session, business_id, _fake_r2):
+    # list_latest_adjustment_event_dates (which this reuses) naturally
+    # excludes an undone reconciliation's rows entirely — a stock count
+    # that was itself undone was never really "the truth," so it
+    # shouldn't exclude a purchase's quantity either.
     inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
     upload1, inventory_record = _make_inventory_upload(
         db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
@@ -400,7 +414,11 @@ def test_an_undone_stock_count_does_not_trigger_the_guard(db_session, business_i
     result = run_import(db_session, upload2, purchase_record)
 
     assert result.rows_imported == 1
-    assert result.rows_rejected == 0
+    assert result.rejection_summary is None
+
+    chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    current_stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [chain_lube.id])
+    assert current_stock[chain_lube.id] == 50  # the undone count contributes nothing; only the purchase counts
 
 
 # --- repairs ------------------------------------------------------------

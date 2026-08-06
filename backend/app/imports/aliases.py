@@ -37,9 +37,7 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "order_reference",
     ],
     # A stock-count snapshot, not a transaction: one row per product's
-    # current on-hand quantity. No date/grouping field — see
-    # app/imports/importer.py's reconciliation logic for why (it always
-    # compares against *current* derived stock, not a claimed "as of" date).
+    # current on-hand quantity.
     "inventory": [
         "product_name",
         "sku",
@@ -52,6 +50,16 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # shop that never uploads a separate purchases file still set
         # Product.cost_price.
         "unit_cost",
+        # Optional — supersedes an earlier "inventory has no date field by
+        # design" decision (that design assumed reconciliation always
+        # compares against whatever's *currently* derived, which is
+        # exactly what made a purchase/sale dated before a stock count
+        # capable of double-counting stock — see
+        # app/imports/importer.py::sum_by_product_ids's date-aware
+        # rewrite). Most exports won't have this column at all; when
+        # absent, defaults to the upload's own processing date in the
+        # business's timezone, which is exactly today's prior behavior.
+        "as_of_date",
     ],
     # A restocking transaction — each row is its own independent fact
     # ("we received N units on this date"), not a reconciliation like
@@ -173,6 +181,10 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "units in stock", "available stock", "stock qty",
         ],
         "unit_cost": _UNIT_COST_ALIASES,
+        "as_of_date": [
+            "as of date", "count date", "stock date", "snapshot date", "date counted",
+            "inventory date", "date",
+        ],
     },
     "purchases": {
         "purchase_date": [

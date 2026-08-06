@@ -47,7 +47,7 @@ const FIELD_ORDER: Record<string, string[]> = {
     "tax_amount",
     "order_reference",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "as_of_date"],
   purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost", "purchase_reference"],
   repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
 };
@@ -69,6 +69,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
     unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
+    as_of_date: "Which column is the date this count was taken? (optional)",
   },
   purchases: {
     purchase_date: "Which column is the date the stock was received?",
@@ -102,6 +103,11 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
     order_reference:
       "Prevents accidentally importing the same order twice if you re-upload a file that overlaps an earlier one.",
+  },
+  inventory: {
+    as_of_date:
+      "Most stock-count exports don't have this — leave it blank and we'll use today's date. Only map it if " +
+      "your file states the date the count was actually taken (e.g. an overnight export dated for the day before).",
   },
   purchases: {
     purchase_reference:
@@ -149,10 +155,6 @@ export default function UploadsPage() {
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
   const [undoingRecordId, setUndoingRecordId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
-  // Per-upload, purchases only — unchecked by default (rows dated before
-  // the last stock count are excluded unless the client explicitly says
-  // they should count anyway).
-  const [includeStalePurchases, setIncludeStalePurchases] = useState<Record<string, boolean>>({});
 
   const loadUploads = useCallback((id: string) => {
     apiGet<Upload[]>(`/businesses/${id}/uploads`)
@@ -264,8 +266,7 @@ export default function UploadsPage() {
     setRunningUploadId(uploadId);
     setActionErrors((prev) => ({ ...prev, [uploadId]: "" }));
     try {
-      const qs = includeStalePurchases[uploadId] ? "?include_purchases_before_last_stock_count=true" : "";
-      await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import${qs}`, {});
+      await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
       loadUploads(businessId);
       loadFreshness(businessId);
     } catch {
@@ -527,25 +528,6 @@ export default function UploadsPage() {
                 )}
                 {u.status === "mapped" && !mappingUploadId && (
                   <>
-                    {u.entity_type === "purchases" && (
-                      <div>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={includeStalePurchases[u.id] || false}
-                            onChange={(e) =>
-                              setIncludeStalePurchases((prev) => ({ ...prev, [u.id]: e.target.checked }))
-                            }
-                          />{" "}
-                          Include purchases dated before your last stock count
-                        </label>
-                        <span className="hint">
-                          Unchecked by default — a delivery dated before your most recent stock count is usually
-                          already reflected in that count, so it&apos;s excluded to avoid counting it twice. Check
-                          this only if you&apos;re sure it should be added anyway.
-                        </span>
-                      </div>
-                    )}
                     {" "}
                     <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
                       {isRunning ? "Running…" : "Run import"}

@@ -102,16 +102,21 @@ def test_zero_delta_row_is_still_a_result_with_delta_zero():
     assert results[0].delta == 0
 
 
-def test_duplicate_product_in_file_compounds_correctly_not_against_stale_snapshot():
-    # Same product twice in one file, both claiming qty=15. A read-only
-    # starting-stock snapshot would compute +5 twice (wrong, final=20);
-    # the running total must compound: +5 then 0 (final=15, correct).
+def test_duplicate_product_in_file_uses_only_the_last_row_as_the_target():
+    # Same product twice in one file, both claiming qty=15 — resolves to
+    # ONE result (not two compounding ones): resulting_quantity_on_hand is
+    # now the authoritative target (not re-derived from a delta chain), so
+    # there's nothing to compound. delta is computed once, against the
+    # pre-upload baseline (10 -> 15 == +5), using the last row's data.
     rows = [
         ResolvedInventoryRow(1, _P1, quantity_on_hand=15, is_new_product=False),
         ResolvedInventoryRow(2, _P1, quantity_on_hand=15, is_new_product=False),
     ]
     results, duplicates = reconcile_inventory_rows(rows, {_P1: 10})
-    assert [r.delta for r in results] == [5, 0]
+    assert len(results) == 1
+    assert results[0].row_number == 2  # the last occurrence's row
+    assert results[0].delta == 5
+    assert results[0].resulting_quantity_on_hand == 15
     assert duplicates == [{"row_number": 2}]
 
 

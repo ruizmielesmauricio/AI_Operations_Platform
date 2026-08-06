@@ -238,12 +238,16 @@ def test_inventory_import_cost_only_row_updates_cost_without_a_stock_movement(db
     chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
     assert chain_lube.cost_price == Decimal("5.25")
 
-    # Still only the first import's movement — no zero-delta movement written.
+    # Two movements now, not one — a zero-delta reconciliation is still
+    # written (unlike before this test was updated) so its as_of_date
+    # becomes the new baseline for future stock reads; a "confirmed still
+    # 25 units" event is real information, even with no quantity change.
     movements = db_session.scalars(
         select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.product_id == chain_lube.id)
     ).all()
-    assert len(movements) == 1
-    assert movements[0].quantity_delta == 25
+    assert sorted(m.quantity_delta for m in movements) == [0, 25]
+    zero_delta_movement = next(m for m in movements if m.quantity_delta == 0)
+    assert zero_delta_movement.resulting_quantity_on_hand == 25
 
 
 def test_duplicate_product_in_file_uses_the_last_unit_cost(db_session, business_id, _fake_r2):

@@ -14,6 +14,7 @@ _INVENTORY_FIELD_MAPPING = {
     "sku": "SKU",
     "quantity_on_hand": "Stock Level",
     "unit_cost": None,
+    "as_of_date": None,
 }
 _SALES_FIELD_MAPPING = {
     "sale_date": "Order Date",
