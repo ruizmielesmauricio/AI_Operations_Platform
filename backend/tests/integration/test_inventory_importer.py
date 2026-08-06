@@ -4,13 +4,13 @@ import pytest
 from sqlalchemy import select
 
 from app.imports import detection, r2_client
-from app.imports.exceptions import ImportSupersededByLaterInventoryImport
 from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
 from app.models.sale import Sale
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
+from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.upload import UploadRepository
 
 _INVENTORY_HEADER = ["Product", "SKU", "Stock Level"]
@@ -278,11 +278,19 @@ def test_undo_inventory_import_bulk_deletes_by_import_record_id(db_session, busi
     assert db_session.scalars(select(Product).where(Product.business_id == business_id)).all()
 
 
-def test_undoing_a_sales_import_is_blocked_by_a_later_inventory_reconciliation(db_session, business_id, _fake_r2):
-    """The exact bug scenario the design review found: stock=0 -> sales
-    import writes -3 -> inventory reconciliation reads current stock (-3),
-    targets 25, writes +28 -> undoing the *sales* import (if allowed) would
-    leave stock at 0+28=28, silently wrong. Must be blocked instead.
+def test_undoing_a_sales_import_before_a_later_reconciliation_now_succeeds_correctly(db_session, business_id, _fake_r2):
+    """The exact bug scenario the design review originally found, now
+    replayed under the date-aware calculation
+    (InventoryMovementRepository.sum_by_product_ids): a sale dated
+    2026-01-03, then a stock-count reconciliation (dated "today", since no
+    as_of_date column is mapped) targeting 25. Undoing the sale used to be
+    *blocked* outright (v1.19's ImportSupersededByLaterInventoryImport) to
+    prevent a stale +delta from silently corrupting the total. Now it's
+    unconditionally safe: the reconciliation stores its own absolute
+    resulting_quantity_on_hand (25) rather than a delta computed against a
+    mutable running sum, and the sale (dated well before the
+    reconciliation) was never counted toward "current stock" in the first
+    place — so deleting it changes nothing about the calculated total.
     """
     sales_content = (
         "Order Date,Item Description,SKU,Qty,Unit Price\n"
@@ -298,26 +306,17 @@ def test_undoing_a_sales_import_is_blocked_by_a_later_inventory_reconciliation(d
     run_import(db_session, upload2, inventory_record)
 
     product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
-    stock_before = sum(
-        m.quantity_delta
-        for m in db_session.scalars(
-            select(InventoryMovement).where(InventoryMovement.product_id == product.id)
-        ).all()
-    )
-    assert stock_before == 25  # reconciliation succeeded: -3 + 28 = 25
+    stock_before = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock_before[product.id] == 25  # the reconciliation's own number, not a derived sum
 
-    with pytest.raises(ImportSupersededByLaterInventoryImport):
-        undo_import(db_session, sales_record)
+    undone = undo_import(db_session, sales_record)
+    assert undone.status == "reversed"
 
-    # Confirm nothing was touched by the failed undo attempt.
-    stock_after = sum(
-        m.quantity_delta
-        for m in db_session.scalars(
-            select(InventoryMovement).where(InventoryMovement.product_id == product.id)
-        ).all()
-    )
-    assert stock_after == 25
-    assert db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all()
+    stock_after = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock_after[product.id] == 25  # unchanged — not 28, not any other silently-wrong number
+
+    # The sale itself really is gone (undo succeeded, not a no-op).
+    assert db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all() == []
 
 
 def test_undoing_the_most_recent_inventory_import_is_still_allowed(db_session, business_id, _fake_r2):

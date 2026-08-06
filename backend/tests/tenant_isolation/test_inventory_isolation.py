@@ -125,32 +125,3 @@ def test_inventory_reconciliation_never_reads_another_business_s_stock(client):
     assert result_a2["rejection_summary"] is None  # no warnings — a clean zero-delta no-op
 
 
-def test_undo_guard_is_business_scoped(client):
-    """A later inventory import in business B must never block an undo in
-    business A — has_later_completed_inventory_import must filter by
-    business_id, not just by timestamp."""
-    headers_a = bearer_header("user-a", "a@example.com")
-    headers_b = bearer_header("user-b", "b@example.com")
-    business_a = _create_business(client, headers_a, "Shop A")
-    business_b = _create_business(client, headers_b, "Shop B")
-
-    sales_content = "Order Date,Item Description,SKU,Qty,Unit Price\n2026-01-03,Chain Lube,CL-100,3,9.99\n".encode()
-    sales_result = _upload_map_and_run(
-        client, headers_a, business_a["id"],
-        entity_type="sales", content=sales_content, filename="sales.csv", field_mapping=_SALES_FIELD_MAPPING,
-    )
-
-    # A later inventory import, but in business B.
-    inventory_content = "Product,SKU,Stock Level\nBar Tape,BT-200,10\n".encode()
-    _upload_map_and_run(
-        client, headers_b, business_b["id"],
-        entity_type="inventory", content=inventory_content, filename="stock.csv",
-        field_mapping=_INVENTORY_FIELD_MAPPING,
-    )
-
-    undo_response = client.post(
-        f"/businesses/{business_a['id']}/import-records/{sales_result['import_record_id']}/undo",
-        headers=headers_a,
-    )
-    assert undo_response.status_code == 200
-    assert undo_response.json()["status"] == "reversed"

@@ -93,17 +93,3 @@ class ImportNotReversible(Exception):
         self.status = status
         self.reversed_at = reversed_at
         super().__init__(f"Import cannot be reversed (status={status}, reversed_at={reversed_at})")
-
-
-class ImportSupersededByLaterInventoryImport(Exception):
-    """Raised when undo is attempted on an import that ran before a later,
-    still-in-effect inventory reconciliation. That reconciliation's movement
-    magnitude baked in this import's effect on stock — undoing it now would
-    silently corrupt the stock the reconciliation established (see
-    app/imports/importer.py's undo_import docstring for the exact scenario)."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "This import can't be undone — a newer stock count has been recorded since. "
-            "Upload a corrected stock count instead."
-        )

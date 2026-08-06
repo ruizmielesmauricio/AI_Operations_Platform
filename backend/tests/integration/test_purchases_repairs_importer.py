@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy import select
 
 from app.imports import detection, r2_client
-from app.imports.exceptions import ImportSupersededByLaterInventoryImport
 from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
@@ -299,11 +298,15 @@ def test_undo_then_reupload_a_purchase_with_the_same_reference_succeeds(db_sessi
     assert result.rows_imported == 1  # succeeds exactly as the first import did
 
 
-def test_undoing_a_purchase_import_is_blocked_by_a_later_inventory_reconciliation(db_session, business_id, _fake_r2):
-    """Same hazard class as sales: a purchase movement is order-independent
-    on its own, but can still be retroactively baked into a later inventory
-    reconciliation's snapshot — the existing global guard must catch this
-    without any purchases-specific logic."""
+def test_undoing_a_purchase_import_before_a_later_reconciliation_now_succeeds_correctly(db_session, business_id, _fake_r2):
+    """Same hazard class as sales (see the equivalent test in
+    test_inventory_importer.py, the original bug scenario) — a purchase
+    dated before a later stock-count reconciliation used to have its undo
+    blocked outright (v1.19's ImportSupersededByLaterInventoryImport).
+    Now safe unconditionally: the reconciliation's resulting_quantity_on_hand
+    is self-contained, not a delta computed against a mutable running sum,
+    and a purchase dated before it was never counted toward current stock
+    in the first place."""
     purchase_content = "Date,Product,SKU,Qty Received,Unit Cost\n2026-01-05,Chain Lube,CL-100,50,4.75\n".encode()
     upload1, purchase_record = _make_purchase_upload(db_session, business_id, _fake_r2, content=purchase_content)
     run_import(db_session, upload1, purchase_record)
@@ -314,8 +317,15 @@ def test_undoing_a_purchase_import_is_blocked_by_a_later_inventory_reconciliatio
     )
     run_import(db_session, upload2, inventory_record)
 
-    with pytest.raises(ImportSupersededByLaterInventoryImport):
-        undo_import(db_session, purchase_record)
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    stock_before = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock_before[product.id] == 40
+
+    undone = undo_import(db_session, purchase_record)
+    assert undone.status == "reversed"
+
+    stock_after = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock_after[product.id] == 40  # unchanged
 
 
 # --- date-aware stock (order-independent) ---------------------------------
@@ -566,22 +576,6 @@ def test_undo_then_reupload_a_repair_with_the_same_reference_succeeds(db_session
     result = run_import(db_session, upload2, record2)
 
     assert result.rows_imported == 1  # succeeds exactly as the first import did
-
-
-def test_undoing_a_repair_import_is_never_blocked_by_a_later_inventory_reconciliation(db_session, business_id, _fake_r2):
-    # Repairs write no InventoryMovement at all, so the global undo-guard
-    # (has_later_completed_inventory_import) is a harmless no-op for it.
-    upload1, repair_record = _make_repair_upload(db_session, business_id, _fake_r2)
-    run_import(db_session, upload1, repair_record)
-
-    inventory_content = "Product,SKU,Stock Level\nChain Lube,CL-100,40\n".encode()
-    upload2, inventory_record = _make_inventory_upload(
-        db_session, business_id, _fake_r2, filename="stock.csv", content=inventory_content
-    )
-    run_import(db_session, upload2, inventory_record)
-
-    undone = undo_import(db_session, repair_record)
-    assert undone.status == "reversed"
 
 
 # --- ProductRepository.update_cost_price (direct) ------------------------
