@@ -22,7 +22,6 @@ from app.imports.exceptions import (
     HeaderRowNotFound,
     ImportNotReversible,
     ImportRecordNotReady,
-    ImportSupersededByLaterInventoryImport,
     MappedColumnMissing,
 )
 from app.imports.file_parser import normalize_cell
@@ -1091,26 +1090,21 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
     if import_record.status != "completed" or import_record.reversed_at is not None:
         raise ImportNotReversible(import_record.status, import_record.reversed_at)
 
-    # A sales/purchase movement's magnitude (-quantity / +quantity_received)
-    # is independent of everything else in the ledger, so undoing one has
-    # always been safe unconditionally. An adjustment movement's magnitude
-    # is NOT independent — it's uploaded_qty minus stock-at-the-moment-it-
-    # ran, which bakes in every movement before it. Undoing anything that
-    # writes InventoryMovement rows (sales, inventory, purchases) and ran
-    # before a later, still-in-effect inventory reconciliation would
-    # silently corrupt the stock that reconciliation established. Checked
-    # globally, before the entity-type branch below, because this can
-    # corrupt a *sales* or *purchases* undo too, not just an inventory one.
-    #
-    # "repairs" is deliberately exempt: it writes zero InventoryMovement
-    # rows (v1 has no parts-consumed detail), so it can never be affected by
-    # or corrupt a later inventory reconciliation — the guard would be a
-    # pure, incorrect false-positive block for it, not a safety margin.
-    if import_record.entity_type != "repairs" and ImportRecordRepository(db).has_later_completed_inventory_import(
-        import_record.business_id, after=import_record.updated_at
-    ):
-        raise ImportSupersededByLaterInventoryImport()
-
+    # Undoing any import — sales, inventory, purchases, repairs — is
+    # unconditionally safe now, regardless of whether a later inventory
+    # reconciliation exists. This used to need a guard
+    # (ImportSupersededByLaterInventoryImport, removed): under the old flat-
+    # sum model, a reconciliation's movement was a *delta* computed against
+    # whatever the running total happened to be at write time, so deleting
+    # an earlier movement afterward would silently invalidate that delta.
+    # Since InventoryMovementRepository.sum_by_product_ids became date-aware
+    # (event_date + resulting_quantity_on_hand), a reconciliation stores its
+    # own absolute, self-contained total instead — current stock is
+    # recomputed fresh from whatever's left every time it's read, filtered
+    # by date, never by what order rows were written in. Deleting a
+    # movement dated on/before the latest reconciliation changes nothing
+    # (it was already excluded from the total); deleting one dated after it
+    # correctly reduces the total by exactly its own contribution.
     touched_product_ids = _UNDO_FNS[import_record.entity_type](db, import_record)
 
     ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
