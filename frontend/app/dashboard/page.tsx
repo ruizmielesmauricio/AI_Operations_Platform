@@ -406,6 +406,12 @@ function ForecastSection({
 
   return (
     <Section title={title}>
+      <p className="hint">
+        Not AI, and not a formal statistical guarantee — a plain projection from your own sales history (either the
+        average for that weekday, or a recent overall average if there isn&apos;t enough history yet to tell weekdays
+        apart). The shaded range shows how much that history has typically varied, not a calculated probability.
+      </p>
+
       <h3 title={DEFINITIONS.revenueForecast}>Revenue</h3>
       {result.insufficient_data ? (
         <p>Not enough sales history yet to forecast revenue — check back once you have at least two weeks of data.</p>
@@ -416,7 +422,9 @@ function ForecastSection({
             title={DEFINITIONS.revenueForecast}
             value={`${formatMoney(result.total_point)} (typically ${formatMoney(result.total_low)}–${formatMoney(result.total_high)})`}
             note={`based on ${result.history_days_used} days of history — ${
-              result.method === "seasonal_day_of_week" ? "adjusted for day-of-week patterns" : "a plain recent average"
+              result.method === "seasonal_day_of_week"
+                ? "your average for each day of the week"
+                : "a plain recent daily average (not enough history yet for day-of-week patterns)"
             }`}
           />
           <Chart option={revenueForecastLineOption(result.daily)} />
@@ -427,6 +435,12 @@ function ForecastSection({
       {data.products.length === 0 ? (
         <p>No products have enough sales history yet to forecast demand.</p>
       ) : (
+        <>
+        <p className="hint">
+          &quot;Suggested reorder&quot; is a starting point only: forecast demand&apos;s upper estimate minus current
+          stock. It doesn&apos;t know your supplier&apos;s delivery time or how much safety buffer you want — treat
+          it as a number to sanity-check, not a purchase order.
+        </p>
         <table>
           <thead>
             <tr>
@@ -451,6 +465,7 @@ function ForecastSection({
             ))}
           </tbody>
         </table>
+        </>
       )}
       {data.products_excluded_insufficient_data > 0 && (
         <p className="status-warn">
