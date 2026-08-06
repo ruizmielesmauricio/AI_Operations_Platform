@@ -12,6 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,7 @@ from app.imports.file_parser import normalize_cell
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
 from app.application.alerts import refresh_low_stock_alerts
+from app.models.business import Business
 from app.models.import_record import ImportRecord
 from app.models.upload import Upload
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
@@ -62,6 +64,7 @@ class ParsedSaleRow:
     unit_price: Decimal
     cost_price_at_sale: Decimal | None
     order_reference: str | None
+    tax_amount: Decimal | None = None
     total_amount_mismatch: bool = False
 
 
@@ -71,6 +74,11 @@ class ParsedInventoryRow:
     product_name: str | None
     sku: str | None
     quantity_on_hand: int
+    unit_cost: Decimal | None
+    # Optional — when absent, _write_inventory defaults it to the upload's
+    # processing date in the business's timezone. See aliases.py's
+    # CANONICAL_FIELDS["inventory"] comment for the full reasoning.
+    as_of_date: date | None = None
 
 
 @dataclass
@@ -81,6 +89,7 @@ class ParsedPurchaseRow:
     sku: str | None
     quantity_received: int
     unit_cost: Decimal | None
+    reference: str | None = None
 
 
 @dataclass
@@ -90,6 +99,7 @@ class ParsedRepairRow:
     description: str | None
     price_charged: Decimal | None
     labour_cost: Decimal | None
+    reference: str | None = None
 
 
 @dataclass
@@ -133,16 +143,45 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
             return RejectedRow(row_number, "invalid_quantity", _display_raw(mapped_values))
         quantity = parsed_quantity
 
+    if quantity <= 0:
+        # Same reasoning as purchases' non_positive_quantity — a zero/
+        # negative quantity isn't a valid sale fact. Also load-bearing now:
+        # total_amount_val can be divided by quantity below whenever
+        # total_amount is present (not only when unit_price is absent, as
+        # before), so an unguarded quantity of 0 would crash the whole
+        # import with a ZeroDivisionError instead of rejecting just this row.
+        return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
+
+    # Optional — when present, lets margin be computed net of tax
+    # (app/analytics/financial.py's net_gross_margin_pct) and sharpens the
+    # mismatch check just below. Never a rejection reason.
+    tax_amount = parse_money(mapped_values.get("tax_amount"))
+
     mismatch = False
-    if unit_price_val is not None:
-        final_unit_price = unit_price_val
-        if total_amount_val is not None:
-            expected = (unit_price_val * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+    if total_amount_val is not None:
+        # The file's total is what was actually charged — trusted over
+        # unit_price × quantity, which is often the pre-tax figure (a
+        # common source of an apparent "mismatch" that isn't a data
+        # error). unit_price is only the fallback when total_amount isn't
+        # present at all. This also keeps Sale.total_amount
+        # (group_total_amount sums unit_price × quantity across a group)
+        # consistent with this row's own unit_price, rather than the two
+        # silently drifting apart.
+        final_unit_price = (total_amount_val / quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+        if unit_price_val is not None:
+            # Tax included in the expected figure when known — a shop that
+            # maps price + tax + total together should see this mismatch
+            # mostly disappear, since tax was the actual explanation for
+            # it, not a data problem.
+            expected_before_tax = unit_price_val * quantity
+            expected = (expected_before_tax + (tax_amount or Decimal("0"))).quantize(
+                _CENTS, rounding=ROUND_HALF_UP
+            )
             actual = total_amount_val.quantize(_CENTS, rounding=ROUND_HALF_UP)
             mismatch = abs(expected - actual) > _MISMATCH_TOLERANCE
     else:
-        # total_amount_val is guaranteed non-None here (else missing_price above).
-        final_unit_price = (total_amount_val / quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+        # unit_price_val is guaranteed non-None here (else missing_price above).
+        final_unit_price = unit_price_val
 
     cost_price_at_sale = parse_money(mapped_values.get("cost_price_at_sale"))
 
@@ -159,6 +198,7 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         unit_price=final_unit_price,
         cost_price_at_sale=cost_price_at_sale,
         order_reference=order_reference,
+        tax_amount=tax_amount,
         total_amount_mismatch=mismatch,
     )
 
@@ -187,8 +227,21 @@ def validate_and_parse_inventory_row(
         # unparseable" alone wouldn't catch.
         return RejectedRow(row_number, "negative_quantity", _display_raw(mapped_values))
 
+    # Optional, like purchases' unit_cost — never a rejection reason.
+    unit_cost = parse_money(mapped_values.get("unit_cost"))
+    # Optional — blank or unparseable both fall back to None (resolved to
+    # "today" by _write_inventory), same soft-fail treatment as unit_cost
+    # above rather than sale/purchase_date's hard rejection; this field is
+    # a hint, not core to what the row means.
+    as_of_date = parse_date(mapped_values.get("as_of_date"))
+
     return ParsedInventoryRow(
-        row_number=row_number, product_name=product_name, sku=sku, quantity_on_hand=quantity_on_hand
+        row_number=row_number,
+        product_name=product_name,
+        sku=sku,
+        quantity_on_hand=quantity_on_hand,
+        unit_cost=unit_cost,
+        as_of_date=as_of_date,
     )
 
 
@@ -216,6 +269,10 @@ def validate_and_parse_purchase_row(
         return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
 
     unit_cost = parse_money(mapped_values.get("unit_cost"))
+    # Optional — never a rejection reason. Normalized here (not left for
+    # the write step) so a reference that's only whitespace apart from an
+    # existing one is still recognised as the same reference.
+    reference = _normalize_reference(_blank_to_none(mapped_values.get("purchase_reference")))
 
     return ParsedPurchaseRow(
         row_number=row_number,
@@ -223,6 +280,7 @@ def validate_and_parse_purchase_row(
         product_name=product_name,
         sku=sku,
         quantity_received=quantity_received,
+        reference=reference,
         unit_cost=unit_cost,
     )
 
@@ -241,12 +299,15 @@ def validate_and_parse_repair_row(
         # A bare date with nothing else carries no usable content.
         return RejectedRow(row_number, "missing_repair_detail", _display_raw(mapped_values))
 
+    reference = _normalize_reference(_blank_to_none(mapped_values.get("repair_reference")))
+
     return ParsedRepairRow(
         row_number=row_number,
         repair_date=repair_date,
         description=description,
         price_charged=price_charged,
         labour_cost=labour_cost,
+        reference=reference,
     )
 
 
@@ -263,7 +324,7 @@ def group_rows_into_sales(rows: list[ParsedSaleRow]) -> list[list[ParsedSaleRow]
     groups: list[list[ParsedSaleRow]] = []
     group_by_ref: dict[str, list[ParsedSaleRow]] = {}
     for row in rows:
-        ref = _normalize_order_reference(row.order_reference)
+        ref = _normalize_reference(row.order_reference)
         if ref is None:
             groups.append([row])
             continue
@@ -275,7 +336,7 @@ def group_rows_into_sales(rows: list[ParsedSaleRow]) -> list[list[ParsedSaleRow]
     return groups
 
 
-def _normalize_order_reference(value: str | None) -> str | None:
+def _normalize_reference(value: str | None) -> str | None:
     if value is None:
         return None
     collapsed = re.sub(r"\s+", " ", value.strip())
@@ -379,39 +440,67 @@ class ResolvedInventoryRow:
     product_id: uuid.UUID
     quantity_on_hand: int
     is_new_product: bool  # new product => starting stock is 0 by definition
+    unit_cost: Decimal | None = None
+    as_of_date: date | None = None  # already resolved (today-in-business-timezone default applied by the caller)
 
 
 @dataclass
 class InventoryWriteResult:
     row_number: int
     product_id: uuid.UUID
-    delta: int  # 0 means no movement needed (already matches)
+    delta: int  # informational only — how big this correction was, not load-bearing for correctness
+    resulting_quantity_on_hand: int  # authoritative — what sum_by_product_ids anchors future reads to
+    as_of_date: date
+    unit_cost: Decimal | None = None
 
 
 def reconcile_inventory_rows(
     resolved_rows: list[ResolvedInventoryRow], starting_stock: dict[uuid.UUID, int]
 ) -> tuple[list[InventoryWriteResult], list[dict]]:
-    """Computes each row's adjustment delta in file order. `starting_stock`
-    is read, never mutated (a local running copy tracks each product's
-    stock as rows are processed) — necessary because the same product can
-    legitimately appear twice in one file: a read-only snapshot would have
-    both rows compute delta against the same stale total instead of
-    compounding, silently under- or over-adjusting. Returns write results
-    plus a list of {"row_number"} entries for any product seen more than
-    once in this file (surfaced as a warning, not hidden as "last wins").
+    """One result per distinct product in resolved_rows, in first-seen
+    order. A product appearing more than once in the file (surfaced as a
+    duplicate_product_in_file warning, not hidden silently) produces only
+    one result, using its LAST row's quantity_on_hand/as_of_date as the
+    reconciliation target — `resulting_quantity_on_hand` is what actually
+    governs future stock reads (InventoryMovementRepository.
+    sum_by_product_ids), so unlike the old delta-chain design, there's no
+    need to track an intermediate running total across duplicate rows:
+    `delta` here is purely an informational "how big was this correction"
+    number against the caller-supplied pre-upload baseline, computed once
+    per product, not incrementally. is_new_product forces that baseline
+    to 0 regardless of what's in starting_stock (defensive — a caller
+    that already filters new products out of its starting_stock query,
+    as _write_inventory does, would never hit this, but this function's
+    own correctness shouldn't depend on a caller maintaining that
+    elsewhere).
     """
-    running = dict(starting_stock)
-    results: list[InventoryWriteResult] = []
+    last_row_by_product: dict[uuid.UUID, ResolvedInventoryRow] = {}
     duplicate_rows: list[dict] = []
     seen: set[uuid.UUID] = set()
+    order: list[uuid.UUID] = []
     for row in resolved_rows:
-        current = 0 if row.is_new_product else running.get(row.product_id, 0)
         if row.product_id in seen:
             duplicate_rows.append({"row_number": row.row_number})
-        seen.add(row.product_id)
+        else:
+            seen.add(row.product_id)
+            order.append(row.product_id)
+        last_row_by_product[row.product_id] = row  # last occurrence wins
+
+    results: list[InventoryWriteResult] = []
+    for product_id in order:
+        row = last_row_by_product[product_id]
+        current = 0 if row.is_new_product else starting_stock.get(product_id, 0)
         delta = row.quantity_on_hand - current
-        results.append(InventoryWriteResult(row.row_number, row.product_id, delta))
-        running[row.product_id] = row.quantity_on_hand
+        results.append(
+            InventoryWriteResult(
+                row.row_number,
+                product_id,
+                delta,
+                resulting_quantity_on_hand=row.quantity_on_hand,
+                as_of_date=row.as_of_date,
+                unit_cost=row.unit_cost,
+            )
+        )
     return results, duplicate_rows
 
 
@@ -425,12 +514,47 @@ _REJECTION_MESSAGE_TEMPLATES = {
     "missing_quantity": "no stock count found",
     "negative_quantity": "stock count can't be negative",
     "missing_repair_detail": "no description, price, or labour cost found",
-    "non_positive_quantity": "quantity received must be greater than zero",
+    # Shared by sales and purchases (not entity-specific wording, since
+    # _REJECTION_MESSAGE_TEMPLATES is one flat dict keyed by code, not by
+    # entity type).
+    "non_positive_quantity": "quantity must be greater than zero",
+    # Shared by sales/purchases/repairs — a re-uploaded or overlapping file
+    # reusing a reference (order/PO/job number) already imported earlier
+    # for this business. Rejected outright rather than double-counting
+    # revenue/stock/repairs (see the list_existing_*_references repository
+    # methods this check is built on).
+    "duplicate_reference": "this reference was already used in an earlier import",
 }
 _WARNING_MESSAGE_TEMPLATES = {
     "product_name_mismatch": "product name didn't match its existing SKU record — kept the existing name",
-    "total_amount_mismatch": "had a total that didn't match price × quantity — used price × quantity",
+    "total_amount_mismatch": (
+        "had a total that didn't match price × quantity — used the file's total "
+        "(expected if it includes tax your unit price doesn't, or a per-line discount; no action needed)"
+    ),
+    # Inventory-specific: the same product appeared on multiple rows of one
+    # stock-count file — reconcile_inventory_rows keeps the last row's
+    # quantity_on_hand as the reconciliation target.
     "duplicate_product_in_file": "the same product appeared more than once — used the last value",
+    # Purchases-specific, deliberately a distinct code from the one above:
+    # "used the last value" would be misread as quantity here (every row's
+    # quantity_received is still added to stock regardless of this
+    # warning) — it only affects which row's unit_cost becomes the
+    # product's recorded cost price.
+    "duplicate_product_cost_overwritten": (
+        "the same product appeared on more than one purchase line — only the last unit cost was kept "
+        "as this product's recorded cost (every line's quantity was still added to stock)"
+    ),
+    # Purchases-specific, informational only — the row is imported
+    # normally regardless (movement written, cost updated, reference
+    # dedup applied). Superseded a v1.18 reject/override mechanism: the
+    # date-aware stock calculation (InventoryMovementRepository.
+    # sum_by_product_ids) already excludes this quantity from current
+    # stock automatically and correctly, so there's nothing left to
+    # decide — this warning exists purely so the client understands why.
+    "purchase_excluded_from_current_stock": (
+        "this purchase's date is on or before your last stock count, so its quantity isn't counted "
+        "toward current stock — it's presumably already included in that count"
+    ),
 }
 
 
@@ -478,9 +602,43 @@ class ImportResult:
     rejection_summary: dict | None = None
 
 
+# Duplicate-reference rejections are discovered at write time (they need a
+# DB lookup against prior imports, which pure parse-time validation has no
+# access to), so there's no original `mapped_values` dict left to build
+# RejectedRow.raw from — these reconstruct a reasonable display dict from
+# the already-parsed row instead. Not byte-identical to a parse-time
+# rejection's raw dict, but enough to find the row in the file.
+def _sale_row_display(row: ParsedSaleRow) -> dict[str, str]:
+    return {
+        "sale_date": row.sale_date.isoformat(),
+        "product_name": row.product_name or "",
+        "sku": row.sku or "",
+        "quantity": str(row.quantity),
+        "order_reference": row.order_reference or "",
+    }
+
+
+def _purchase_row_display(row: ParsedPurchaseRow) -> dict[str, str]:
+    return {
+        "purchase_date": row.purchase_date.isoformat(),
+        "product_name": row.product_name or "",
+        "sku": row.sku or "",
+        "quantity_received": str(row.quantity_received),
+        "purchase_reference": row.reference or "",
+    }
+
+
+def _repair_row_display(row: ParsedRepairRow) -> dict[str, str]:
+    return {
+        "repair_date": row.repair_date.isoformat(),
+        "description": row.description or "",
+        "repair_reference": row.reference or "",
+    }
+
+
 def _write_sales(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedSaleRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     for row in parsed_rows:
         if row.total_amount_mismatch:
@@ -492,10 +650,22 @@ def _write_sales(
     movement_repo = InventoryMovementRepository(db)
 
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    existing_refs = sale_repo.list_existing_order_references(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
+    duplicate_rejections: list[RejectedRow] = []
     for group in group_rows_into_sales(parsed_rows):
+        ref = _normalize_reference(group[0].order_reference)
+        if ref is not None and ref in existing_refs:
+            # Reject the whole group, not just its first row — a
+            # multi-line sale sharing one order_reference is one economic
+            # event; importing half of it would be its own kind of wrong.
+            duplicate_rejections.extend(
+                RejectedRow(row.row_number, "duplicate_reference", _sale_row_display(row)) for row in group
+            )
+            continue
+
         sale = sale_repo.create(
             business_id=upload.business_id,
             sold_at=datetime.combine(group_sold_at(group), datetime.min.time(), tzinfo=timezone.utc),
@@ -530,6 +700,7 @@ def _write_sales(
                 quantity=row.quantity,
                 unit_price=row.unit_price,
                 cost_price_at_sale=row.cost_price_at_sale,
+                tax_amount=row.tax_amount,
             )
             if product_id is not None:
                 movement_repo.create(
@@ -538,36 +709,61 @@ def _write_sales(
                     quantity_delta=-row.quantity,
                     reason="sale",
                     reference_id=item.id,
+                    # sale.sold_at is midnight-UTC on the group's plain
+                    # sale_date (see its own construction above) — .date()
+                    # recovers that original calendar date exactly, no
+                    # timezone conversion needed (it was never a real
+                    # wall-clock time to begin with).
+                    event_date=sale.sold_at.date(),
                 )
                 touched_product_ids.add(product_id)
             rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+    return rows_imported, warnings, touched_product_ids, duplicate_rejections
 
 
 def _write_inventory(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedInventoryRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
+    # No duplicate-reference detection here (out of scope — a stock-count
+    # upload is a reconciliation snapshot, not a transactional fact, so
+    # re-uploading the same one is already a harmless zero-delta no-op by
+    # construction; see reconcile_inventory_rows). The 4th element below is
+    # always empty — kept only so _WRITE_FNS stays uniform for run_import.
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
 
+    business = db.get(Business, upload.business_id)
+    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo(business.timezone)).date()
+
     # Pass 1: resolve every row to a product, creating as needed — mirrors
     # _write_sales' matching exactly (same matcher, same reused-as-is class).
     resolved: list[ResolvedInventoryRow] = []
     for row in parsed_rows:
+        as_of_date = row.as_of_date or today_local
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
         if match.action == "create":
             product = product_repo.create(
                 business_id=upload.business_id,
                 sku=match.create_sku,
                 name=match.create_name,
-                cost_price=None,
+                # Seeded directly here (like purchases does for a new
+                # product), rather than via update_cost_price in pass 2 —
+                # there's no existing row to update yet.
+                cost_price=row.unit_cost,
                 sell_price=None,
             )
             matcher.register_created(product)
             resolved.append(
-                ResolvedInventoryRow(row.row_number, product.id, row.quantity_on_hand, is_new_product=True)
+                ResolvedInventoryRow(
+                    row.row_number,
+                    product.id,
+                    row.quantity_on_hand,
+                    is_new_product=True,
+                    unit_cost=row.unit_cost,
+                    as_of_date=as_of_date,
+                )
             )
         else:
             # Never "none" here — validate_and_parse_inventory_row already
@@ -577,7 +773,14 @@ def _write_inventory(
                     {"row_number": row.row_number, "product_name": row.product_name}
                 )
             resolved.append(
-                ResolvedInventoryRow(row.row_number, match.product_id, row.quantity_on_hand, is_new_product=False)
+                ResolvedInventoryRow(
+                    row.row_number,
+                    match.product_id,
+                    row.quantity_on_hand,
+                    is_new_product=False,
+                    unit_cost=row.unit_cost,
+                    as_of_date=as_of_date,
+                )
             )
 
     existing_ids = [r.product_id for r in resolved if not r.is_new_product]
@@ -587,33 +790,80 @@ def _write_inventory(
     if duplicate_rows:
         warnings["duplicate_product_in_file"].extend(duplicate_rows)
 
-    rows_imported = 0
+    # Every accepted file row counts as "imported," matching rows_total's
+    # invariant elsewhere (accepted + rejected == total) — even though
+    # write_results has only one entry per distinct product (a duplicate
+    # product's rows are merged, not rejected; see reconcile_inventory_
+    # rows), nothing here was actually rejected, so all of parsed_rows
+    # counts.
+    rows_imported = len(parsed_rows)
     touched_product_ids: set[uuid.UUID] = set()
     for result in write_results:
+        # Written unconditionally now, even when delta == 0 — a confirmed
+        # "still N units as of this date" count is still a real
+        # reconciliation event, and its as_of_date must become the new
+        # baseline (InventoryMovementRepository.sum_by_product_ids) going
+        # forward. Skipping a zero-delta row would leave a stale, earlier
+        # baseline behind, letting a later purchase/sale dated between the
+        # two counts be wrongly treated as "not yet reflected in a count."
+        movement_repo.create(
+            business_id=upload.business_id,
+            product_id=result.product_id,
+            quantity_delta=result.delta,
+            reason="adjustment",
+            import_record_id=import_record.id,
+            event_date=result.as_of_date,
+            resulting_quantity_on_hand=result.resulting_quantity_on_hand,
+        )
         if result.delta != 0:
-            movement_repo.create(
-                business_id=upload.business_id,
-                product_id=result.product_id,
-                quantity_delta=result.delta,
-                reason="adjustment",
-                import_record_id=import_record.id,
-            )
+            # Stock actually changed — Stage C12's low-stock alerts need
+            # re-evaluating. A zero-delta reconciliation doesn't.
             touched_product_ids.add(result.product_id)
-        rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+        if result.unit_cost is not None:
+            # Not gated on delta != 0 — a cost-only correction with
+            # unchanged quantity is still a real update. Runs unconditionally
+            # even for a product just created in pass 1 above (already
+            # seeded with this same value) — a harmless redundant overwrite,
+            # kept deliberately uniform rather than special-cased, since
+            # skipping new products here would need re-threading
+            # is_new_product through InventoryWriteResult for no real
+            # benefit. Cost doesn't affect stock-cover/low-stock, so this
+            # never adds to touched_product_ids.
+            product_repo.update_cost_price(
+                business_id=upload.business_id, product_id=result.product_id, cost_price=result.unit_cost
+            )
+    return rows_imported, warnings, touched_product_ids, []
 
 
 def _write_purchases(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedPurchaseRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    # Keyed by (reference, product_id), not reference alone — a real
+    # purchase order routinely covers several different products under one
+    # PO/invoice number (found live: a 1656-row file with one PO number per
+    # several rows wrongly rejected 835 of them as duplicates of each
+    # other, when they were really just different line items on the same
+    # PO). Product must be resolved before this check can run, since the
+    # key needs product_id.
+    existing_ref_product_pairs = movement_repo.list_existing_purchase_reference_product_pairs(upload.business_id)
+
+    # Every row is written normally now, always — InventoryMovementRepository.
+    # sum_by_product_ids's date-aware calculation already excludes anything
+    # dated on/before a later stock count from current stock, automatically,
+    # correctly, regardless of what order files get uploaded/processed in.
+    # This lookup exists only to decide whether to show an informational
+    # heads-up about that, per product — never to reject or suppress
+    # anything (an earlier version of this function did; superseded).
+    latest_adjustment_by_product = movement_repo.list_latest_adjustment_event_dates(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
     cost_updated_products: set[uuid.UUID] = set()
+    duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
         if match.action == "create":
@@ -630,13 +880,39 @@ def _write_purchases(
             # Never "none" here — validate_and_parse_purchase_row already
             # rejects rows with no sku and no product_name before this point.
             product_id = match.product_id
+
+        # Informational only — see latest_adjustment_by_product's own
+        # comment above. Same boundary as sum_by_product_ids: on-or-before
+        # (not strictly-before) the count's date is "already reflected in
+        # it," matching a shop's own daily routine of exporting sales and
+        # a stock count together, the count representing the end of that
+        # day.
+        last_count_date = latest_adjustment_by_product.get(product_id)
+        if last_count_date is not None and row.purchase_date <= last_count_date:
+            warnings["purchase_excluded_from_current_stock"].append({"row_number": row.row_number})
+
+        if row.reference is not None:
+            key = (row.reference, product_id)
+            if key in existing_ref_product_pairs:
+                duplicate_rejections.append(
+                    RejectedRow(row.row_number, "duplicate_reference", _purchase_row_display(row))
+                )
+                continue
+            # Folded straight into the same set so a second occurrence of
+            # this exact (reference, product) pair LATER in this same file
+            # is caught too, not just one from an earlier upload —
+            # purchases rows aren't grouped the way sales rows are, so
+            # within-file duplication is a real, separate risk here.
+            existing_ref_product_pairs.add(key)
+
+        if match.action != "create":
             if match.name_mismatch:
                 warnings["product_name_mismatch"].append(
                     {"row_number": row.row_number, "product_name": row.product_name}
                 )
             if row.unit_cost is not None:
                 if product_id in cost_updated_products:
-                    warnings["duplicate_product_in_file"].append({"row_number": row.row_number})
+                    warnings["duplicate_product_cost_overwritten"].append({"row_number": row.row_number})
                 product_repo.update_cost_price(
                     business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost
                 )
@@ -648,18 +924,36 @@ def _write_purchases(
             quantity_delta=row.quantity_received,
             reason="purchase",
             import_record_id=import_record.id,
+            purchase_reference=row.reference,
+            event_date=row.purchase_date,
         )
         touched_product_ids.add(product_id)
         rows_imported += 1
-    return rows_imported, warnings, touched_product_ids
+    return rows_imported, warnings, touched_product_ids, duplicate_rejections
 
 
 def _write_repairs(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedRepairRow]
-) -> tuple[int, dict[str, list[dict]], set[uuid.UUID]]:
+) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     event_repo = ProductionEventRepository(db)
+    # (reference, description, price_charged, labour_cost), not reference
+    # alone — one invoice/job number can cover more than one repair (see
+    # list_existing_repair_reference_signatures's own docstring for why,
+    # and _write_purchases above for the same class of bug, found live,
+    # this mirrors).
+    existing_signatures = event_repo.list_existing_repair_reference_signatures(upload.business_id)
     rows_imported = 0
+    duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
+        signature = (row.reference, row.description, row.price_charged, row.labour_cost)
+        if row.reference is not None and signature in existing_signatures:
+            duplicate_rejections.append(RejectedRow(row.row_number, "duplicate_reference", _repair_row_display(row)))
+            continue
+        if row.reference is not None:
+            # Same reasoning as purchases: repairs rows aren't grouped, so
+            # a second occurrence later in this same file needs catching too.
+            existing_signatures.add(signature)
+
         # These are historical, already-finished jobs from an export, not
         # live in-progress repairs — status="completed" (not the model's
         # "open" default, reserved for a possible future real-time entry
@@ -678,12 +972,13 @@ def _write_repairs(
             customer_id=None,
             performed_by_id=None,
             import_record_id=import_record.id,
+            repair_reference=row.reference,
         )
         rows_imported += 1
     # No InventoryMovement written (v1 has no parts-consumed detail), so
     # nothing for refresh_low_stock_alerts to do — an empty set is a
     # correct, cheap no-op there.
-    return rows_imported, {}, set()
+    return rows_imported, {}, set(), duplicate_rejections
 
 
 def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> ImportResult:
@@ -733,9 +1028,15 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         else:
             parsed_rows.append(result)
 
-    rows_imported, warnings, touched_product_ids = _WRITE_FNS[upload.entity_type](
+    rows_imported, warnings, touched_product_ids, duplicate_rejections = _WRITE_FNS[upload.entity_type](
         db, upload, import_record, parsed_rows
     )
+    # Duplicate-reference rejections are discovered at write time (they
+    # need a DB lookup against prior imports, unlike every other rejection
+    # reason above, which is pure parse-time validation) — folded into the
+    # same rejections list so rows_total/rows_rejected below account for
+    # them exactly like any other invalid row.
+    rejections.extend(duplicate_rejections)
 
     rejection_summary = _build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)

@@ -16,6 +16,8 @@ def test_inventory_requires_an_identifier_and_a_quantity():
     assert not rule({"sku": "SKU"})  # no quantity
     assert not rule({"quantity_on_hand": "Stock"})  # no identifier
     assert not rule({})
+    # unit_cost is never required
+    assert rule({"sku": "SKU", "quantity_on_hand": "Stock", "unit_cost": None})
 
 
 def test_purchases_requires_date_identifier_and_quantity():

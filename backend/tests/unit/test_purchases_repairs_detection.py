@@ -14,6 +14,7 @@ def test_clean_purchases_export_resolves_via_alias():
         "sku": "SKU",
         "quantity_received": "Qty Received",
         "unit_cost": "Unit Cost",
+        "purchase_reference": None,
     }
 
 
@@ -54,6 +55,7 @@ def test_clean_repairs_export_resolves_via_alias():
         "description": "Description",
         "price_charged": "Price Charged",
         "labour_cost": "Labour Cost",
+        "repair_reference": None,
     }
 
 

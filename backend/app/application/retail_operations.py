@@ -21,7 +21,8 @@ from app.analytics.retail import (
     compute_inventory_value_at_cost,
     compute_sell_through_rate,
     find_dead_stock,
-    rank_top_sellers,
+    rank_top_sellers_by_revenue,
+    rank_top_sellers_by_units,
 )
 from app.models.business import Business
 from app.repositories.inventory_movement import InventoryMovementRepository
@@ -34,7 +35,8 @@ _TOP_N = 5
 @dataclass(frozen=True)
 class RetailOperationsSummary:
     period: MetricPeriod
-    top_sellers: list[ProductSalesRow]
+    top_sellers_by_units: list[ProductSalesRow]
+    top_sellers_by_revenue: list[ProductSalesRow]
     stock_cover: list[StockCoverRow]
     dead_stock: list[DeadStockEntry]
     inventory_value: InventoryValueResult
@@ -72,7 +74,8 @@ def get_retail_operations(
     aggregates = SaleItemRepository(db).aggregate_by_product_in_range(business_id, period.start, period.end)
     aggregates_by_product = {a.product_id: a for a in aggregates}
 
-    top_sellers = rank_top_sellers(aggregates, products_by_id, top_n=_TOP_N)
+    top_sellers_by_units = rank_top_sellers_by_units(aggregates, products_by_id, top_n=_TOP_N)
+    top_sellers_by_revenue = rank_top_sellers_by_revenue(aggregates, products_by_id, top_n=_TOP_N)
     stock_cover = build_stock_cover_report(aggregates_by_product, stock_by_product, products_by_id, period.days)
     dead_stock = find_dead_stock(aggregates_by_product, stock_by_product, products_by_id, cost_price_by_product)
     inventory_value = compute_inventory_value_at_cost(stock_by_product, cost_price_by_product)
@@ -83,7 +86,8 @@ def get_retail_operations(
 
     return RetailOperationsSummary(
         period=period,
-        top_sellers=top_sellers,
+        top_sellers_by_units=top_sellers_by_units,
+        top_sellers_by_revenue=top_sellers_by_revenue,
         stock_cover=stock_cover,
         dead_stock=dead_stock,
         inventory_value=inventory_value,

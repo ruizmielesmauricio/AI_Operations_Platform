@@ -9,11 +9,15 @@ import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type {
   Alert,
+  DailyForecast,
   DeadStockRow,
   Finding,
   Findings,
   FinancialPerformance,
+  Forecast,
+  ProductDemandForecast,
   ProductMarginRow,
+  ProductSalesRow,
   Recommendation,
   RetailOperations,
   StockCoverRow,
@@ -26,13 +30,18 @@ const DEFINITIONS: Record<string, string> = {
   revenue: "Total sales recorded in the selected period.",
   grossMargin: "Revenue minus the cost of goods sold, as a percentage of revenue with a known cost.",
   costCoverage: "Share of revenue where a cost price was actually recorded — margin below this is only an estimate.",
+  taxCoverage: "Share of cost-known revenue that also has a confirmed tax figure, letting margin be computed net of tax rather than assumed.",
   stockCover: "How many days of stock are left at the recent sales rate. Blank means not enough recent sales to estimate.",
   deadStock: "Products with stock on hand but zero sales in the selected period.",
   sellThrough: "Units sold divided by units sold plus stock still on hand — an approximation, not an exact sell-through rate.",
   workshopMargin: "Price charged minus labour cost. Parts cost isn't tracked yet, so this understates true repair cost.",
+  revenueForecast:
+    "A simple projection from recent sales history (same weekday pattern, or a plain average if there isn't enough history yet) — not AI, just deterministic math. The shaded range is a typical spread, not a guarantee.",
+  reorderSuggestion:
+    "A starting suggestion only: forecasted demand's upper estimate minus current stock. Doesn't account for supplier lead time or safety stock.",
 };
 
-type SectionKey = "financial" | "retail" | "workshop" | "findings" | "alerts";
+type SectionKey = "financial" | "retail" | "workshop" | "findings" | "alerts" | "forecast";
 
 export default function DashboardPage() {
   const { session, checkingSession } = useRequireSession();
@@ -46,6 +55,8 @@ export default function DashboardPage() {
   const [workshop, setWorkshop] = useState<WorkshopPerformance | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [forecast, setForecast] = useState<Forecast | null>(null);
+  const [horizonDays, setHorizonDays] = useState(7);
   const [errors, setErrors] = useState<Partial<Record<SectionKey, string>>>({});
 
   useEffect(() => {
@@ -75,6 +86,16 @@ export default function DashboardPage() {
       .then(setAlerts)
       .catch(() => setErrors((prev) => ({ ...prev, alerts: "Could not load alerts." })));
   }, [businessId, startDate, endDate]);
+
+  // Forecast is forward-looking from "today," not the start/end period
+  // filter above — it depends only on the chosen horizon.
+  useEffect(() => {
+    if (!businessId) return;
+    setErrors((prev) => ({ ...prev, forecast: undefined }));
+    apiGet<Forecast>(`/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}`)
+      .then(setForecast)
+      .catch(() => setErrors((prev) => ({ ...prev, forecast: "Could not load forecast." })));
+  }, [businessId, horizonDays]);
 
   if (checkingSession) {
     return (
@@ -143,6 +164,7 @@ export default function DashboardPage() {
       <FinancialSection data={financial} error={errors.financial} />
       <RetailSection data={retail} error={errors.retail} />
       <WorkshopSection data={workshop} error={errors.workshop} />
+      <ForecastSection data={forecast} error={errors.forecast} horizonDays={horizonDays} setHorizonDays={setHorizonDays} />
       <FindingsSection data={findings} error={errors.findings} />
       <AlertsSection alerts={alerts} error={errors.alerts} />
     </main>
@@ -161,17 +183,30 @@ function FinancialSection({ data, error }: { data: FinancialPerformance | null; 
   return (
     <Section title="Financial Performance">
       <Stat label="Revenue" title={DEFINITIONS.revenue} value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
-      <Stat
-        label="Gross margin"
-        title={DEFINITIONS.grossMargin}
-        value={formatPct(grossMargin.gross_margin_pct)}
-        note={
-          grossMargin.cost_data_coverage_pct !== null
-            ? `based on ${formatPct(grossMargin.cost_data_coverage_pct)} of revenue with known cost`
-            : "no cost data recorded yet"
-        }
-        noteTitle={DEFINITIONS.costCoverage}
-      />
+      {grossMargin.net_gross_margin_pct !== null ? (
+        // Prefer the net-of-tax figure whenever any tax data is known —
+        // gross_margin_pct below may overstate margin for revenue sourced
+        // from a tax-inclusive total (see net_gross_margin_pct's own docs).
+        <Stat
+          label="Gross margin"
+          title={DEFINITIONS.grossMargin}
+          value={formatPct(grossMargin.net_gross_margin_pct)}
+          note={`net of tax — based on ${formatPct(grossMargin.tax_data_coverage_pct)} of cost-known revenue with confirmed tax figures`}
+          noteTitle={DEFINITIONS.taxCoverage}
+        />
+      ) : (
+        <Stat
+          label="Gross margin"
+          title={DEFINITIONS.grossMargin}
+          value={formatPct(grossMargin.gross_margin_pct)}
+          note={
+            grossMargin.cost_data_coverage_pct !== null
+              ? `based on ${formatPct(grossMargin.cost_data_coverage_pct)} of revenue with known cost — may include tax if your prices/totals are tax-inclusive`
+              : "no cost data recorded yet"
+          }
+          noteTitle={DEFINITIONS.costCoverage}
+        />
+      )}
       {data.products_excluded_from_ranking > 0 && (
         <p className="status-warn">
           {data.products_excluded_from_ranking} product(s) excluded from ranking — no recorded cost price.
@@ -200,29 +235,7 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
       <Stat label="Inventory value" value={formatMoney(data.inventory_value.value_at_cost)} />
       <Stat label="Sell-through rate" title={DEFINITIONS.sellThrough} value={formatRate(data.sell_through_rate)} />
 
-      <h3>Top sellers</h3>
-      {data.top_sellers.length === 0 ? (
-        <p>No sales in this period.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Units sold</th>
-              <th>Revenue</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.top_sellers.map((row) => (
-              <tr key={row.product_id}>
-                <td>{row.name}</td>
-                <td>{row.units_sold}</td>
-                <td>{formatMoney(row.revenue)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} />
 
       <h3 title={DEFINITIONS.stockCover}>Stock cover</h3>
       {withCover.length > 0 ? (
@@ -244,6 +257,56 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
         <DeadStockTable rows={data.dead_stock} />
       )}
     </Section>
+  );
+}
+
+// "Most sold" and "most revenue" are genuinely different questions (a
+// high-price, low-volume item can dominate revenue without being what's
+// actually popular) — a toggle over both, rather than one ambiguous "top
+// sellers" list ranked by whichever the backend happened to pick.
+function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byRevenue: ProductSalesRow[] }) {
+  const [sortBy, setSortBy] = useState<"units" | "revenue">("units");
+  const rows = sortBy === "units" ? byUnits : byRevenue;
+
+  return (
+    <>
+      <h3>
+        Top sellers{" "}
+        <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
+          (
+          <button type="button" onClick={() => setSortBy("units")} disabled={sortBy === "units"}>
+            most sold
+          </button>{" "}
+          /{" "}
+          <button type="button" onClick={() => setSortBy("revenue")} disabled={sortBy === "revenue"}>
+            most revenue
+          </button>
+          )
+        </span>
+      </h3>
+      {rows.length === 0 ? (
+        <p>No sales in this period.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Units sold</th>
+              <th>Revenue</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.product_id}>
+                <td>{row.name}</td>
+                <td>{row.units_sold}</td>
+                <td>{formatMoney(row.revenue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 
@@ -297,6 +360,116 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
         <p className="status-warn">
           Only {formatPct(margin.revenue_coverage_pct)} of repairs have a recorded price — revenue may understate
           actual work done.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+// --- Forecast (Stage C13) --------------------------------------------------
+
+const HORIZON_OPTIONS = [7, 14, 30] as const;
+
+function ForecastSection({
+  data,
+  error,
+  horizonDays,
+  setHorizonDays,
+}: {
+  data: Forecast | null;
+  error?: string;
+  horizonDays: number;
+  setHorizonDays: (days: number) => void;
+}) {
+  const title = (
+    <>
+      Forecast{" "}
+      <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
+        (next{" "}
+        {HORIZON_OPTIONS.map((days, i) => (
+          <span key={days}>
+            {i > 0 && " / "}
+            <button type="button" onClick={() => setHorizonDays(days)} disabled={horizonDays === days}>
+              {days} days
+            </button>
+          </span>
+        ))}
+        )
+      </span>
+    </>
+  );
+
+  if (error) return <Section title={title}><p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={title}><p>Loading…</p></Section>;
+
+  const { result } = data.revenue;
+
+  return (
+    <Section title={title}>
+      <p className="hint">
+        Not AI, and not a formal statistical guarantee — a plain projection from your own sales history (either the
+        average for that weekday, or a recent overall average if there isn&apos;t enough history yet to tell weekdays
+        apart). The shaded range shows how much that history has typically varied, not a calculated probability.
+      </p>
+
+      <h3 title={DEFINITIONS.revenueForecast}>Revenue</h3>
+      {result.insufficient_data ? (
+        <p>Not enough sales history yet to forecast revenue — check back once you have at least two weeks of data.</p>
+      ) : (
+        <>
+          <Stat
+            label={`Expected revenue, next ${data.horizon_days} days`}
+            title={DEFINITIONS.revenueForecast}
+            value={`${formatMoney(result.total_point)} (typically ${formatMoney(result.total_low)}–${formatMoney(result.total_high)})`}
+            note={`based on ${result.history_days_used} days of history — ${
+              result.method === "seasonal_day_of_week"
+                ? "your average for each day of the week"
+                : "a plain recent daily average (not enough history yet for day-of-week patterns)"
+            }`}
+          />
+          <Chart option={revenueForecastLineOption(result.daily)} />
+        </>
+      )}
+
+      <h3 title={DEFINITIONS.reorderSuggestion}>Products to watch</h3>
+      {data.products.length === 0 ? (
+        <p>No products have enough sales history yet to forecast demand.</p>
+      ) : (
+        <>
+        <p className="hint">
+          &quot;Suggested reorder&quot; is a starting point only: forecast demand&apos;s upper estimate minus current
+          stock. It doesn&apos;t know your supplier&apos;s delivery time or how much safety buffer you want — treat
+          it as a number to sanity-check, not a purchase order.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Current stock</th>
+              <th>Forecast demand</th>
+              <th>Cover left</th>
+              <th title={DEFINITIONS.reorderSuggestion}>Suggested reorder</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.products.slice(0, 15).map((row: ProductDemandForecast) => (
+              <tr key={row.product_id}>
+                <td>{row.name}</td>
+                <td>{row.current_stock}</td>
+                <td>
+                  {row.result.total_point} ({row.result.total_low}–{row.result.total_high})
+                </td>
+                <td>{row.days_of_cover_at_forecast_rate !== null ? `${row.days_of_cover_at_forecast_rate}d` : "—"}</td>
+                <td>{row.suggested_reorder_quantity > 0 ? row.suggested_reorder_quantity : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </>
+      )}
+      {data.products_excluded_insufficient_data > 0 && (
+        <p className="status-warn">
+          {data.products_excluded_insufficient_data} product(s) excluded — not enough sales history yet.
         </p>
       )}
     </Section>
@@ -374,7 +547,7 @@ function AlertsSection({ alerts, error }: { alerts: Alert[]; error?: string }) {
 
 // --- Shared layout / formatting helpers -------------------------------------
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <section>
       <h2>{title}</h2>
@@ -461,6 +634,21 @@ function marginBarOption(rows: ProductMarginRow[], title: string): EChartsOption
           return { value, itemStyle: { color: value < 0 ? "#cf222e" : "#1a7f37" } };
         }),
       },
+    ],
+  };
+}
+
+function revenueForecastLineOption(daily: DailyForecast[]): EChartsOption {
+  const dates = daily.map((d) => d.forecast_date);
+  return {
+    grid: { left: 70, right: 30, top: 20, bottom: 30 },
+    tooltip: { trigger: "axis" },
+    xAxis: { type: "category", data: dates },
+    yAxis: { type: "value", name: "€" },
+    series: [
+      { name: "Typical low", type: "line", data: daily.map((d) => Number(d.low)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
+      { name: "Forecast", type: "line", data: daily.map((d) => Number(d.point)), lineStyle: { color: "#0969da", width: 2 }, symbol: "circle" },
+      { name: "Typical high", type: "line", data: daily.map((d) => Number(d.high)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
     ],
   };
 }

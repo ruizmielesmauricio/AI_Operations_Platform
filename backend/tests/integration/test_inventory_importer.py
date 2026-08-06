@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import select
 
@@ -18,6 +20,14 @@ _INVENTORY_CSV = (
     "Bar Tape,BT-200,8\n"
 ).encode()
 _INVENTORY_FIELD_MAPPING = {"product_name": "Product", "sku": "SKU", "quantity_on_hand": "Stock Level"}
+
+_INVENTORY_WITH_COST_HEADER = ["Product", "SKU", "Stock Level", "Unit Cost"]
+_INVENTORY_WITH_COST_FIELD_MAPPING = {
+    "product_name": "Product",
+    "sku": "SKU",
+    "quantity_on_hand": "Stock Level",
+    "unit_cost": "Unit Cost",
+}
 
 _SALES_HEADER = ["Order Date", "Item Description", "SKU", "Qty", "Unit Price"]
 _SALES_CSV = (
@@ -45,7 +55,9 @@ def _fake_r2(monkeypatch):
     return content_by_key
 
 
-def _make_mapped_upload(db_session, business_id, content_by_key, *, entity_type, header, content, filename):
+def _make_mapped_upload(
+    db_session, business_id, content_by_key, *, entity_type, header, content, filename, field_mapping=None
+):
     storage_key = f"{business_id}/test/{filename}"
     content_by_key[storage_key] = content
 
@@ -59,7 +71,8 @@ def _make_mapped_upload(db_session, business_id, content_by_key, *, entity_type,
     upload = UploadRepository(db_session).set_status(upload, status="uploaded")
 
     signature = detection.compute_source_signature(entity_type, header)
-    field_mapping = _INVENTORY_FIELD_MAPPING if entity_type == "inventory" else _SALES_FIELD_MAPPING
+    if field_mapping is None:
+        field_mapping = _INVENTORY_FIELD_MAPPING if entity_type == "inventory" else _SALES_FIELD_MAPPING
     profile = ImportMappingProfileRepository(db_session).upsert(
         business_id=business_id,
         source_signature=signature,
@@ -80,6 +93,14 @@ def _make_inventory_upload(db_session, business_id, content_by_key, filename="st
     return _make_mapped_upload(
         db_session, business_id, content_by_key,
         entity_type="inventory", header=_INVENTORY_HEADER, content=content, filename=filename,
+    )
+
+
+def _make_inventory_upload_with_cost(db_session, business_id, content_by_key, *, content, filename="stock.csv"):
+    return _make_mapped_upload(
+        db_session, business_id, content_by_key,
+        entity_type="inventory", header=_INVENTORY_WITH_COST_HEADER, content=content, filename=filename,
+        field_mapping=_INVENTORY_WITH_COST_FIELD_MAPPING,
     )
 
 
@@ -159,6 +180,89 @@ def test_duplicate_product_within_one_inventory_file_compounds_and_warns(db_sess
         select(InventoryMovement).where(InventoryMovement.product_id == product.id)
     ).all()
     assert sum(m.quantity_delta for m in movements) == 15  # not 30
+
+
+def test_inventory_import_with_unit_cost_seeds_and_updates_product_cost_price(db_session, business_id, _fake_r2):
+    # Chain Lube is new (cost seeded at creation); Bar Tape already exists
+    # from a prior sales import with a different cost (cost updated via
+    # ProductRepository.update_cost_price, the same path purchases uses).
+    first_upload, first_record = _make_sales_upload(
+        db_session, business_id, _fake_r2, filename="sales.csv",
+        content=(
+            "Order Date,Item Description,SKU,Qty,Unit Price\n"
+            "2026-01-03,Bar Tape,BT-200,1,15.00\n"
+        ).encode(),
+    )
+    run_import(db_session, first_upload, first_record)
+    bar_tape = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "BT-200"))
+    assert bar_tape.cost_price is None  # no cost_price_at_sale was mapped in that file either
+
+    content = (
+        "Product,SKU,Stock Level,Unit Cost\n"
+        "Chain Lube,CL-100,25,3.00\n"
+        "Bar Tape,BT-200,8,4.50\n"
+    ).encode()
+    upload, record = _make_inventory_upload_with_cost(db_session, business_id, _fake_r2, content=content)
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    assert chain_lube.cost_price == Decimal("3.00")
+
+    db_session.refresh(bar_tape)
+    assert bar_tape.cost_price == Decimal("4.50")
+
+    # Stock adjustment still happens exactly as without a cost column — the
+    # +9 (not +8) for Bar Tape is correct: it reconciles against -1, its
+    # stock after the prior sale, not against a bare "8" the file claims.
+    adjustments = db_session.scalars(
+        select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.reason == "adjustment")
+    ).all()
+    assert sorted(m.quantity_delta for m in adjustments) == [9, 25]
+
+
+def test_inventory_import_cost_only_row_updates_cost_without_a_stock_movement(db_session, business_id, _fake_r2):
+    upload1, record1 = _make_inventory_upload(db_session, business_id, _fake_r2)
+    run_import(db_session, upload1, record1)
+
+    content = (
+        "Product,SKU,Stock Level,Unit Cost\n"
+        "Chain Lube,CL-100,25,5.25\n"  # same 25 -> delta 0, cost-only change
+    ).encode()
+    upload2, record2 = _make_inventory_upload_with_cost(
+        db_session, business_id, _fake_r2, content=content, filename="stock2.csv"
+    )
+    run_import(db_session, upload2, record2)
+
+    chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    assert chain_lube.cost_price == Decimal("5.25")
+
+    # Two movements now, not one — a zero-delta reconciliation is still
+    # written (unlike before this test was updated) so its as_of_date
+    # becomes the new baseline for future stock reads; a "confirmed still
+    # 25 units" event is real information, even with no quantity change.
+    movements = db_session.scalars(
+        select(InventoryMovement).where(InventoryMovement.business_id == business_id, InventoryMovement.product_id == chain_lube.id)
+    ).all()
+    assert sorted(m.quantity_delta for m in movements) == [0, 25]
+    zero_delta_movement = next(m for m in movements if m.quantity_delta == 0)
+    assert zero_delta_movement.resulting_quantity_on_hand == 25
+
+
+def test_duplicate_product_in_file_uses_the_last_unit_cost(db_session, business_id, _fake_r2):
+    content = (
+        "Product,SKU,Stock Level,Unit Cost\n"
+        "Chain Lube,CL-100,15,3.00\n"
+        "Chain Lube,CL-100,15,3.50\n"
+    ).encode()
+    upload, record = _make_inventory_upload_with_cost(db_session, business_id, _fake_r2, content=content)
+
+    result = run_import(db_session, upload, record)
+    assert result.rejection_summary["warnings"]["duplicate_product_in_file"]["count"] == 1
+
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id))
+    assert product.cost_price == Decimal("3.50")  # last row wins, same as quantity
 
 
 def test_undo_inventory_import_bulk_deletes_by_import_record_id(db_session, business_id, _fake_r2):

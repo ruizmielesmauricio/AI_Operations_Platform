@@ -42,12 +42,14 @@ class ProductRepository:
     def update_cost_price(
         self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal
     ) -> Product | None:
-        """First update path on Product ever — written by the "purchases"
-        entity type (app/imports/importer.py::_write_purchases), which is
-        explicitly the natural place to learn/refresh a product's current
-        cost. Unconditionally overwrites (cost_price has no other refresh
-        path, and the latest purchase price should win). Flush only —
-        app/imports/importer.py owns the single commit.
+        """First update path on Product ever — originally written by the
+        "purchases" entity type (app/imports/importer.py::_write_purchases),
+        the natural place to learn/refresh a product's current cost; also
+        used by "inventory" (::_write_inventory) for shops that only ever
+        do stock counts and never a separate purchases export. Unconditionally
+        overwrites (cost_price has no snapshot history, so the latest
+        recorded price wins regardless of which entity type supplied it).
+        Flush only — app/imports/importer.py owns the single commit.
         """
         product = self.session.scalar(
             select(Product).where(Product.id == product_id, Product.business_id == business_id)

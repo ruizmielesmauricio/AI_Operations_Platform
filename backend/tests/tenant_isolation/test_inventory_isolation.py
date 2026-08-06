@@ -9,7 +9,13 @@ from app.main import app
 from app.models import Base
 from tests.auth_helpers import bearer_header, patch_jwks
 
-_INVENTORY_FIELD_MAPPING = {"product_name": "Product", "sku": "SKU", "quantity_on_hand": "Stock Level"}
+_INVENTORY_FIELD_MAPPING = {
+    "product_name": "Product",
+    "sku": "SKU",
+    "quantity_on_hand": "Stock Level",
+    "unit_cost": None,
+    "as_of_date": None,
+}
 _SALES_FIELD_MAPPING = {
     "sale_date": "Order Date",
     "product_name": "Item Description",
@@ -18,6 +24,7 @@ _SALES_FIELD_MAPPING = {
     "unit_price": "Unit Price",
     "total_amount": None,
     "cost_price_at_sale": None,
+    "tax_amount": None,
     "order_reference": None,
 }
 

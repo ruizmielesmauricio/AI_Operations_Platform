@@ -29,6 +29,17 @@ main {
   color: #57606a;
 }
 
+/* Secondary explanatory text under a field-mapping question — kept
+   visually distinct (smaller, muted) from the short primary question so
+   the question itself stays scannable, per feedback that a single
+   sentence trying to carry every caveat was too dense to read. */
+.hint {
+  display: block;
+  font-size: 0.85em;
+  color: #57606a;
+  margin-top: 0.15rem;
+}
+
 /* Dashboard needs more room than the default 640px form-width pages
    (uploads, auth) for charts/tables — opt-in via a class rather than
    widening `main` globally. */

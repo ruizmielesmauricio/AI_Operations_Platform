@@ -27,16 +27,39 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "unit_price",
         "total_amount",
         "cost_price_at_sale",
+        # Optional — when a POS export's total is tax-inclusive (the usual
+        # source of an apparent total_amount_mismatch), mapping this lets
+        # margin be computed net of tax instead of just flagging the
+        # mismatch. Never required (MINIMUM_MAPPING_RULES below doesn't
+        # reference it) — see app/imports/importer.py::validate_and_parse_row
+        # and app/analytics/financial.py's net_gross_margin_pct.
+        "tax_amount",
         "order_reference",
     ],
     # A stock-count snapshot, not a transaction: one row per product's
-    # current on-hand quantity. No date/grouping field — see
-    # app/imports/importer.py's reconciliation logic for why (it always
-    # compares against *current* derived stock, not a claimed "as of" date).
+    # current on-hand quantity.
     "inventory": [
         "product_name",
         "sku",
         "quantity_on_hand",
+        # Optional — a stock-count export sometimes carries per-unit cost
+        # alongside the count. Not required (MINIMUM_MAPPING_RULES below
+        # never references it), same "optional, never blocks a row"
+        # treatment as purchases' unit_cost — see
+        # app/imports/importer.py::validate_and_parse_inventory_row. Lets a
+        # shop that never uploads a separate purchases file still set
+        # Product.cost_price.
+        "unit_cost",
+        # Optional — supersedes an earlier "inventory has no date field by
+        # design" decision (that design assumed reconciliation always
+        # compares against whatever's *currently* derived, which is
+        # exactly what made a purchase/sale dated before a stock count
+        # capable of double-counting stock — see
+        # app/imports/importer.py::sum_by_product_ids's date-aware
+        # rewrite). Most exports won't have this column at all; when
+        # absent, defaults to the upload's own processing date in the
+        # business's timezone, which is exactly today's prior behavior.
+        "as_of_date",
     ],
     # A restocking transaction — each row is its own independent fact
     # ("we received N units on this date"), not a reconciliation like
@@ -48,6 +71,12 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "sku",
         "quantity_received",
         "unit_cost",
+        # Optional — a PO/invoice number, if the export has one. Lets a
+        # re-uploaded/overlapping file be rejected instead of silently
+        # double-counting stock received. Never required
+        # (MINIMUM_MAPPING_RULES below never references it) — see
+        # app/imports/importer.py::validate_and_parse_purchase_row.
+        "purchase_reference",
     ],
     # One row per finished repair, from a shop's own workshop log/export —
     # treated the same as sales at the row level, not the line-item level
@@ -57,6 +86,9 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "description",
         "price_charged",
         "labour_cost",
+        # Optional — same reasoning as purchases' purchase_reference above,
+        # for workshop revenue instead of stock.
+        "repair_reference",
     ],
 }
 
@@ -76,6 +108,13 @@ MINIMUM_MAPPING_RULES: dict[str, Callable[[dict[str, str | None]], bool]] = {
         and bool(m.get("description") or m.get("price_charged") or m.get("labour_cost"))
     ),
 }
+
+# Shared between purchases' unit_cost and inventory's optional unit_cost —
+# one list, not two, so they can't silently drift apart.
+_UNIT_COST_ALIASES = [
+    "unit cost", "cost", "cost price", "cost/unit", "cost each",
+    "purchase price", "supplier price", "landed cost", "buy price",
+]
 
 # Every field's canonical name is itself a valid alias (normalized), so
 # these lists only need to cover real-world variants seen across common
@@ -112,6 +151,10 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         "cost_price_at_sale": [
             "cost", "cost price", "unit cost", "cogs", "cost of goods", "item cost",
         ],
+        "tax_amount": [
+            "tax", "vat", "tax amount", "vat amount", "sales tax", "tax charged",
+            "total tax", "gst",
+        ],
         # Groups several imported rows into one multi-item Sale (Sale.order_reference).
         # Deliberately excludes "register"/"register number": a till/register
         # number identifies which terminal rang up a sale, not the individual
@@ -137,6 +180,11 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "on hand", "current stock", "inventory count", "quantity in stock",
             "units in stock", "available stock", "stock qty",
         ],
+        "unit_cost": _UNIT_COST_ALIASES,
+        "as_of_date": [
+            "as of date", "count date", "stock date", "snapshot date", "date counted",
+            "inventory date", "date",
+        ],
     },
     "purchases": {
         "purchase_date": [
@@ -155,9 +203,9 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "qty received", "quantity received", "units received", "qty",
             "quantity", "units", "qty delivered", "restock qty", "amount received",
         ],
-        "unit_cost": [
-            "unit cost", "cost", "cost price", "cost/unit", "cost each",
-            "purchase price", "supplier price", "landed cost", "buy price",
+        "unit_cost": _UNIT_COST_ALIASES,
+        "purchase_reference": [
+            "po number", "purchase order", "po", "invoice number", "reference", "order number",
         ],
     },
     "repairs": {
@@ -176,6 +224,9 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         ],
         "labour_cost": [
             "labour cost", "labor cost", "internal cost", "labour charge",
+        ],
+        "repair_reference": [
+            "job number", "invoice number", "reference", "work order", "ticket number",
         ],
     },
 }

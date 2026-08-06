@@ -110,6 +110,13 @@ export interface GrossMargin {
   gross_profit: string;
   gross_margin_pct: string | null;
   cost_data_coverage_pct: string | null;
+  // Margin computed net of tax, over only sales with both a known cost and
+  // a known tax_amount — None until at least one line has both. Prefer
+  // this over gross_margin_pct whenever it's set: gross_margin_pct may
+  // overstate margin for any revenue sourced from a tax-inclusive total.
+  net_gross_profit: string | null;
+  net_gross_margin_pct: string | null;
+  tax_data_coverage_pct: string | null;
 }
 
 export interface ProductMarginRow {
@@ -159,7 +166,8 @@ export interface InventoryValue {
 
 export interface RetailOperations {
   period: Period;
-  top_sellers: ProductSalesRow[];
+  top_sellers_by_units: ProductSalesRow[];
+  top_sellers_by_revenue: ProductSalesRow[];
   stock_cover: StockCoverRow[];
   dead_stock: DeadStockRow[];
   inventory_value: InventoryValue;
@@ -221,4 +229,49 @@ export interface Alert {
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+// --- Stage C13 — Forecasting -----------------------------------------
+
+export interface DailyForecast {
+  forecast_date: string;
+  point: string;
+  low: string;
+  high: string;
+}
+
+export interface ForecastResult {
+  // True when there's under the backend's minimum lookback history —
+  // every field below is then meaningless and must not be displayed.
+  insufficient_data: boolean;
+  method: "seasonal_day_of_week" | "moving_average" | null;
+  history_days_used: number;
+  daily: DailyForecast[];
+  total_point: string;
+  total_low: string;
+  total_high: string;
+}
+
+export interface RevenueForecast {
+  horizon_days: number;
+  result: ForecastResult;
+}
+
+export interface ProductDemandForecast {
+  product_id: string;
+  name: string;
+  sku: string | null;
+  result: ForecastResult;
+  current_stock: number;
+  // A simple starting suggestion (confidence band's high end minus
+  // current stock) — does not model supplier lead time or safety stock.
+  suggested_reorder_quantity: number;
+  days_of_cover_at_forecast_rate: string | null;
+}
+
+export interface Forecast {
+  horizon_days: number;
+  revenue: RevenueForecast;
+  products: ProductDemandForecast[];
+  products_excluded_insufficient_data: number;
 }

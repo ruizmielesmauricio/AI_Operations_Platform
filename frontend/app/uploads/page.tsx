@@ -44,11 +44,12 @@ const FIELD_ORDER: Record<string, string[]> = {
     "unit_price",
     "total_amount",
     "cost_price_at_sale",
+    "tax_amount",
     "order_reference",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand"],
-  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost"],
-  repairs: ["repair_date", "description", "price_charged", "labour_cost"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "as_of_date"],
+  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost", "purchase_reference"],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -57,15 +58,18 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     product_name: "Which column is the product name?",
     sku: "Which column is the SKU or product code? (optional)",
     quantity: "Which column is the quantity sold?",
-    unit_price: "Which column is the unit price?",
-    total_amount: "Which column is the total amount? (optional if unit price is set)",
-    cost_price_at_sale: "Which column is the cost price? (optional)",
+    unit_price: "Which column is the price per unit? (optional)",
+    total_amount: "Which column is the final total for this line? (optional if unit price is set)",
+    cost_price_at_sale: "Which column is your cost for this item? (optional)",
+    tax_amount: "Which column is the tax/VAT amount? (optional)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
   },
   inventory: {
     product_name: "Which column is the product name? (optional if SKU is set)",
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
+    unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
+    as_of_date: "Which column is the date this count was taken? (optional)",
   },
   purchases: {
     purchase_date: "Which column is the date the stock was received?",
@@ -73,12 +77,46 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_received: "Which column is the quantity received?",
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
+    purchase_reference: "Which column is the PO or invoice number? (optional)",
   },
   repairs: {
     repair_date: "Which column is the repair date?",
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
-    labour_cost: "Which column is the labour cost? (optional)",
+    labour_cost: "Which column is your labour cost for this job? (optional)",
+    repair_reference: "Which column is the job or invoice number? (optional)",
+  },
+};
+
+// Secondary explanatory text, rendered smaller/muted below the question
+// (see the .hint CSS class) — kept separate from FIELD_LABELS above so
+// the primary question stays short and scannable. Only fields where the
+// short question alone leaves real ambiguity get one.
+const FIELD_HINTS: Record<string, Record<string, string>> = {
+  sales: {
+    unit_price: "What the customer paid for one item — before tax, if your file has a separate tax column.",
+    total_amount:
+      "The actual amount charged for this line — e.g. €36.90 for 3 items at €10 plus €6.90 tax. " +
+      "Include tax if your file's total does. Leave this blank if you don't have one — " +
+      "we'll calculate it from price × quantity instead.",
+    cost_price_at_sale: "What YOU paid your supplier for this item — not the price you charged the customer.",
+    tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
+    order_reference:
+      "Prevents accidentally importing the same order twice if you re-upload a file that overlaps an earlier one.",
+  },
+  inventory: {
+    as_of_date:
+      "Most stock-count exports don't have this — leave it blank and we'll use today's date. Only map it if " +
+      "your file states the date the count was actually taken (e.g. an overnight export dated for the day before).",
+  },
+  purchases: {
+    purchase_reference:
+      "Prevents accidentally importing the same purchase twice if you re-upload a file that overlaps an earlier one.",
+  },
+  repairs: {
+    labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
+    repair_reference:
+      "Prevents accidentally importing the same repair twice if you re-upload a file that overlaps an earlier one.",
   },
 };
 
@@ -414,14 +452,25 @@ export default function UploadsPage() {
         <form onSubmit={handleConfirmMapping}>
           <h2>Confirm what each column means</h2>
           <p>We matched most columns automatically — check them, and fix anything that's wrong.</p>
+          {(mappingEntityType === "sales" || mappingEntityType === "repairs") && (
+            <p className="status-warn">
+              Prices below split into two sides — what the <strong>customer</strong> paid (price, total, tax)
+              versus what <strong>you</strong> paid to get the item or do the job (cost price / labour cost).
+              Double-check you haven&apos;t swapped them.
+            </p>
+          )}
           {FIELD_ORDER[mappingEntityType].map((field) => {
             const selected = fieldMapping[field] ?? "";
             const samples = sampleValuesFor(selected);
             const confidence = confidenceFor(field, selected);
             const needsDoubleCheck = confidence !== null && confidence < HIGH_CONFIDENCE;
+            const hint = FIELD_HINTS[mappingEntityType]?.[field];
             return (
               <div key={field}>
-                <label htmlFor={`field-${field}`}>{FIELD_LABELS[mappingEntityType][field]}</label>
+                <label htmlFor={`field-${field}`}>
+                  {FIELD_LABELS[mappingEntityType][field]}
+                  {hint && <span className="hint">{hint}</span>}
+                </label>
                 <br />
                 <select
                   id={`field-${field}`}

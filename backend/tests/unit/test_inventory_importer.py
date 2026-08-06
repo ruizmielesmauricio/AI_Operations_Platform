@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from app.imports.importer import (
     ParsedInventoryRow,
@@ -10,6 +11,7 @@ from app.imports.importer import (
 )
 
 _COLUMNS = {"product_name": 0, "sku": 1, "quantity_on_hand": 2}
+_COLUMNS_WITH_COST = {"product_name": 0, "sku": 1, "quantity_on_hand": 2, "unit_cost": 3}
 
 
 def _parse(row, columns=_COLUMNS, row_number=1):
@@ -22,6 +24,21 @@ def test_a_clean_row_parses_successfully():
     assert result.product_name == "Chain Lube"
     assert result.sku == "CL-100"
     assert result.quantity_on_hand == 25
+    assert result.unit_cost is None  # not mapped in this file at all
+
+
+def test_a_row_with_unit_cost_parses_it():
+    result = _parse(["Chain Lube", "CL-100", "25", "3.50"], columns=_COLUMNS_WITH_COST)
+    assert isinstance(result, ParsedInventoryRow)
+    assert result.unit_cost == Decimal("3.50")
+
+
+def test_inventory_row_without_unit_cost_is_accepted():
+    # unit_cost mapped to a column, but blank on this particular row —
+    # optional, like purchases' unit_cost, never a rejection reason.
+    result = _parse(["Chain Lube", "CL-100", "25", ""], columns=_COLUMNS_WITH_COST)
+    assert isinstance(result, ParsedInventoryRow)
+    assert result.unit_cost is None
 
 
 def test_sku_only_row_is_accepted():
@@ -85,16 +102,21 @@ def test_zero_delta_row_is_still_a_result_with_delta_zero():
     assert results[0].delta == 0
 
 
-def test_duplicate_product_in_file_compounds_correctly_not_against_stale_snapshot():
-    # Same product twice in one file, both claiming qty=15. A read-only
-    # starting-stock snapshot would compute +5 twice (wrong, final=20);
-    # the running total must compound: +5 then 0 (final=15, correct).
+def test_duplicate_product_in_file_uses_only_the_last_row_as_the_target():
+    # Same product twice in one file, both claiming qty=15 — resolves to
+    # ONE result (not two compounding ones): resulting_quantity_on_hand is
+    # now the authoritative target (not re-derived from a delta chain), so
+    # there's nothing to compound. delta is computed once, against the
+    # pre-upload baseline (10 -> 15 == +5), using the last row's data.
     rows = [
         ResolvedInventoryRow(1, _P1, quantity_on_hand=15, is_new_product=False),
         ResolvedInventoryRow(2, _P1, quantity_on_hand=15, is_new_product=False),
     ]
     results, duplicates = reconcile_inventory_rows(rows, {_P1: 10})
-    assert [r.delta for r in results] == [5, 0]
+    assert len(results) == 1
+    assert results[0].row_number == 2  # the last occurrence's row
+    assert results[0].delta == 5
+    assert results[0].resulting_quantity_on_hand == 15
     assert duplicates == [{"row_number": 2}]
 
 

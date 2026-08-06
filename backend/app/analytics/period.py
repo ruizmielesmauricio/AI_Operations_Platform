@@ -5,6 +5,7 @@ no DB, no FastAPI — so the date-boundary logic is unit-testable on its own
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 DEFAULT_WINDOW_DAYS = 30
@@ -71,3 +72,37 @@ def resolve_period(
     end_local = datetime.combine(resolved_end_date + timedelta(days=1), time.min, tzinfo=tz)
 
     return MetricPeriod(start=start_local.astimezone(timezone.utc), end=end_local.astimezone(timezone.utc))
+
+
+def group_amounts_by_local_date(
+    rows: list[tuple[datetime, Decimal]],
+    business_timezone: str,
+    *,
+    window_start: date,
+    window_end: date,
+) -> dict[date, Decimal]:
+    """Buckets UTC-timestamped (timestamp, amount) rows into business-local
+    calendar days and sums each bucket — used by Stage C13's forecasting
+    (app/analytics/forecasting.py) to turn raw sale/sale_item rows into the
+    one-value-per-day series it needs.
+
+    Every date in [window_start, window_end] (inclusive both ends) is
+    present in the result, zero-filled if no row fell on it — a quiet day
+    is a real zero data point for a moving average, not a missing one;
+    silently dropping it would bias the average upward. Rows outside the
+    window are ignored (callers are expected to have already queried a
+    matching range, but this stays defensive rather than assuming it).
+    """
+    tz = ZoneInfo(business_timezone)
+    buckets: dict[date, Decimal] = {}
+    d = window_start
+    while d <= window_end:
+        buckets[d] = Decimal("0")
+        d += timedelta(days=1)
+
+    for timestamp, amount in rows:
+        local_date = timestamp.astimezone(tz).date()
+        if window_start <= local_date <= window_end:
+            buckets[local_date] += amount
+
+    return buckets

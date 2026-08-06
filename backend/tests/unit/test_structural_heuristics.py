@@ -20,12 +20,45 @@ def test_layer1_alias_dictionary_resolves_common_pos_headers_at_full_confidence(
         "unit_price": "Unit Price",
         "total_amount": None,
         "cost_price_at_sale": None,
+        "tax_amount": None,
         "order_reference": None,
     }
     for field in ("sale_date", "product_name", "sku", "quantity", "unit_price"):
         top = result.field_candidates[field][0]
         assert top.confidence == 1.0
         assert top.source == "alias"
+
+
+def test_exact_canonical_name_column_wins_over_an_earlier_alias_synonym():
+    # Real bug, found via a POS export shape with both a "Subtotal" (pre-tax)
+    # and a genuine "Total Amount" (post-tax) column: "subtotal" is a listed
+    # alias for total_amount, and it appears earlier in the file, so a
+    # naive first-match-wins scan claimed it for total_amount and left the
+    # real "Total Amount" column unmapped — silently understating revenue
+    # by the tax amount on every row. A column literally named the
+    # canonical field must always win, regardless of where it sits in the
+    # file relative to a same-meaning-ish synonym elsewhere.
+    header = [
+        "transaction_id", "quantity", "unit_cost", "unit_price",
+        "discount_amount", "subtotal", "tax_rate", "tax_amount", "total_amount",
+    ]
+    rows = [
+        ["TXN-1", "1", "7.34", "11.93", "0.6", "11.33", "0.23", "2.61", "13.94"],
+        ["TXN-2", "1", "44.09", "76.73", "0", "76.73", "0.23", "17.65", "94.38"],
+        ["TXN-3", "1", "27.49", "44.28", "0", "44.28", "0.23", "10.18", "54.46"],
+        ["TXN-4", "2", "62.53", "136.81", "0", "273.62", "0.23", "62.93", "336.55"],
+        ["TXN-5", "1", "19.86", "32.14", "0", "32.14", "0.23", "7.39", "39.53"],
+    ]
+    result = detect_mapping([header] + rows, "sales")
+
+    assert result.suggested_mapping["total_amount"] == "total_amount"
+    assert result.suggested_mapping["tax_amount"] == "tax_amount"
+    assert result.suggested_mapping["cost_price_at_sale"] == "unit_cost"
+    assert result.suggested_mapping["unit_price"] == "unit_price"
+    # "subtotal" has nothing left to claim it, since total_amount is taken
+    # by the exact match — it falls through as unmapped, not silently
+    # mis-assigned elsewhere.
+    assert "subtotal" in result.unmapped_columns
 
 
 def test_a_numeric_id_column_is_never_assigned_to_a_money_field():

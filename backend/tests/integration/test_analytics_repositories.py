@@ -36,7 +36,9 @@ def _make_product(db_session, business_id, *, name, cost_price, sell_price=None)
     return product
 
 
-def _make_sale_with_item(db_session, business_id, *, sold_at, product_id, quantity, unit_price, cost_price_at_sale):
+def _make_sale_with_item(
+    db_session, business_id, *, sold_at, product_id, quantity, unit_price, cost_price_at_sale, tax_amount=None
+):
     sale = Sale(business_id=business_id, sold_at=sold_at, total_amount=unit_price * quantity, order_reference=None)
     db_session.add(sale)
     db_session.flush()
@@ -47,6 +49,7 @@ def _make_sale_with_item(db_session, business_id, *, sold_at, product_id, quanti
         quantity=quantity,
         unit_price=unit_price,
         cost_price_at_sale=cost_price_at_sale,
+        tax_amount=tax_amount,
     )
     db_session.add(item)
     db_session.flush()
@@ -140,6 +143,39 @@ def test_aggregate_by_product_in_range_separates_known_and_unknown_cost(db_sessi
     assert p2.cogs == Decimal("0")
 
 
+def test_aggregate_by_product_in_range_separates_known_and_unknown_tax(db_session, business_id):
+    product = _make_product(db_session, business_id, name="Chain Lube", cost_price=Decimal("5.00"))
+
+    # Cost and tax both known.
+    _make_sale_with_item(
+        db_session, business_id,
+        sold_at=datetime(2026, 1, 3, 12, 0, tzinfo=timezone.utc),
+        product_id=product.id, quantity=10, unit_price=Decimal("10.00"),
+        cost_price_at_sale=Decimal("5.00"), tax_amount=Decimal("10.00"),
+    )
+    # Cost known, tax not recorded for this line.
+    _make_sale_with_item(
+        db_session, business_id,
+        sold_at=datetime(2026, 1, 4, 12, 0, tzinfo=timezone.utc),
+        product_id=product.id, quantity=2, unit_price=Decimal("10.00"),
+        cost_price_at_sale=Decimal("5.00"), tax_amount=None,
+    )
+    db_session.commit()
+
+    aggregates = SaleItemRepository(db_session).aggregate_by_product_in_range(
+        business_id, datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 8, tzinfo=timezone.utc)
+    )
+    result = aggregates[0]
+
+    assert result.revenue == Decimal("120.00")  # 100 + 20, both lines
+    assert result.revenue_with_known_cost == Decimal("120.00")  # both lines have known cost
+    assert result.cogs == Decimal("60.00")  # 50 + 10
+    # Only the first line has both cost and tax known.
+    assert result.revenue_with_known_cost_and_tax == Decimal("100.00")
+    assert result.tax_amount_known == Decimal("10.00")
+    assert result.cogs_for_known_tax == Decimal("50.00")
+
+
 def test_get_financial_performance_end_to_end(db_session, business_id):
     _seed(db_session, business_id)
 
@@ -170,4 +206,5 @@ def test_get_retail_operations_end_to_end(db_session, business_id):
     assert summary.dead_stock == []  # both products sold in the period
     assert summary.inventory_value.value_at_cost == Decimal("200.00")  # only Chain Lube has a known cost (40 * 5.00)
     assert summary.inventory_value.products_missing_cost == 1  # Bar Tape has stock but no cost_price
-    assert [row.name for row in summary.top_sellers] == ["Chain Lube", "Bar Tape"]
+    assert [row.name for row in summary.top_sellers_by_units] == ["Chain Lube", "Bar Tape"]
+    assert [row.name for row in summary.top_sellers_by_revenue] == ["Chain Lube", "Bar Tape"]

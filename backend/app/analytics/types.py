@@ -21,6 +21,12 @@ class ProductPeriodAggregate:
     must never be understated just because cost data is missing, and
     margin must never be computed against revenue it can't be matched to
     a cost for.
+
+    revenue_with_known_cost_and_tax/tax_amount_known/cogs_for_known_tax
+    are a strict subset of the above — cost known AND tax_amount known —
+    used to compute margin net of tax (app/analytics/financial.py's
+    net_gross_margin_pct) without ever blending a tax-unknown line (which
+    may still include tax in its revenue) into a "confirmed net" figure.
     """
 
     product_id: uuid.UUID
@@ -28,6 +34,9 @@ class ProductPeriodAggregate:
     revenue: Decimal
     revenue_with_known_cost: Decimal
     cogs: Decimal
+    revenue_with_known_cost_and_tax: Decimal = Decimal("0")
+    tax_amount_known: Decimal = Decimal("0")
+    cogs_for_known_tax: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)

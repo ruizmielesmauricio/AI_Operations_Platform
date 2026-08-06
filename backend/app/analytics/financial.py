@@ -47,6 +47,20 @@ class GrossMarginResult:
     # "data completeness" flag for this metric. 100 means every line item
     # in the period had a cost_price_at_sale recorded.
     cost_data_coverage_pct: Decimal | None
+    # Margin computed net of tax, over only the lines where BOTH cost and
+    # tax are known (a stricter subset of revenue_with_known_cost/gross_profit
+    # above) — never blends a tax-unknown line (whose revenue may still
+    # include tax) into a "confirmed net" figure. None when no line has
+    # both known; this is the number the dashboard prefers to show
+    # whenever it's available, since gross_margin_pct above may overstate
+    # margin for any revenue sourced from a tax-inclusive total.
+    net_gross_profit: Decimal | None = None
+    net_gross_margin_pct: Decimal | None = None
+    # revenue_with_known_cost_and_tax / revenue_with_known_cost, as a
+    # percentage — the completeness flag for net_gross_margin_pct
+    # specifically (same role as cost_data_coverage_pct, one level
+    # stricter). None when revenue_with_known_cost is 0.
+    tax_data_coverage_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +92,24 @@ def compute_gross_margin(aggregates: list[ProductPeriodAggregate]) -> GrossMargi
     )
     cost_data_coverage_pct = _quantize_pct(revenue_with_known_cost / total_revenue * 100) if total_revenue > 0 else None
 
+    revenue_with_known_cost_and_tax = sum((a.revenue_with_known_cost_and_tax for a in aggregates), Decimal("0"))
+    tax_amount_known = sum((a.tax_amount_known for a in aggregates), Decimal("0"))
+    cogs_for_known_tax = sum((a.cogs_for_known_tax for a in aggregates), Decimal("0"))
+    net_revenue_with_known_cost_and_tax = revenue_with_known_cost_and_tax - tax_amount_known
+    net_gross_profit = (
+        net_revenue_with_known_cost_and_tax - cogs_for_known_tax if revenue_with_known_cost_and_tax > 0 else None
+    )
+    net_gross_margin_pct = (
+        _quantize_pct(net_gross_profit / net_revenue_with_known_cost_and_tax * 100)
+        if net_gross_profit is not None and net_revenue_with_known_cost_and_tax > 0
+        else None
+    )
+    tax_data_coverage_pct = (
+        _quantize_pct(revenue_with_known_cost_and_tax / revenue_with_known_cost * 100)
+        if revenue_with_known_cost > 0
+        else None
+    )
+
     return GrossMarginResult(
         total_revenue=_quantize_money(total_revenue),
         revenue_with_known_cost=_quantize_money(revenue_with_known_cost),
@@ -85,6 +117,9 @@ def compute_gross_margin(aggregates: list[ProductPeriodAggregate]) -> GrossMargi
         gross_profit=_quantize_money(gross_profit),
         gross_margin_pct=gross_margin_pct,
         cost_data_coverage_pct=cost_data_coverage_pct,
+        net_gross_profit=_quantize_money(net_gross_profit) if net_gross_profit is not None else None,
+        net_gross_margin_pct=net_gross_margin_pct,
+        tax_data_coverage_pct=tax_data_coverage_pct,
     )
 
 

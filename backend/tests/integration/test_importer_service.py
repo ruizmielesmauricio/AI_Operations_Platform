@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.imports import detection, r2_client
 from app.imports.exceptions import ImportRecordNotReady, MappedColumnMissing
-from app.imports.importer import run_import
+from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem
@@ -32,13 +32,37 @@ _FIELD_MAPPING = {
     "order_reference": "Order Number",
 }
 
+# A second file's content, reusing CL-100 (to exercise cross-import SKU
+# matching) but with its own order references — a real second sale, not a
+# re-upload of the first file, so it must NOT collide with the
+# duplicate_reference dedup check (app/imports/importer.py::_write_sales).
+_CSV_CONTENT_B = (
+    "Order Date,Item Description,SKU,Qty,Unit Price,Order Number\n"
+    "2026-01-06,Chain Lube,CL-100,1,9.99,ORD-4\n"
+).encode()
+
+
+class _DeletedKeys(list):
+    """A plain list of deleted storage keys, plus a bag for per-test
+    per-storage-key content overrides (see _CSV_CONTENT_B above) — a
+    subclass rather than a bare list purely so tests can stash
+    content_by_key on the fixture's return value."""
+
+    content_by_key: dict[str, bytes]
+
 
 @pytest.fixture(autouse=True)
 def _fake_r2(monkeypatch):
-    monkeypatch.setattr(r2_client, "get_object_size", lambda *, storage_key: len(_CSV_CONTENT))
-    monkeypatch.setattr(r2_client, "download_object", lambda *, storage_key: _CSV_CONTENT)
-    deleted: list[str] = []
+    content_by_key: dict[str, bytes] = {}
+
+    def _download(*, storage_key):
+        return content_by_key.get(storage_key, _CSV_CONTENT)
+
+    monkeypatch.setattr(r2_client, "get_object_size", lambda *, storage_key: len(_download(storage_key=storage_key)))
+    monkeypatch.setattr(r2_client, "download_object", _download)
+    deleted = _DeletedKeys()
     monkeypatch.setattr(r2_client, "delete_object", lambda *, storage_key: deleted.append(storage_key))
+    deleted.content_by_key = content_by_key
     return deleted
 
 
@@ -114,6 +138,7 @@ def test_run_import_matches_an_existing_product_by_sku_on_a_second_import(db_ses
     run_import(db_session, upload1, record1)
 
     upload2, record2 = _make_mapped_upload(db_session, business_id, filename="b.csv")
+    _fake_r2.content_by_key[upload2.storage_key] = _CSV_CONTENT_B
     run_import(db_session, upload2, record2)
 
     products = db_session.scalars(
@@ -123,6 +148,43 @@ def test_run_import_matches_an_existing_product_by_sku_on_a_second_import(db_ses
 
     sale_items = db_session.scalars(select(SaleItem).where(SaleItem.product_id == products[0].id)).all()
     assert len(sale_items) == 2  # one line from each import, same product
+
+
+def test_reuploading_a_file_with_an_already_used_order_reference_rejects_the_whole_group(db_session, business_id, _fake_r2):
+    # ORD-1 is a two-row group (Chain Lube + Bar Tape). Re-uploading a
+    # second file that reuses ORD-1 must reject BOTH of its rows, not just
+    # the first — a multi-line sale sharing one order_reference is one
+    # economic event.
+    upload1, record1 = _make_mapped_upload(db_session, business_id, filename="a.csv")
+    run_import(db_session, upload1, record1)
+    sales_after_first = db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all()
+    assert len(sales_after_first) == 2  # ORD-1 + ORD-2 (ORD-3's row is rejected for missing_date)
+
+    upload2, record2 = _make_mapped_upload(db_session, business_id, filename="b.csv")
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 0
+    assert result.rows_rejected == 4  # ORD-1 (2 rows) + ORD-2 (1 row) + the unparseable-date row
+    assert result.rejection_summary["reasons"]["duplicate_reference"]["count"] == 3
+
+    sales_after_second = db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all()
+    assert len(sales_after_second) == 2  # nothing new written — no double-counted revenue
+
+
+def test_undo_then_reupload_with_the_same_order_reference_succeeds(db_session, business_id, _fake_r2):
+    upload1, record1 = _make_mapped_upload(db_session, business_id, filename="a.csv")
+    run_import(db_session, upload1, record1)
+
+    undone = undo_import(db_session, record1)
+    assert undone.status == "reversed"
+    assert db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all() == []
+
+    upload2, record2 = _make_mapped_upload(db_session, business_id, filename="b.csv")
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 3  # succeeds exactly as the first import did
+    sales = db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all()
+    assert {s.order_reference for s in sales} == {"ORD-1", "ORD-2"}
 
 
 def test_run_import_requires_the_mapped_state(db_session, business_id):

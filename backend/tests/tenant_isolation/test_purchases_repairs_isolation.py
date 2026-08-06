@@ -15,12 +15,14 @@ _PURCHASE_FIELD_MAPPING = {
     "sku": "SKU",
     "quantity_received": "Qty Received",
     "unit_cost": "Unit Cost",
+    "purchase_reference": None,
 }
 _REPAIR_FIELD_MAPPING = {
     "repair_date": "Date",
     "description": "Description",
     "price_charged": "Price Charged",
     "labour_cost": "Labour Cost",
+    "repair_reference": None,
 }
 
 
