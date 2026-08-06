@@ -199,11 +199,67 @@ def test_purchase_row_reusing_a_reference_from_an_earlier_import_is_rejected(db_
     assert len(movements) == 1  # nothing new written — no double-counted stock
 
 
-def test_purchase_rows_sharing_a_reference_within_one_file_second_row_is_rejected(db_session, business_id, _fake_r2):
+def test_purchase_reference_reused_for_a_different_product_across_uploads_both_import(db_session, business_id, _fake_r2):
+    # Same PO number appears again in a later, separate upload — but for a
+    # different product this time (e.g. a follow-up delivery against the
+    # same PO). Must not collide with the earlier import's product.
+    content1 = "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n".encode()
+    content2 = "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n2026-01-06,Bar Tape,BT-200,20,3.00,PO-1\n".encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"]
+    upload1, record1 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content1, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload1, record1)
+
+    upload2, record2 = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content2, filename="b.csv", field_mapping=field_mapping,
+    )
+    result = run_import(db_session, upload2, record2)
+
+    assert result.rows_imported == 1
+    assert result.rows_rejected == 0
+
+    movements = db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)).all()
+    assert sorted(m.quantity_delta for m in movements) == [20, 50]
+
+
+def test_purchase_rows_sharing_a_reference_for_different_products_both_import(db_session, business_id, _fake_r2):
+    # A real PO/invoice routinely covers several different products under
+    # one reference number — this must NOT be treated as a duplicate.
+    # Regression test for a real bug found live: the dedup key used to be
+    # the reference alone, so a genuine multi-line PO had every line after
+    # the first wrongly rejected.
     content = (
         "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n"
         "2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n"
         "2026-01-06,Bar Tape,BT-200,20,3.00,PO-1\n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=["Date", "Product", "SKU", "Qty Received", "Unit Cost", "PO Number"],
+        content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+
+    assert result.rows_imported == 2
+    assert result.rows_rejected == 0
+
+    movements = db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)).all()
+    assert sorted(m.quantity_delta for m in movements) == [20, 50]
+
+
+def test_purchase_rows_sharing_a_reference_for_the_same_product_second_row_is_rejected(db_session, business_id, _fake_r2):
+    # A genuine within-file duplicate: same reference AND same product —
+    # this must still be caught (e.g. an accidental copy-pasted row).
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,PO Number\n"
+        "2026-01-05,Chain Lube,CL-100,50,4.75,PO-1\n"
+        "2026-01-06,Chain Lube,CL-100,20,4.75,PO-1\n"
     ).encode()
     field_mapping = {**_PURCHASE_FIELD_MAPPING, "purchase_reference": "PO Number"}
     upload, record = _make_mapped_upload(
@@ -336,11 +392,37 @@ def test_repair_row_reusing_a_reference_from_an_earlier_import_is_rejected(db_se
     assert len(events) == 1  # nothing new written — no double-counted workshop revenue
 
 
-def test_repair_rows_sharing_a_reference_within_one_file_second_row_is_rejected(db_session, business_id, _fake_r2):
+def test_repair_rows_sharing_a_reference_with_different_detail_both_import(db_session, business_id, _fake_r2):
+    # One invoice/job number can cover more than one repair (e.g. two
+    # bikes serviced on one ticket) — this must NOT be treated as a
+    # duplicate. Regression test mirroring the same real bug found live
+    # for purchases (see test_purchase_rows_sharing_a_reference_for_
+    # different_products_both_import above).
     content = (
         "Date,Description,Price Charged,Labour Cost,Job Number\n"
         "2026-01-05,Replaced brake pads,45.00,20.00,JOB-1\n"
         "2026-01-06,Fixed a puncture,15.00,,JOB-1\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "repair_reference": "Job Number"}
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Job Number"]
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+
+    assert result.rows_imported == 2
+    assert result.rows_rejected == 0
+
+
+def test_repair_rows_sharing_a_reference_with_identical_detail_second_row_is_rejected(db_session, business_id, _fake_r2):
+    # A genuine within-file duplicate: same reference AND identical
+    # description/price/labour cost — this must still be caught.
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Job Number\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,JOB-1\n"
+        "2026-01-06,Replaced brake pads,45.00,20.00,JOB-1\n"
     ).encode()
     field_mapping = {**_REPAIR_FIELD_MAPPING, "repair_reference": "Job Number"}
     header = ["Date", "Description", "Price Charged", "Labour Cost", "Job Number"]

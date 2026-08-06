@@ -62,9 +62,11 @@ class ProductionEvent(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     )
     # The source file's job/invoice number, if it has one — only ever set
     # for event_type="repair" rows written by the "repairs" upload entity
-    # type. Lets a re-uploaded/overlapping file be rejected per row instead
-    # of silently double-counting workshop revenue (see
-    # app/imports/importer.py's list_existing_repair_references).
+    # type. Combined with the rest of the row's detail (not alone — one
+    # invoice can cover more than one repair), lets a re-uploaded/
+    # overlapping file be rejected per row instead of silently double-
+    # counting workshop revenue (see
+    # app/imports/importer.py's list_existing_repair_reference_signatures).
     repair_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 

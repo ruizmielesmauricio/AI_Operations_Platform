@@ -51,7 +51,8 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     )
     # The source file's PO/invoice number, if it has one — only ever set
     # for reason="purchase" rows written by the "purchases" upload entity
-    # type. Lets a re-uploaded/overlapping file be rejected per row instead
-    # of silently double-counting stock received (see
-    # app/imports/importer.py's list_existing_purchase_references).
+    # type. Combined with product_id (not alone — one PO covers several
+    # products), lets a re-uploaded/overlapping file be rejected per row
+    # instead of silently double-counting stock received (see
+    # app/imports/importer.py's list_existing_purchase_reference_product_pairs).
     purchase_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)

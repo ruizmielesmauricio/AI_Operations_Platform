@@ -493,7 +493,19 @@ _WARNING_MESSAGE_TEMPLATES = {
         "had a total that didn't match price × quantity — used the file's total "
         "(expected if it includes tax your unit price doesn't, or a per-line discount; no action needed)"
     ),
+    # Inventory-specific: the same product appeared on multiple rows of one
+    # stock-count file — reconcile_inventory_rows keeps the last row's
+    # quantity_on_hand as the reconciliation target.
     "duplicate_product_in_file": "the same product appeared more than once — used the last value",
+    # Purchases-specific, deliberately a distinct code from the one above:
+    # "used the last value" would be misread as quantity here (every row's
+    # quantity_received is still added to stock regardless of this
+    # warning) — it only affects which row's unit_cost becomes the
+    # product's recorded cost price.
+    "duplicate_product_cost_overwritten": (
+        "the same product appeared on more than one purchase line — only the last unit cost was kept "
+        "as this product's recorded cost (every line's quantity was still added to stock)"
+    ),
 }
 
 
@@ -746,24 +758,20 @@ def _write_purchases(
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
-    existing_refs = movement_repo.list_existing_purchase_references(upload.business_id)
+    # Keyed by (reference, product_id), not reference alone — a real
+    # purchase order routinely covers several different products under one
+    # PO/invoice number (found live: a 1656-row file with one PO number per
+    # several rows wrongly rejected 835 of them as duplicates of each
+    # other, when they were really just different line items on the same
+    # PO). Product must be resolved before this check can run, since the
+    # key needs product_id.
+    existing_ref_product_pairs = movement_repo.list_existing_purchase_reference_product_pairs(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
     cost_updated_products: set[uuid.UUID] = set()
     duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
-        if row.reference is not None and row.reference in existing_refs:
-            duplicate_rejections.append(RejectedRow(row.row_number, "duplicate_reference", _purchase_row_display(row)))
-            continue
-        if row.reference is not None:
-            # Folded straight into the same set so a second occurrence of
-            # this reference LATER in this same file is caught too, not
-            # just one from an earlier upload — purchases rows aren't
-            # grouped the way sales rows are, so within-file duplication
-            # is a real, separate risk here.
-            existing_refs.add(row.reference)
-
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
         if match.action == "create":
             product = product_repo.create(
@@ -779,13 +787,29 @@ def _write_purchases(
             # Never "none" here — validate_and_parse_purchase_row already
             # rejects rows with no sku and no product_name before this point.
             product_id = match.product_id
+
+        if row.reference is not None:
+            key = (row.reference, product_id)
+            if key in existing_ref_product_pairs:
+                duplicate_rejections.append(
+                    RejectedRow(row.row_number, "duplicate_reference", _purchase_row_display(row))
+                )
+                continue
+            # Folded straight into the same set so a second occurrence of
+            # this exact (reference, product) pair LATER in this same file
+            # is caught too, not just one from an earlier upload —
+            # purchases rows aren't grouped the way sales rows are, so
+            # within-file duplication is a real, separate risk here.
+            existing_ref_product_pairs.add(key)
+
+        if match.action != "create":
             if match.name_mismatch:
                 warnings["product_name_mismatch"].append(
                     {"row_number": row.row_number, "product_name": row.product_name}
                 )
             if row.unit_cost is not None:
                 if product_id in cost_updated_products:
-                    warnings["duplicate_product_in_file"].append({"row_number": row.row_number})
+                    warnings["duplicate_product_cost_overwritten"].append({"row_number": row.row_number})
                 product_repo.update_cost_price(
                     business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost
                 )
@@ -808,17 +832,23 @@ def _write_repairs(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedRepairRow]
 ) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
     event_repo = ProductionEventRepository(db)
-    existing_refs = event_repo.list_existing_repair_references(upload.business_id)
+    # (reference, description, price_charged, labour_cost), not reference
+    # alone — one invoice/job number can cover more than one repair (see
+    # list_existing_repair_reference_signatures's own docstring for why,
+    # and _write_purchases above for the same class of bug, found live,
+    # this mirrors).
+    existing_signatures = event_repo.list_existing_repair_reference_signatures(upload.business_id)
     rows_imported = 0
     duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
-        if row.reference is not None and row.reference in existing_refs:
+        signature = (row.reference, row.description, row.price_charged, row.labour_cost)
+        if row.reference is not None and signature in existing_signatures:
             duplicate_rejections.append(RejectedRow(row.row_number, "duplicate_reference", _repair_row_display(row)))
             continue
         if row.reference is not None:
             # Same reasoning as purchases: repairs rows aren't grouped, so
             # a second occurrence later in this same file needs catching too.
-            existing_refs.add(row.reference)
+            existing_signatures.add(signature)
 
         # These are historical, already-finished jobs from an export, not
         # live in-progress repairs — status="completed" (not the model's

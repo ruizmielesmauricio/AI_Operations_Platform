@@ -64,20 +64,34 @@ class ProductionEventRepository:
         self.session.execute(delete(ProductionEvent).where(ProductionEvent.id.in_(event_ids)))
         self.session.flush()
 
-    def list_existing_repair_references(self, business_id: uuid.UUID) -> set[str]:
-        """Every non-null repair_reference already used by this business's
-        repairs, across all prior imports — one query, not N+1. Used to
-        reject a re-uploaded/overlapping repairs file per row instead of
-        silently double-counting workshop revenue
-        (app/imports/importer.py::_write_repairs)."""
-        rows = self.session.scalars(
-            select(ProductionEvent.repair_reference).where(
+    def list_existing_repair_reference_signatures(
+        self, business_id: uuid.UUID
+    ) -> set[tuple[str, str | None, Decimal | None, Decimal | None]]:
+        """Every non-null (repair_reference, description, price_charged,
+        labour_cost) tuple already used by this business's repairs, across
+        all prior imports — one query, not N+1. Used to reject a
+        re-uploaded/overlapping repairs file per row instead of silently
+        double-counting workshop revenue (app/imports/importer.py::_write_repairs).
+
+        Keyed by more than just the reference — repairs have no product_id
+        the way purchases do, but one invoice/job number can still cover
+        several repairs (e.g. two bikes serviced on one ticket), so the
+        rest of the row's own detail is folded in as the next-best
+        disambiguator; two genuinely different repairs sharing one
+        reference will very rarely also share every other field."""
+        rows = self.session.execute(
+            select(
+                ProductionEvent.repair_reference,
+                ProductionEvent.description,
+                ProductionEvent.price_charged,
+                ProductionEvent.labour_cost,
+            ).where(
                 ProductionEvent.business_id == business_id,
                 ProductionEvent.event_type == "repair",
                 ProductionEvent.repair_reference.isnot(None),
             )
-        )
-        return set(rows)
+        ).all()
+        return {(ref, description, price_charged, labour_cost) for ref, description, price_charged, labour_cost in rows}
 
     def aggregate_completed_repairs_in_range(
         self, business_id: uuid.UUID, start: datetime, end: datetime

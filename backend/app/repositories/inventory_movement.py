@@ -66,20 +66,25 @@ class InventoryMovementRepository:
         )
         self.session.flush()
 
-    def list_existing_purchase_references(self, business_id: uuid.UUID) -> set[str]:
-        """Every non-null purchase_reference already used by this
-        business's purchase movements, across all prior imports — one
-        query, not N+1. Used to reject a re-uploaded/overlapping purchases
-        file per row instead of silently double-counting stock received
-        (app/imports/importer.py::_write_purchases)."""
-        rows = self.session.scalars(
-            select(InventoryMovement.purchase_reference).where(
+    def list_existing_purchase_reference_product_pairs(self, business_id: uuid.UUID) -> set[tuple[str, uuid.UUID]]:
+        """Every non-null (purchase_reference, product_id) pair already
+        used by this business's purchase movements, across all prior
+        imports — one query, not N+1. Used to reject a re-uploaded/
+        overlapping purchases file per row instead of silently double-
+        counting stock received (app/imports/importer.py::_write_purchases).
+
+        Keyed by reference AND product, not reference alone — a single PO
+        / invoice routinely covers several different products in one
+        purchase, so two rows sharing a reference are not automatically
+        duplicates of each other."""
+        rows = self.session.execute(
+            select(InventoryMovement.purchase_reference, InventoryMovement.product_id).where(
                 InventoryMovement.business_id == business_id,
                 InventoryMovement.reason == "purchase",
                 InventoryMovement.purchase_reference.isnot(None),
             )
-        )
-        return set(rows)
+        ).all()
+        return {(ref, product_id) for ref, product_id in rows}
 
     def list_product_ids_by_import_record_id(self, business_id: uuid.UUID, import_record_id: uuid.UUID) -> set[uuid.UUID]:
         """Read before app/imports/importer.py's _undo_inventory_import
