@@ -60,6 +60,22 @@ class SaleRepository:
         )
         return set(rows)
 
+    def list_amounts_in_range(
+        self, business_id: uuid.UUID, start: datetime, end: datetime
+    ) -> list[tuple[datetime, Decimal]]:
+        """Every sale's (sold_at, total_amount) in [start, end) — one query,
+        not N+1. Raw rows only, no grouping/aggregation (that's
+        app/analytics/period.py::group_amounts_by_local_date's job) — used
+        by Stage C13's revenue forecast (app/application/forecast.py),
+        which needs a per-day series, not the single period total
+        sum_total_amount_in_range below returns."""
+        rows = self.session.execute(
+            select(Sale.sold_at, Sale.total_amount).where(
+                Sale.business_id == business_id, Sale.sold_at >= start, Sale.sold_at < end
+            )
+        ).all()
+        return [(sold_at, total_amount) for sold_at, total_amount in rows]
+
     def sum_total_amount_in_range(self, business_id: uuid.UUID, start: datetime, end: datetime) -> Decimal:
         """Total revenue for [start, end) — used as-is (Stage C9), rather
         than derived from sale_items, since a sale's total_amount is the

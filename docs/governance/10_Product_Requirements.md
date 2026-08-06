@@ -1,10 +1,10 @@
 # 10_Product_Requirements.md
 
-**Version:** 0.5 (Draft)
+**Version:** 0.6 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 06/08/2026
 
 ---
 
@@ -252,6 +252,17 @@ Per PD-009, low-stock alerting is a standalone, real-time capability — distinc
 | PR-9.4 | Calculate alert triggers deterministically, never via AI | Same input always produces the same alert; covered by unit tests |
 | PR-9.5 | Surface active alerts through the conversational agent's business-data lane on request | "What's low on stock?" returns the same alert data shown in-app |
 
+## PR-10 — Forecasting
+
+Stage C13's baseline (seasonal/moving average) — deliberately simple, deliberately not AI. C14/C15 (weather-signal augmentation, ML models) extend this later; this section governs the baseline itself.
+
+| ID | Requirement | Acceptance Criteria |
+|---|---|---|
+| PR-10.1 | Calculate every forecast deterministically — a seasonal (day-of-week) naive average or a plain moving average, chosen by how much history exists, never AI | Same input always produces the same forecast; covered by unit tests |
+| PR-10.2 | Ship every forecast number with a confidence range, never a bare point estimate | UI and API always carry a low/high alongside the point value |
+| PR-10.3 | Refuse to forecast below a stated minimum history, rather than fabricate a number from too little data | Under the minimum, the response says so explicitly; no number is shown |
+| PR-10.4 | Present any reorder-quantity suggestion as a simple starting point, not a supply-chain optimization | UI/API copy states plainly that lead time and safety stock aren't modelled |
+
 ---
 
 # Non-Functional Requirements
@@ -361,3 +372,4 @@ Removing the template requirement removes the single largest onboarding drop-off
 | 0.3 | 30/07/2026 | Corrected PR-8 to match the accepted in-app-only reporting design (PD-007/ADR-019 — no email, seven-day availability, on-demand PDF/Word export, idempotent generation with recovery); removed the duplicate "PR-4 — Scheduled Performance Reports" section (its content was merged into PR-8, resolving the PR-4 ID collision with the existing "PR-4 — Findings and Recommendations"); fixed the Current Decisions bullet that still described email delivery. |
 | 0.4 | 30/07/2026 | Added `03_System_Architecture.md` and `07_Deployment_Guide.md` to Related Documents — PR-8 now substantively depends on both (architecture and Resend-exclusion detail) but neither was linked. |
 | 0.5 | 30/07/2026 | Added PR-5.6/PR-5.7 (three-lane conversational agent: business Q&A, report explanation, product/support help with human handoff) and PR-9 (standalone low-stock alerting), per PD-008, PD-009, and ADR-020 in `12_Decision_Register.md`. |
+| 0.6 | 06/08/2026 | Added PR-10 (Forecasting) — deterministic seasonal/moving-average baseline, per Stage C13 of `11_Development_Roadmap.md`. |

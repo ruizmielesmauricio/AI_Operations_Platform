@@ -9,10 +9,13 @@ import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type {
   Alert,
+  DailyForecast,
   DeadStockRow,
   Finding,
   Findings,
   FinancialPerformance,
+  Forecast,
+  ProductDemandForecast,
   ProductMarginRow,
   ProductSalesRow,
   Recommendation,
@@ -32,9 +35,13 @@ const DEFINITIONS: Record<string, string> = {
   deadStock: "Products with stock on hand but zero sales in the selected period.",
   sellThrough: "Units sold divided by units sold plus stock still on hand — an approximation, not an exact sell-through rate.",
   workshopMargin: "Price charged minus labour cost. Parts cost isn't tracked yet, so this understates true repair cost.",
+  revenueForecast:
+    "A simple projection from recent sales history (same weekday pattern, or a plain average if there isn't enough history yet) — not AI, just deterministic math. The shaded range is a typical spread, not a guarantee.",
+  reorderSuggestion:
+    "A starting suggestion only: forecasted demand's upper estimate minus current stock. Doesn't account for supplier lead time or safety stock.",
 };
 
-type SectionKey = "financial" | "retail" | "workshop" | "findings" | "alerts";
+type SectionKey = "financial" | "retail" | "workshop" | "findings" | "alerts" | "forecast";
 
 export default function DashboardPage() {
   const { session, checkingSession } = useRequireSession();
@@ -48,6 +55,8 @@ export default function DashboardPage() {
   const [workshop, setWorkshop] = useState<WorkshopPerformance | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [forecast, setForecast] = useState<Forecast | null>(null);
+  const [horizonDays, setHorizonDays] = useState(7);
   const [errors, setErrors] = useState<Partial<Record<SectionKey, string>>>({});
 
   useEffect(() => {
@@ -77,6 +86,16 @@ export default function DashboardPage() {
       .then(setAlerts)
       .catch(() => setErrors((prev) => ({ ...prev, alerts: "Could not load alerts." })));
   }, [businessId, startDate, endDate]);
+
+  // Forecast is forward-looking from "today," not the start/end period
+  // filter above — it depends only on the chosen horizon.
+  useEffect(() => {
+    if (!businessId) return;
+    setErrors((prev) => ({ ...prev, forecast: undefined }));
+    apiGet<Forecast>(`/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}`)
+      .then(setForecast)
+      .catch(() => setErrors((prev) => ({ ...prev, forecast: "Could not load forecast." })));
+  }, [businessId, horizonDays]);
 
   if (checkingSession) {
     return (
@@ -145,6 +164,7 @@ export default function DashboardPage() {
       <FinancialSection data={financial} error={errors.financial} />
       <RetailSection data={retail} error={errors.retail} />
       <WorkshopSection data={workshop} error={errors.workshop} />
+      <ForecastSection data={forecast} error={errors.forecast} horizonDays={horizonDays} setHorizonDays={setHorizonDays} />
       <FindingsSection data={findings} error={errors.findings} />
       <AlertsSection alerts={alerts} error={errors.alerts} />
     </main>
@@ -346,6 +366,101 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
   );
 }
 
+// --- Forecast (Stage C13) --------------------------------------------------
+
+const HORIZON_OPTIONS = [7, 14, 30] as const;
+
+function ForecastSection({
+  data,
+  error,
+  horizonDays,
+  setHorizonDays,
+}: {
+  data: Forecast | null;
+  error?: string;
+  horizonDays: number;
+  setHorizonDays: (days: number) => void;
+}) {
+  const title = (
+    <>
+      Forecast{" "}
+      <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
+        (next{" "}
+        {HORIZON_OPTIONS.map((days, i) => (
+          <span key={days}>
+            {i > 0 && " / "}
+            <button type="button" onClick={() => setHorizonDays(days)} disabled={horizonDays === days}>
+              {days} days
+            </button>
+          </span>
+        ))}
+        )
+      </span>
+    </>
+  );
+
+  if (error) return <Section title={title}><p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={title}><p>Loading…</p></Section>;
+
+  const { result } = data.revenue;
+
+  return (
+    <Section title={title}>
+      <h3 title={DEFINITIONS.revenueForecast}>Revenue</h3>
+      {result.insufficient_data ? (
+        <p>Not enough sales history yet to forecast revenue — check back once you have at least two weeks of data.</p>
+      ) : (
+        <>
+          <Stat
+            label={`Expected revenue, next ${data.horizon_days} days`}
+            title={DEFINITIONS.revenueForecast}
+            value={`${formatMoney(result.total_point)} (typically ${formatMoney(result.total_low)}–${formatMoney(result.total_high)})`}
+            note={`based on ${result.history_days_used} days of history — ${
+              result.method === "seasonal_day_of_week" ? "adjusted for day-of-week patterns" : "a plain recent average"
+            }`}
+          />
+          <Chart option={revenueForecastLineOption(result.daily)} />
+        </>
+      )}
+
+      <h3 title={DEFINITIONS.reorderSuggestion}>Products to watch</h3>
+      {data.products.length === 0 ? (
+        <p>No products have enough sales history yet to forecast demand.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Current stock</th>
+              <th>Forecast demand</th>
+              <th>Cover left</th>
+              <th title={DEFINITIONS.reorderSuggestion}>Suggested reorder</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.products.slice(0, 15).map((row: ProductDemandForecast) => (
+              <tr key={row.product_id}>
+                <td>{row.name}</td>
+                <td>{row.current_stock}</td>
+                <td>
+                  {row.result.total_point} ({row.result.total_low}–{row.result.total_high})
+                </td>
+                <td>{row.days_of_cover_at_forecast_rate !== null ? `${row.days_of_cover_at_forecast_rate}d` : "—"}</td>
+                <td>{row.suggested_reorder_quantity > 0 ? row.suggested_reorder_quantity : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data.products_excluded_insufficient_data > 0 && (
+        <p className="status-warn">
+          {data.products_excluded_insufficient_data} product(s) excluded — not enough sales history yet.
+        </p>
+      )}
+    </Section>
+  );
+}
+
 // --- Findings & Recommendations -------------------------------------------
 
 function FindingsSection({ data, error }: { data: Findings | null; error?: string }) {
@@ -417,7 +532,7 @@ function AlertsSection({ alerts, error }: { alerts: Alert[]; error?: string }) {
 
 // --- Shared layout / formatting helpers -------------------------------------
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <section>
       <h2>{title}</h2>
@@ -504,6 +619,21 @@ function marginBarOption(rows: ProductMarginRow[], title: string): EChartsOption
           return { value, itemStyle: { color: value < 0 ? "#cf222e" : "#1a7f37" } };
         }),
       },
+    ],
+  };
+}
+
+function revenueForecastLineOption(daily: DailyForecast[]): EChartsOption {
+  const dates = daily.map((d) => d.forecast_date);
+  return {
+    grid: { left: 70, right: 30, top: 20, bottom: 30 },
+    tooltip: { trigger: "axis" },
+    xAxis: { type: "category", data: dates },
+    yAxis: { type: "value", name: "€" },
+    series: [
+      { name: "Typical low", type: "line", data: daily.map((d) => Number(d.low)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
+      { name: "Forecast", type: "line", data: daily.map((d) => Number(d.point)), lineStyle: { color: "#0969da", width: 2 }, symbol: "circle" },
+      { name: "Typical high", type: "line", data: daily.map((d) => Number(d.high)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
     ],
   };
 }

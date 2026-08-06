@@ -130,3 +130,25 @@ class SaleItemRepository:
                 cogs_for_known_tax,
             ) in rows
         ]
+
+    def list_units_by_product_in_range(
+        self, business_id: uuid.UUID, start: datetime, end: datetime
+    ) -> list[tuple[uuid.UUID, datetime, int]]:
+        """Every matched-product line item's (product_id, sold_at,
+        quantity) in [start, end) — one query, not N+1. Raw rows only, no
+        grouping (that's app/analytics/period.py::group_amounts_by_local_date's
+        job, called once per product). Unmatched-product rows are excluded,
+        same convention as aggregate_by_product_in_range above — there's no
+        product to forecast demand for. Used by Stage C13's per-product
+        demand forecast (app/application/forecast.py)."""
+        rows = self.session.execute(
+            select(SaleItem.product_id, Sale.sold_at, SaleItem.quantity)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(
+                SaleItem.business_id == business_id,
+                SaleItem.product_id.isnot(None),
+                Sale.sold_at >= start,
+                Sale.sold_at < end,
+            )
+        ).all()
+        return [(product_id, sold_at, quantity) for product_id, sold_at, quantity in rows]

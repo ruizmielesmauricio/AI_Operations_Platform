@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -150,5 +150,62 @@ class FindingsOut(BaseModel):
     period: PeriodOut
     findings: list[FindingOut]
     recommendations: list[RecommendationOut]
+
+    model_config = {"from_attributes": True}
+
+
+# --- Stage C13 — Forecasting ------------------------------------------
+
+
+class DailyForecastOut(BaseModel):
+    forecast_date: date
+    point: Decimal
+    low: Decimal
+    high: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class ForecastResultOut(BaseModel):
+    # True when there's under app/analytics/forecasting.py's
+    # MIN_HISTORY_DAYS of lookback history — every field below is then
+    # meaningless (zeroed) and must not be displayed as a real number.
+    insufficient_data: bool
+    method: str | None
+    history_days_used: int
+    daily: list[DailyForecastOut]
+    total_point: Decimal
+    total_low: Decimal
+    total_high: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class RevenueForecastOut(BaseModel):
+    horizon_days: int
+    result: ForecastResultOut
+
+    model_config = {"from_attributes": True}
+
+
+class ProductDemandForecastOut(BaseModel):
+    product_id: uuid.UUID
+    name: str
+    sku: str | None
+    result: ForecastResultOut
+    current_stock: int
+    # A simple starting suggestion (confidence band's high end minus
+    # current stock) — does not model supplier lead time or safety stock.
+    suggested_reorder_quantity: int
+    days_of_cover_at_forecast_rate: Decimal | None
+
+    model_config = {"from_attributes": True}
+
+
+class ForecastOut(BaseModel):
+    horizon_days: int
+    revenue: RevenueForecastOut
+    products: list[ProductDemandForecastOut]
+    products_excluded_insufficient_data: int
 
     model_config = {"from_attributes": True}
