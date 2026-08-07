@@ -25,7 +25,7 @@ from decimal import Decimal
 # into the pure analytics layer, inverting CLAUDE.md's "logic in domain/ or
 # analytics/" layering. app/application/findings.py unpacks the summaries'
 # fields before calling in.
-from app.analytics.financial import GrossMarginResult, ProductMarginRow, RevenueTrend
+from app.analytics.financial import GrossMarginResult, ProductMarginRow, ReturnsSummary, RevenueTrend
 from app.analytics.retail import DeadStockEntry, StockCoverRow
 
 # Bumped whenever a rule's trigger condition or evidence shape changes, so a
@@ -37,6 +37,7 @@ DEFAULT_LOW_STOCK_THRESHOLD_DAYS = Decimal("7")
 _REVENUE_DECLINE_THRESHOLD_PCT = Decimal("-10")
 _LOW_MARGIN_THRESHOLD_PCT = Decimal("20")
 _INCOMPLETE_COST_DATA_THRESHOLD_PCT = Decimal("50")
+_HIGH_RETURN_RATE_THRESHOLD_PCT = Decimal("10")
 
 Severity = str  # "critical" | "warning" | "info"
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
@@ -91,6 +92,11 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
         title="Consider a markdown or return to supplier",
         description="This product has stock on hand but hasn't sold at all in the period — cash is tied "
         "up in stock that isn't moving.",
+    ),
+    "high_return_rate": RecommendationTemplate(
+        title="Investigate why customers are returning items",
+        description="A larger-than-usual share of this period's gross revenue was refunded. Check for a "
+        "product quality issue, a sizing/description mismatch, or a specific batch/supplier.",
     ),
 }
 
@@ -169,6 +175,27 @@ def evaluate_incomplete_cost_data(gross_margin: GrossMarginResult) -> list[Findi
     ]
 
 
+def evaluate_high_return_rate(returns: ReturnsSummary) -> list[Finding]:
+    rate_pct = returns.return_rate_pct
+    if rate_pct is None or rate_pct < _HIGH_RETURN_RATE_THRESHOLD_PCT:
+        return []
+    return [
+        Finding(
+            type="high_return_rate",
+            severity="warning",
+            message=f"{rate_pct}% of gross revenue was refunded this period "
+            f"({returns.return_count} return(s) totaling {returns.returns_amount}).",
+            evidence={
+                "return_rate_pct": rate_pct,
+                "returns_amount": returns.returns_amount,
+                "return_count": returns.return_count,
+                "gross_revenue": returns.gross_revenue,
+            },
+            rule_id="high_return_rate",
+        )
+    ]
+
+
 def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[Finding]:
     """Pass the union of top_margin_products + bottom_margin_products
     (rank_products_by_margin's two lists), not bottom_margin_products
@@ -196,6 +223,7 @@ def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[F
                     "revenue": row.revenue,
                     "gross_profit": row.gross_profit,
                     "gross_margin_pct": row.gross_margin_pct,
+                    "category_name": row.category_name,
                 },
                 rule_id="product_selling_at_loss",
             )
@@ -256,6 +284,7 @@ def evaluate_low_stock(
                     "cover_days": row.cover_days,
                     "revenue_in_period": row.revenue_in_period,
                     "threshold_days": threshold_days,
+                    "category_name": row.category_name,
                 },
                 rule_id="low_stock",
             )
@@ -276,6 +305,7 @@ def evaluate_dead_stock(dead_stock: list[DeadStockEntry]) -> list[Finding]:
                     "name": entry.name,
                     "stock_on_hand": entry.stock_on_hand,
                     "value_at_cost": entry.value_at_cost,
+                    "category_name": entry.category_name,
                 },
                 rule_id="dead_stock",
             )
@@ -291,6 +321,7 @@ def evaluate_all(
     bottom_margin_products: list[ProductMarginRow],
     stock_cover: list[StockCoverRow],
     dead_stock: list[DeadStockEntry],
+    returns: ReturnsSummary,
 ) -> list[Finding]:
     return [
         *evaluate_revenue_decline(revenue),
@@ -299,6 +330,7 @@ def evaluate_all(
         *evaluate_products_at_loss(top_margin_products + bottom_margin_products),
         *evaluate_low_stock(stock_cover),
         *evaluate_dead_stock(dead_stock),
+        *evaluate_high_return_rate(returns),
     ]
 
 
@@ -323,6 +355,8 @@ def _impact_score(finding: Finding) -> Decimal:
         # Fallback proxy when cost is unknown, documented on DeadStockEntry
         # itself — count-based, not comparable across dollar-based scores.
         return value_at_cost if value_at_cost is not None else Decimal(evidence["stock_on_hand"])
+    if finding.type == "high_return_rate":
+        return evidence["returns_amount"]
     raise ValueError(f"No impact scoring rule for finding type: {finding.type}")  # pragma: no cover
 
 

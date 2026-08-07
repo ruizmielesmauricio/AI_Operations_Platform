@@ -28,6 +28,25 @@ services:
       db:
         condition: service_healthy
 
+  scheduler:
+    # Stage D17/D18 — a separate lightweight service (same backend image,
+    # different entrypoint) that polls for weekly/monthly reports coming
+    # due, rather than an in-process FastAPI background task. Decoupled
+    # from the API process on purpose: it can restart, fall behind, or
+    # scale independently without affecting request handling, and a
+    # single reconciliation tick covers scheduling (PR-8.1/8.2), retry
+    # (PR-8.9), and recovery after downtime (PR-8.10) — see
+    # app/scheduler/tick.py.
+    build: ./backend
+    command: python -m app.scheduler
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://aiops:aiops_dev_password@db:5432/aiops_dev}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     ports:

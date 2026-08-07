@@ -15,6 +15,7 @@ def test_clean_purchases_export_resolves_via_alias():
         "quantity_received": "Qty Received",
         "unit_cost": "Unit Cost",
         "purchase_reference": None,
+        "category": None,
     }
 
 
@@ -41,6 +42,52 @@ def test_unit_cost_with_no_token_signal_is_capped_below_high_confidence():
     candidates = result.field_candidates["unit_cost"]
     assert candidates
     assert candidates[0].confidence <= 0.6
+
+
+def test_purchase_order_id_alias_resolves_purchase_reference():
+    # Real bug, found via Gate B testing with synthetic_orders.csv: none
+    # of purchase_order_id/supplier_order_reference/supplier_invoice_number
+    # matched anything in the alias list (exact-string match only, no
+    # fuzzy/substring matching), so purchase_reference came back with
+    # zero candidates and needed a manual pick every time.
+    header = ["Order Date", "Product", "SKU", "Qty Received", "Unit Cost", "Purchase Order Id"]
+    rows = [
+        ["2026-01-0" + str(i % 9 + 1), "Chain Lube", "CL-100", str(10 + i), str(4.5 + i * 0.1), f"PO-{1000 + i}"]
+        for i in range(6)
+    ]
+    result = detect_mapping([header] + rows, "purchases")
+    assert result.suggested_mapping["purchase_reference"] == "Purchase Order Id"
+
+
+def test_issue_description_alias_resolves_over_a_weaker_notes_column():
+    # Real bug, found via Gate B testing with synthetic_repairs.csv: the
+    # actual repair description lived in "Issue Description", but only
+    # "notes" (frequently empty in real exports) was in the alias list —
+    # it won purely because nothing else was offered, silently mapping
+    # description to the weaker, often-blank field instead.
+    header = ["Repair Date", "Issue Description", "Notes", "Price Charged", "Labour Cost"]
+    rows = [
+        ["2026-01-0" + str(i + 1), "Wheel out of true", "", str(45 + i), str(20 + i)]
+        for i in range(6)
+    ]
+    result = detect_mapping([header] + rows, "repairs")
+    assert result.suggested_mapping["description"] == "Issue Description"
+
+
+def test_total_amount_and_labour_amount_aliases_resolve_directly():
+    # Real bug, found via Gate B testing with synthetic_repairs.csv: a
+    # two-word "Total Amount"/"Labour Amount" header matched neither the
+    # single-word "amount"/"total" alias entries nor (before this fix)
+    # won their structural tie — now resolved directly via alias, no
+    # ambiguity to break at all.
+    header = ["Repair Date", "Description", "Total Amount", "Labour Amount"]
+    rows = [
+        ["2026-01-0" + str(i + 1), "Fixed a puncture", f"{100.00 + i:.2f}", f"{45.00 + i:.2f}"]
+        for i in range(6)
+    ]
+    result = detect_mapping([header] + rows, "repairs")
+    assert result.suggested_mapping["price_charged"] == "Total Amount"
+    assert result.suggested_mapping["labour_cost"] == "Labour Amount"
 
 
 def test_clean_repairs_export_resolves_via_alias():

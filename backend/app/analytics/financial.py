@@ -79,6 +79,28 @@ class ProductMarginRow:
     revenue: Decimal
     gross_profit: Decimal
     gross_margin_pct: Decimal
+    # None when the product has no category set, or the caller didn't
+    # supply category_name_by_product — same convention as
+    # app/analytics/retail.py's DeadStockEntry.category_name.
+    category_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ReturnsSummary:
+    """Surfaces what's already netted silently into `RevenueTrend.current`
+    — Sale.total_amount already includes negative-quantity return rows
+    (app/imports/importer.py's validate_and_parse_row accepts them), so
+    net_revenue here is always exactly revenue.current, just explicitly
+    decomposed rather than left implicit. A separate dataclass, not a new
+    field on RevenueTrend/GrossMarginResult, to avoid any change to their
+    existing shape."""
+
+    gross_revenue: Decimal
+    returns_amount: Decimal
+    return_count: int
+    net_revenue: Decimal
+    # None when gross_revenue is 0 — nothing to take a percentage of.
+    return_rate_pct: Decimal | None
 
 
 def compute_gross_margin(aggregates: list[ProductPeriodAggregate]) -> GrossMarginResult:
@@ -128,11 +150,28 @@ def compute_revenue_change(current: Decimal, previous: Decimal) -> RevenueTrend:
     return RevenueTrend(current=_quantize_money(current), previous=_quantize_money(previous), change_pct=change_pct)
 
 
+def compute_returns_summary(net_revenue: Decimal, returns_amount: Decimal, return_count: int) -> ReturnsSummary:
+    """net_revenue is Sale.total_amount summed as-is (already includes
+    negative-quantity return rows) — gross_revenue is derived from it
+    (net + returns), not queried separately, since that's exactly what
+    "gross, before returns" means."""
+    gross_revenue = net_revenue + returns_amount
+    return_rate_pct = _quantize_pct(returns_amount / gross_revenue * 100) if gross_revenue > 0 else None
+    return ReturnsSummary(
+        gross_revenue=_quantize_money(gross_revenue),
+        returns_amount=_quantize_money(returns_amount),
+        return_count=return_count,
+        net_revenue=_quantize_money(net_revenue),
+        return_rate_pct=return_rate_pct,
+    )
+
+
 def rank_products_by_margin(
     aggregates: list[ProductPeriodAggregate],
     products_by_id: dict[uuid.UUID, str],
     *,
     top_n: int = 5,
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> tuple[list[ProductMarginRow], list[ProductMarginRow], int]:
     """Returns (top_n by gross profit, bottom_n by gross profit, count of
     products excluded for having no known cost). Products with no
@@ -140,6 +179,7 @@ def rank_products_by_margin(
     ranked for a product with no cost data, and silently ranking it at 0
     would misreport it as break-even rather than unknown.
     """
+    category_name_by_product = category_name_by_product or {}
     rows: list[ProductMarginRow] = []
     excluded_count = 0
     for aggregate in aggregates:
@@ -156,6 +196,7 @@ def rank_products_by_margin(
                 revenue=_quantize_money(aggregate.revenue),
                 gross_profit=_quantize_money(gross_profit),
                 gross_margin_pct=margin_pct,
+                category_name=category_name_by_product.get(aggregate.product_id),
             )
         )
 

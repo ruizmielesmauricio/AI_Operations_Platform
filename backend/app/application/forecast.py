@@ -23,7 +23,7 @@ from app.analytics.forecasting import (
 from app.analytics.period import group_amounts_by_local_date
 from app.models.business import Business
 from app.repositories.inventory_movement import InventoryMovementRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductCategoryRepository, ProductRepository
 from app.repositories.sale import SaleRepository
 from app.repositories.sale_item import SaleItemRepository
 
@@ -62,6 +62,9 @@ class ProductDemandForecast:
     # forecast's daily rate is 0 (nothing to divide by; not "infinite").
     # Lower is more urgent; products sort ascending by this (None last).
     days_of_cover_at_forecast_rate: Decimal | None
+    # None when the product has no category set — same convention as
+    # app/analytics/retail.py's DeadStockEntry.category_name.
+    category_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,7 @@ def get_forecast(
     business_id: uuid.UUID,
     horizon_days: int = 7,
     now: datetime | None = None,
+    category_id: uuid.UUID | None = None,
 ) -> ForecastSummary:
     business = db.get(Business, business_id)
     if business is None:
@@ -134,6 +138,12 @@ def get_forecast(
     query_end = _local_midnight_utc(today, business.timezone)  # exclusive
 
     # --- Revenue -------------------------------------------------------
+    # Deliberately never scoped by category_id — a revenue forecast isn't
+    # a filter on an already-computed result, it's a model run over a
+    # specific historical series; a "category X revenue forecast" would
+    # be a real, separate computation this pass doesn't attempt. Mirrors
+    # Retail Operations' own "Inventory value" stat, which also stays
+    # whole-business even while the product tables below it are filtered.
     sale_rows = SaleRepository(db).list_amounts_in_range(business_id, query_start, query_end)
     revenue_first_seen = _earliest_local_date(sale_rows, business.timezone)
     if revenue_first_seen is None:
@@ -152,8 +162,15 @@ def get_forecast(
     for product_id, sold_at, quantity in item_rows:
         rows_by_product.setdefault(product_id, []).append((sold_at, Decimal(quantity)))
 
-    products_by_id = {p.id: p for p in ProductRepository(db).list_for_business(business_id)}
+    all_products = ProductRepository(db).list_for_business(business_id)
+    if category_id is not None:
+        # Constrains the per-product forecast table only — the revenue
+        # forecast above is untouched, matching the file-level comment.
+        all_products = [p for p in all_products if p.category_id == category_id]
+    products_by_id = {p.id: p for p in all_products}
     stock_by_product = InventoryMovementRepository(db).sum_by_product_ids(business_id, list(rows_by_product.keys()))
+
+    category_name_by_id = {c.id: c.name for c in ProductCategoryRepository(db).list_for_business(business_id)}
 
     products: list[ProductDemandForecast] = []
     excluded = 0
@@ -205,6 +222,7 @@ def get_forecast(
                 current_stock=current_stock,
                 suggested_reorder_quantity=suggested_reorder_quantity,
                 days_of_cover_at_forecast_rate=days_of_cover,
+                category_name=category_name_by_id.get(product.category_id) if product.category_id else None,
             )
         )
 

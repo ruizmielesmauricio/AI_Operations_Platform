@@ -1,12 +1,13 @@
 import uuid
 from decimal import Decimal
 
-from app.analytics.financial import GrossMarginResult, ProductMarginRow, RevenueTrend
+from app.analytics.financial import GrossMarginResult, ProductMarginRow, ReturnsSummary, RevenueTrend
 from app.analytics.findings import (
     DEFAULT_LOW_STOCK_THRESHOLD_DAYS,
     Finding,
     build_recommendations,
     evaluate_dead_stock,
+    evaluate_high_return_rate,
     evaluate_incomplete_cost_data,
     evaluate_low_gross_margin,
     evaluate_low_stock,
@@ -62,6 +63,38 @@ def test_revenue_decline_does_not_trigger_on_growth_or_small_dip():
 def test_revenue_decline_does_not_trigger_with_no_previous_period_data():
     no_baseline = RevenueTrend(current=Decimal("500"), previous=Decimal("0"), change_pct=None)
     assert evaluate_revenue_decline(no_baseline) == []
+
+
+# --- high_return_rate ----------------------------------------------------
+
+
+def _returns_summary(*, gross="1000", returns="0", count=0, rate="0.0"):
+    return ReturnsSummary(
+        gross_revenue=Decimal(gross),
+        returns_amount=Decimal(returns),
+        return_count=count,
+        net_revenue=Decimal(gross) - Decimal(returns),
+        return_rate_pct=Decimal(rate) if rate is not None else None,
+    )
+
+
+def test_high_return_rate_triggers_past_the_threshold():
+    summary = _returns_summary(gross="1000", returns="150", count=3, rate="15.0")
+    findings = evaluate_high_return_rate(summary)
+    assert len(findings) == 1
+    assert findings[0].type == "high_return_rate"
+    assert findings[0].severity == "warning"
+    assert findings[0].evidence["return_count"] == 3
+
+
+def test_high_return_rate_does_not_trigger_below_threshold():
+    summary = _returns_summary(gross="1000", returns="50", count=1, rate="5.0")
+    assert evaluate_high_return_rate(summary) == []
+
+
+def test_high_return_rate_does_not_trigger_with_no_gross_revenue():
+    summary = _returns_summary(gross="0", returns="0", count=0, rate=None)
+    assert evaluate_high_return_rate(summary) == []
 
 
 # --- low_gross_margin / incomplete_cost_data ----------------------------

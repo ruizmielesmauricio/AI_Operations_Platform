@@ -1,10 +1,12 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.product import Product, ProductCategory
+
+_SEARCH_LIMIT = 5
 
 
 class ProductRepository:
@@ -25,6 +27,7 @@ class ProductRepository:
         name: str,
         cost_price: Decimal | None,
         sell_price: Decimal | None,
+        category_id: uuid.UUID | None = None,
     ) -> Product:
         # Flush only — app/imports/importer.py owns the single commit for
         # the whole import write path (billing-style transaction convention).
@@ -34,10 +37,40 @@ class ProductRepository:
             name=name,
             cost_price=cost_price,
             sell_price=sell_price,
+            category_id=category_id,
         )
         self.session.add(product)
         self.session.flush()
         return product
+
+    def search_by_name_or_sku(self, business_id: uuid.UUID, query: str, *, limit: int = _SEARCH_LIMIT) -> list[Product]:
+        """Backs ORLA's product_lookup chat intent (app/ai/service.py) —
+        the free-text search term is only ever used here, as a
+        parameterized ILIKE/exact-match value, never as raw SQL,
+        regardless of what a model extracted it as. Case-insensitive
+        substring match on name; exact, normalized match on sku (mirrors
+        app/imports/importer.py::normalize_sku's case/whitespace
+        handling, not a substring match — a SKU is an identifier, a
+        partial match on one is usually noise, not a real hit). Capped at
+        `limit` so a broad query (e.g. a single common word) can't blow
+        up the chat context — the caller (app/ai/service.py) treats
+        "more results than fit" the same as any other multi-match case,
+        asking the user to narrow down rather than silently picking one.
+        """
+        normalized_sku = query.strip().upper()
+        return list(
+            self.session.scalars(
+                select(Product)
+                .where(
+                    Product.business_id == business_id,
+                    or_(
+                        func.lower(Product.name).like(f"%{query.strip().lower()}%"),
+                        func.upper(Product.sku) == normalized_sku,
+                    ),
+                )
+                .limit(limit)
+            )
+        )
 
     def update_cost_price(
         self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal
@@ -60,6 +93,50 @@ class ProductRepository:
         self.session.flush()
         return product
 
+    def update_sell_price(
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, sell_price: Decimal
+    ) -> Product | None:
+        """Real bug, found live via the category-breakdown feature's
+        "stock value at sell price" figure against a real business: every
+        one of 180 real products had sell_price=NULL, because it was only
+        ever set once, at product-creation time in _write_sales (mirrors
+        update_cost_price's own history — cost_price had the identical
+        gap until v1.11 gave it this same kind of update path). A product
+        first created via "purchases"/"inventory" (sell_price=None, no
+        price concept in those rows) never gets a sell_price at all once
+        it's later actually sold, and even a sales-created product's
+        price never reflects a later real price change. Unconditionally
+        overwrites, same "latest wins" semantics as update_cost_price —
+        called from _write_sales on every existing-product sighting.
+        Flush only — app/imports/importer.py owns the single commit.
+        """
+        product = self.session.scalar(
+            select(Product).where(Product.id == product_id, Product.business_id == business_id)
+        )
+        if product is None:
+            return None
+        product.sell_price = sell_price
+        self.session.flush()
+        return product
+
+    def update_category(
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, category_id: uuid.UUID | None
+    ) -> Product | None:
+        """Mirrors update_cost_price's exact "latest wins" semantics:
+        unconditionally overwrites whenever a later row for an existing
+        product carries a mapped category — a category has no snapshot
+        history any more than cost_price does, so the most recently
+        imported value is treated as current truth. Flush only —
+        app/imports/importer.py owns the single commit."""
+        product = self.session.scalar(
+            select(Product).where(Product.id == product_id, Product.business_id == business_id)
+        )
+        if product is None:
+            return None
+        product.category_id = category_id
+        self.session.flush()
+        return product
+
 
 class ProductCategoryRepository:
     def __init__(self, session: Session):
@@ -69,7 +146,21 @@ class ProductCategoryRepository:
         # One query for the whole catalogue's categories, same reasoning as
         # ProductRepository.list_for_business — Stage C12's threshold
         # resolution needs every category's low_stock_threshold_days at
-        # once, not per-product.
+        # once, not per-product. Also backs GET /businesses/{id}/
+        # product-categories (dashboard filter dropdown population) and
+        # app/imports/importer.py's per-import CategoryMatcher.
         return list(
             self.session.scalars(select(ProductCategory).where(ProductCategory.business_id == business_id))
         )
+
+    def create(self, *, business_id: uuid.UUID, name: str) -> ProductCategory:
+        # Flush only — app/imports/importer.py owns the single commit.
+        # No create/edit UI exists for categories yet (same "no product-
+        # management UI" gap already flagged as of Stage C12) — every
+        # category today is created organically via the importer's
+        # CategoryMatcher resolving an imported "category" column's text,
+        # match-or-create by normalized name.
+        category = ProductCategory(business_id=business_id, name=name)
+        self.session.add(category)
+        self.session.flush()
+        return category

@@ -3,6 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models import (
+    AIRequest,
     Alert,
     Base,
     Business,
@@ -13,6 +14,8 @@ from app.models import (
     Product,
     ProductCategory,
     ProductionEvent,
+    Report,
+    Return,
     Sale,
     SaleItem,
     Subscription,
@@ -42,9 +45,12 @@ def db_session(_engine):
     # Code under test may call session.commit() itself, so tear down by
     # deleting rows rather than relying on a rollback to undo everything.
     session.rollback()
+    session.query(AIRequest).delete()
+    session.query(Report).delete()
     session.query(Alert).delete()
     session.query(ProductionEvent).delete()
     session.query(InventoryMovement).delete()
+    session.query(Return).delete()
     session.query(SaleItem).delete()
     session.query(Sale).delete()
     session.query(Product).delete()

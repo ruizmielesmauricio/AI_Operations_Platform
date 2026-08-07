@@ -15,6 +15,7 @@ import hashlib
 import re
 import statistics
 from dataclasses import dataclass, field as dataclass_field
+from decimal import Decimal
 
 from app.imports.aliases import CANONICAL_FIELDS, match_alias, normalize_header
 from app.imports.exceptions import HeaderRowNotFound, InvalidHeaderRowIndex, UnsupportedEntityType
@@ -83,6 +84,57 @@ _IDENTIFIER_HEADER_RE = re.compile(r"\b(id|no|num|number|reg|register|receipt)\b
 
 def _looks_like_identifier_header(header_norm: str) -> bool:
     return bool(_IDENTIFIER_HEADER_RE.search(header_norm))
+
+
+# Real bug, found via Gate B testing with synthetic_repairs.csv: two money
+# fields each confidently (and wrongly) auto-picked a column because
+# multiple structural candidates tied at the exact same score — the
+# winner was then whichever column happened to appear first in the file,
+# an accident of iteration order, not a deliberate choice.
+# "price_charged" picked "labour_amount" over the correct "total_amount"
+# (both matched _MONEY_TOKENS on one token, both fully money-parseable);
+# "labour_cost" picked "labour_hours" over "labour_amount"/"labour_rate"
+# (all three share the "labour" token, and hours values like "4.2" parse
+# as cleanly as currency does — nothing before this fix told them apart).
+# A wrong money-field assignment silently corrupts every margin figure
+# computed from it downstream, so a genuine tie must never be guessed —
+# same reasoning already applied to the identifier-header veto above,
+# extended to the tie case: this field is left unmapped (None) instead,
+# forcing a human pick, with every tied candidate still shown at its real
+# confidence in field_candidates for that review.
+_MONEY_TIE_EPSILON = 0.03
+
+
+def _money_shape_ratio(parsed_values: list[Decimal]) -> float:
+    """Fraction of already-parsed money values genuinely formatted like
+    currency (exactly 2 decimal places) — real POS/ERP money columns are
+    almost always written this way, whereas hours/rates/counts usually
+    aren't (see labour_hours's "4.2"/"2.0" vs labour_amount's "210.00"/
+    "110.00" above). A soft signal blended into the score, not a veto:
+    some legitimate exports do omit trailing zeros on whole-euro amounts.
+    """
+    if not parsed_values:
+        return 0.0
+    two_dp = sum(1 for v in parsed_values if v.as_tuple().exponent == -2)
+    return two_dp / len(parsed_values)
+
+
+def _money_token_overlap_ratio(header_norm: str, tokens: set[str]) -> float:
+    """A proportional variant of _token_overlap, used only for money-field
+    scoring: a header matching multiple of the field's tokens (e.g. "total
+    amount" matching both "total" and "amount" for price_charged) is
+    stronger evidence than matching just one ("labour amount" matching
+    only "amount") — _token_overlap's binary any-match-at-all can't tell
+    those apart, which is part of why the tie above happened. Deliberately
+    a separate function, not a change to _token_overlap itself:
+    order_reference/sku/quantity_on_hand/quantity_received all rely on
+    _token_overlap's existing binary "any match at all" semantics by
+    design (see their own comments) and must not regress.
+    """
+    if not tokens:
+        return 0.0
+    header_tokens = set(header_norm.split())
+    return len(header_tokens & tokens) / len(tokens)
 
 
 @dataclass
@@ -207,6 +259,20 @@ def detect_mapping_with_header(grid: list[Row], entity_type: str, header_row_ind
                 per_field_scores[f].append((score, col_idx))
                 if score >= _MIN_CONFIDENCE:
                     scored.append((score, col_idx, f))
+
+    # Never auto-pick a money field on a genuine tie (see the comment
+    # above _MONEY_TIE_EPSILON) — a field whose top two candidates are
+    # within epsilon of each other is excluded from the auto-selection
+    # pass entirely; field_candidates below still shows every tied
+    # option at its real confidence for a human to pick between.
+    ambiguous_money_fields = set()
+    for f in remaining_fields:
+        if f not in _MONEY_FIELDS:
+            continue
+        ranked = sorted(per_field_scores[f], key=lambda t: t[0], reverse=True)
+        if len(ranked) >= 2 and (ranked[0][0] - ranked[1][0]) < _MONEY_TIE_EPSILON:
+            ambiguous_money_fields.add(f)
+    scored = [(score, col_idx, f) for score, col_idx, f in scored if f not in ambiguous_money_fields]
 
     scored.sort(key=lambda t: t[0], reverse=True)
     for score, col_idx, f in scored:
@@ -389,14 +455,20 @@ def _score_field(field: str, samples: list[object], header_norm: str) -> float:
         parsed = [parse_money(v) for v in samples]
         valid = [p for p in parsed if p is not None]
         money_rate = len(valid) / len(samples)
-        token_bonus = _token_overlap(header_norm, _MONEY_TOKENS[field])
+        token_ratio = _money_token_overlap_ratio(header_norm, _MONEY_TOKENS[field])
+        # Genuine 2-decimal currency formatting nudges the score up or
+        # down within the parse-rate/token-match result — it's what
+        # actually separates an hours/rate column from a real money
+        # column when the header's token overlap alone can't (see the
+        # tie-breaking comment above _MONEY_TIE_EPSILON).
+        shape_factor = 0.7 + 0.3 * _money_shape_ratio(valid)
         # A wrong money-field assignment silently corrupts every margin
         # number downstream, so with zero name signal this is capped well
         # below the auto-assign threshold regardless of how clean the
         # parse rate looks.
-        if token_bonus == 0.0:
-            return 0.6 * money_rate
-        return 0.7 * money_rate + 0.3 * token_bonus
+        if token_ratio == 0.0:
+            return 0.6 * money_rate * shape_factor
+        return (0.7 * money_rate + 0.3 * token_ratio) * shape_factor
     if field == "product_name":
         texts = [
             normalize_cell(v)

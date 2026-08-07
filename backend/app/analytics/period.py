@@ -106,3 +106,57 @@ def group_amounts_by_local_date(
             buckets[local_date] += amount
 
     return buckets
+
+
+def compute_report_period(
+    business_timezone: str, report_type: str, *, now: datetime | None = None
+) -> tuple[date, date]:
+    """Stage D17/D18 (PR-8.1/8.2): the most recently *completed* reporting
+    period as of "now", as business-local calendar dates. Shared by
+    app/application/report.py (generation) and app/scheduler/tick.py
+    (deciding what's due) — both need exactly the same answer to the
+    question "which period does the next weekly/monthly report cover."
+
+    Weekly: the 7 days ending the day before the most recent Monday (i.e.
+    last Monday through last Sunday, inclusive) — PR-8.1's "covers the
+    previous completed week."
+    Monthly: the full previous calendar month — PR-8.2's "covers the
+    previous completed calendar month."
+    """
+    tz = ZoneInfo(business_timezone)
+    today = (now.astimezone(tz) if now is not None else datetime.now(tz)).date()
+
+    if report_type == "weekly":
+        this_monday = today - timedelta(days=today.weekday())
+        start = this_monday - timedelta(days=7)
+        end = this_monday - timedelta(days=1)
+        return start, end
+    if report_type == "monthly":
+        first_of_this_month = today.replace(day=1)
+        end = first_of_this_month - timedelta(days=1)
+        start = end.replace(day=1)
+        return start, end
+    raise ValueError(f"Unknown report_type: {report_type!r}")
+
+
+# The hour (business-local) weekly/monthly reports become due, per
+# PR-8.1/8.2's "every Monday at 08:00" / "the first calendar day at 08:00".
+REPORT_GENERATION_HOUR = 8
+
+
+def is_report_period_due(business_timezone: str, period_end_date: date, *, now: datetime) -> bool:
+    """True once "now" is at or after the period's own generation moment —
+    08:00 local on the calendar day immediately after period_end_date
+    (the Monday after a weekly period's last Sunday; the 1st after a
+    monthly period's last day). Not just "any time after the period
+    ends": PR-8.1/8.2 specify a time of day, not just a date. Forgiving of
+    exactly *how far* past that moment "now" is — a tick running hours or
+    days late (after downtime) still returns True, which is what makes
+    missed-report recovery (PR-8.10) automatic rather than needing a
+    separate mechanism from generation itself.
+    """
+    tz = ZoneInfo(business_timezone)
+    local_now = now.astimezone(tz)
+    generation_date = period_end_date + timedelta(days=1)
+    generation_moment = datetime.combine(generation_date, time(REPORT_GENERATION_HOUR, 0), tzinfo=tz)
+    return local_now >= generation_moment

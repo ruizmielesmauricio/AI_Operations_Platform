@@ -40,6 +40,17 @@ class ProductMarginOut(BaseModel):
     revenue: Decimal
     gross_profit: Decimal
     gross_margin_pct: Decimal
+    category_name: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ReturnsOut(BaseModel):
+    gross_revenue: Decimal
+    returns_amount: Decimal
+    return_count: int
+    net_revenue: Decimal
+    return_rate_pct: Decimal | None
 
     model_config = {"from_attributes": True}
 
@@ -51,6 +62,7 @@ class FinancialPerformanceOut(BaseModel):
     top_margin_products: list[ProductMarginOut]
     bottom_margin_products: list[ProductMarginOut]
     products_excluded_from_ranking: int
+    returns: ReturnsOut
 
     model_config = {"from_attributes": True}
 
@@ -60,6 +72,7 @@ class ProductSalesOut(BaseModel):
     name: str
     units_sold: int
     revenue: Decimal
+    category_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -71,6 +84,7 @@ class StockCoverOut(BaseModel):
     units_sold_in_period: int
     cover_days: Decimal | None
     revenue_in_period: Decimal
+    category_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -80,6 +94,7 @@ class DeadStockOut(BaseModel):
     name: str
     stock_on_hand: int
     value_at_cost: Decimal | None
+    category_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -198,6 +213,7 @@ class ProductDemandForecastOut(BaseModel):
     # current stock) — does not model supplier lead time or safety stock.
     suggested_reorder_quantity: int
     days_of_cover_at_forecast_rate: Decimal | None
+    category_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -207,5 +223,92 @@ class ForecastOut(BaseModel):
     revenue: RevenueForecastOut
     products: list[ProductDemandForecastOut]
     products_excluded_insufficient_data: int
+
+    model_config = {"from_attributes": True}
+
+
+# --- ORLA per-record lookups (app/ai/service.py's product_lookup/
+# purchase_lookup/repair_lookup intents) — a single real record's detail,
+# not a period aggregate. Assembled in app/application/lookups.py from
+# plain repository query results, not validated straight off the ORM
+# model (current_stock in particular is computed separately, not a
+# Product column) — model_config kept for consistency with every other
+# schema in this file, not because from_attributes is actually used here.
+
+class ProductDetailOut(BaseModel):
+    product_id: uuid.UUID
+    name: str
+    sku: str | None
+    cost_price: Decimal | None
+    sell_price: Decimal | None
+    current_stock: int
+
+    model_config = {"from_attributes": True}
+
+
+class PurchaseDetailOut(BaseModel):
+    product_id: uuid.UUID
+    product_name: str
+    sku: str | None
+    quantity_received: int
+    purchase_reference: str | None
+    event_date: date | None
+    # InventoryMovement.unit_cost (added alongside the category-breakdown
+    # feature) — the per-transaction cost this specific purchase was made
+    # at, not Product.cost_price's single always-overwritten "current"
+    # value. None on any purchase imported before that column existed —
+    # no retroactive backfill was possible, the data was never captured.
+    unit_cost: Decimal | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RepairDetailOut(BaseModel):
+    repair_reference: str | None
+    description: str | None
+    status: str
+    opened_at: datetime
+    completed_at: datetime | None
+    price_charged: Decimal | None
+    labour_cost: Decimal | None
+
+    model_config = {"from_attributes": True}
+
+
+# --- Category breakdown (revenue/expenses/stock value per product
+# category) — direct request. See app/analytics/category.py's own
+# docstring for why expenses (purchase cost) and stock_value (at sell
+# price) are deliberately distinct from COGS and the business-wide
+# inventory_value stat (at cost) respectively.
+
+
+class ProductCategoryOut(BaseModel):
+    """Backs GET /businesses/{id}/product-categories — populates the
+    dashboard's per-section category filter dropdowns. No create/edit
+    endpoint exists yet; every category today is created organically via
+    an import's optional "category" column (see app/imports/importer.py's
+    CategoryMatcher)."""
+
+    id: uuid.UUID
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
+class CategoryBreakdownRowOut(BaseModel):
+    category_id: uuid.UUID | None
+    category_name: str
+    revenue: Decimal
+    expenses: Decimal
+    expenses_data_coverage_pct: Decimal | None
+    stock_value: Decimal
+    products_excluded_from_stock_value: int
+
+    model_config = {"from_attributes": True}
+
+
+class CategoryBreakdownOut(BaseModel):
+    period: PeriodOut
+    rows: list[CategoryBreakdownRowOut]
 
     model_config = {"from_attributes": True}

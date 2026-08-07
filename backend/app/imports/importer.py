@@ -34,7 +34,8 @@ from app.models.upload import Upload
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.inventory_movement import InventoryMovementRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductCategoryRepository, ProductRepository
+from app.repositories.return_ import ReturnRepository
 from app.repositories.production_event import ProductionEventRepository
 from app.repositories.sale import SaleRepository
 from app.repositories.sale_item import SaleItemRepository
@@ -65,6 +66,21 @@ class ParsedSaleRow:
     order_reference: str | None
     tax_amount: Decimal | None = None
     total_amount_mismatch: bool = False
+    # True when quantity < 0 — a return/refund line, not a sale (PR-8's
+    # sibling: real POS exports commonly mix these into the same sales
+    # file as negative-quantity rows, per Gate B testing with
+    # synthetic_sales.csv). Revenue/margin/stock math needs no special-
+    # casing for this — every downstream SUM() is already sign-agnostic
+    # (see app/analytics/financial.py, app/repositories/sale_item.py) —
+    # this flag only decides the InventoryMovement reason and whether a
+    # Return row gets written (_write_sales).
+    is_return: bool = False
+    # Optional free-text category name, resolved against ProductCategory
+    # (match-or-create by normalized name — see _CategoryMatcher below).
+    # Never a rejection reason; a product's category_id is set on
+    # creation and unconditionally overwritten on every later sighting
+    # that carries one, same "latest wins" semantics as cost_price.
+    category: str | None = None
 
 
 @dataclass
@@ -78,6 +94,8 @@ class ParsedInventoryRow:
     # processing date in the business's timezone. See aliases.py's
     # CANONICAL_FIELDS["inventory"] comment for the full reasoning.
     as_of_date: date | None = None
+    # See ParsedSaleRow.category above.
+    category: str | None = None
 
 
 @dataclass
@@ -89,6 +107,8 @@ class ParsedPurchaseRow:
     quantity_received: int
     unit_cost: Decimal | None
     reference: str | None = None
+    # See ParsedSaleRow.category above.
+    category: str | None = None
 
 
 @dataclass
@@ -142,14 +162,26 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
             return RejectedRow(row_number, "invalid_quantity", _display_raw(mapped_values))
         quantity = parsed_quantity
 
-    if quantity <= 0:
-        # Same reasoning as purchases' non_positive_quantity — a zero/
-        # negative quantity isn't a valid sale fact. Also load-bearing now:
-        # total_amount_val can be divided by quantity below whenever
-        # total_amount is present (not only when unit_price is absent, as
-        # before), so an unguarded quantity of 0 would crash the whole
-        # import with a ZeroDivisionError instead of rejecting just this row.
-        return RejectedRow(row_number, "non_positive_quantity", _display_raw(mapped_values))
+    if quantity == 0:
+        # A zero quantity is never a valid fact (sale or return) — also
+        # load-bearing: total_amount_val gets divided by quantity below,
+        # so an unguarded zero would crash the whole import with a
+        # ZeroDivisionError instead of rejecting just this row.
+        return RejectedRow(row_number, "zero_quantity", _display_raw(mapped_values))
+
+    # A negative quantity isn't rejected (unlike purchases'
+    # non_positive_quantity, which has no returns concept) — it's a
+    # return/refund line. Real POS exports commonly mix these into the
+    # same sales file as negative-quantity rows rather than a separate
+    # file (confirmed via Gate B testing with synthetic_sales.csv: 211 of
+    # 5,798 rows were exactly this shape, previously discarded outright).
+    # No special-casing needed below: the total-amount-authoritative math
+    # already produces the right sign — total_amount_val / quantity with
+    # both negative divides to a *positive* per-unit price, and every
+    # downstream SUM() this feeds (Sale.total_amount, SaleItemRepository.
+    # aggregate_by_product_in_range, InventoryMovementRepository.
+    # sum_by_product_ids) is already sign-agnostic.
+    is_return = quantity < 0
 
     # Optional — when present, lets margin be computed net of tax
     # (app/analytics/financial.py's net_gross_margin_pct) and sharpens the
@@ -187,6 +219,7 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
     product_name = _blank_to_none(mapped_values.get("product_name"))
     sku = _blank_to_none(mapped_values.get("sku"))
     order_reference = _blank_to_none(mapped_values.get("order_reference"))
+    category = _blank_to_none(mapped_values.get("category"))
 
     return ParsedSaleRow(
         row_number=row_number,
@@ -199,6 +232,8 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
         order_reference=order_reference,
         tax_amount=tax_amount,
         total_amount_mismatch=mismatch,
+        is_return=is_return,
+        category=category,
     )
 
 
@@ -233,6 +268,7 @@ def validate_and_parse_inventory_row(
     # above rather than sale/purchase_date's hard rejection; this field is
     # a hint, not core to what the row means.
     as_of_date = parse_date(mapped_values.get("as_of_date"))
+    category = _blank_to_none(mapped_values.get("category"))
 
     return ParsedInventoryRow(
         row_number=row_number,
@@ -241,6 +277,7 @@ def validate_and_parse_inventory_row(
         quantity_on_hand=quantity_on_hand,
         unit_cost=unit_cost,
         as_of_date=as_of_date,
+        category=category,
     )
 
 
@@ -272,6 +309,7 @@ def validate_and_parse_purchase_row(
     # the write step) so a reference that's only whitespace apart from an
     # existing one is still recognised as the same reference.
     reference = _normalize_reference(_blank_to_none(mapped_values.get("purchase_reference")))
+    category = _blank_to_none(mapped_values.get("category"))
 
     return ParsedPurchaseRow(
         row_number=row_number,
@@ -281,6 +319,7 @@ def validate_and_parse_purchase_row(
         quantity_received=quantity_received,
         reference=reference,
         unit_cost=unit_cost,
+        category=category,
     )
 
 
@@ -424,6 +463,40 @@ class ProductMatcher:
         self._by_name[normalize_product_name(product.name)] = product
 
 
+# --- Category matching -------------------------------------------------
+#
+# Same match-or-create shape as ProductMatcher above, deliberately
+# simpler: a category has no SKU-equivalent identifier, just a name, so
+# there's only one matching dimension to resolve.
+
+
+def normalize_category_name(name: str) -> str:
+    return _SKU_WHITESPACE_RE.sub(" ", name.strip()).lower()
+
+
+class CategoryMatcher:
+    """Pure in-memory category-name matching — no DB access. Seed once
+    per import from every existing ProductCategory for the business;
+    call resolve() per row's mapped category text; call register_created()
+    after actually inserting a new ProductCategory so later rows in the
+    same file resolve to it too, instead of creating a duplicate."""
+
+    def __init__(self, existing_categories) -> None:
+        self._by_name: dict[str, object] = {}
+        for category in existing_categories:
+            self._by_name[normalize_category_name(category.name)] = category
+
+    def resolve(self, name: str):
+        """Returns the matching existing ProductCategory, or None when
+        this exact normalized name hasn't been seen yet in this import —
+        the caller creates it via ProductCategoryRepository.create and
+        must call register_created() with the result."""
+        return self._by_name.get(normalize_category_name(name))
+
+    def register_created(self, category) -> None:
+        self._by_name[normalize_category_name(category.name)] = category
+
+
 # --- Inventory reconciliation (pure, no DB) ------------------------------
 #
 # An inventory upload is a snapshot, not a transaction — it never creates
@@ -513,10 +586,13 @@ _REJECTION_MESSAGE_TEMPLATES = {
     "missing_quantity": "no stock count found",
     "negative_quantity": "stock count can't be negative",
     "missing_repair_detail": "no description, price, or labour cost found",
-    # Shared by sales and purchases (not entity-specific wording, since
-    # _REJECTION_MESSAGE_TEMPLATES is one flat dict keyed by code, not by
-    # entity type).
+    # purchases/inventory only — no returns concept there, so any
+    # non-positive quantity is still rejected outright.
     "non_positive_quantity": "quantity must be greater than zero",
+    # sales only — distinct from the above: sales accepts a *negative*
+    # quantity as a return (see validate_and_parse_row), so only an exact
+    # zero is ever rejected here.
+    "zero_quantity": "quantity can't be zero",
     # Shared by sales/purchases/repairs — a re-uploaded or overlapping file
     # reusing a reference (order/PO/job number) already imported earlier
     # for this business. Rejected outright rather than double-counting
@@ -550,6 +626,14 @@ _WARNING_MESSAGE_TEMPLATES = {
     # sum_by_product_ids) already excludes this quantity from current
     # stock automatically and correctly, so there's nothing left to
     # decide — this warning exists purely so the client understands why.
+    # Sales-specific, informational only — every negative-quantity row is
+    # imported normally as a return (Sale/SaleItem/InventoryMovement/
+    # Return all written, revenue and stock correctly net out) — this
+    # warning exists purely so the client isn't surprised by a lower net
+    # revenue figure than the file's gross total_amount sum would suggest.
+    "sales_includes_returns": (
+        "were return(s) (negative quantity) — netted out of revenue and added back to stock"
+    ),
     "purchase_excluded_from_current_stock": (
         "this purchase's date is on or before your last stock count, so its quantity isn't counted "
         "toward current stock — it's presumably already included in that count"
@@ -635,6 +719,26 @@ def _repair_row_display(row: ParsedRepairRow) -> dict[str, str]:
     }
 
 
+def _resolve_category_id(
+    category_repo: ProductCategoryRepository, matcher: CategoryMatcher, *, business_id: uuid.UUID, name: str | None
+) -> uuid.UUID | None:
+    """Match-or-create a ProductCategory by name for one row's mapped
+    category text — shared by _write_sales/_write_inventory/
+    _write_purchases (never _write_repairs — no product link exists
+    there to hang a category off of). Returns None when the row didn't
+    map a category at all; callers must treat that as "nothing to set
+    or update this row," never as "clear the product's existing
+    category" — the same "absent means leave alone" semantics every
+    other optional field in this module already has."""
+    if not name:
+        return None
+    category = matcher.resolve(name)
+    if category is None:
+        category = category_repo.create(business_id=business_id, name=name)
+        matcher.register_created(category)
+    return category.id
+
+
 def _write_sales(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedSaleRow]
 ) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
@@ -642,13 +746,18 @@ def _write_sales(
     for row in parsed_rows:
         if row.total_amount_mismatch:
             warnings["total_amount_mismatch"].append({"row_number": row.row_number})
+        if row.is_return:
+            warnings["sales_includes_returns"].append({"row_number": row.row_number})
 
     product_repo = ProductRepository(db)
     sale_repo = SaleRepository(db)
     sale_item_repo = SaleItemRepository(db)
     movement_repo = InventoryMovementRepository(db)
+    return_repo = ReturnRepository(db)
+    category_repo = ProductCategoryRepository(db)
 
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
     existing_refs = sale_repo.list_existing_order_references(upload.business_id)
 
     rows_imported = 0
@@ -674,6 +783,9 @@ def _write_sales(
         )
         for row in group:
             match = matcher.resolve(sku=row.sku, product_name=row.product_name)
+            category_id = _resolve_category_id(
+                category_repo, category_matcher, business_id=upload.business_id, name=row.category
+            )
             product_id = None
             if match.action == "create":
                 product = product_repo.create(
@@ -682,6 +794,7 @@ def _write_sales(
                     name=match.create_name,
                     cost_price=row.cost_price_at_sale,
                     sell_price=row.unit_price,
+                    category_id=category_id,
                 )
                 matcher.register_created(product)
                 product_id = product.id
@@ -691,6 +804,21 @@ def _write_sales(
                     warnings["product_name_mismatch"].append(
                         {"row_number": row.row_number, "product_name": row.product_name}
                     )
+                if category_id is not None:
+                    product_repo.update_category(
+                        business_id=upload.business_id, product_id=product_id, category_id=category_id
+                    )
+                # Real gap, found live: sell_price was only ever set at
+                # product-creation time — a product first created via
+                # "purchases"/"inventory" (no price concept there) kept
+                # sell_price=None forever, even once it was later sold
+                # here. row.unit_price is always set by this point
+                # (validate_and_parse_row guarantees it, including for a
+                # return row — both negatives divide to a real positive
+                # per-unit price). See ProductRepository.update_sell_price.
+                product_repo.update_sell_price(
+                    business_id=upload.business_id, product_id=product_id, sell_price=row.unit_price
+                )
 
             item = sale_item_repo.create(
                 business_id=upload.business_id,
@@ -701,12 +829,29 @@ def _write_sales(
                 cost_price_at_sale=row.cost_price_at_sale,
                 tax_amount=row.tax_amount,
             )
+            if row.is_return:
+                # Independent of product matching below — a return is a
+                # fact about the sale line itself (refund_amount), not
+                # about stock, so it's recorded even when the product
+                # couldn't be resolved. abs(): quantity is negative here,
+                # refund_amount is a plain positive currency figure.
+                return_repo.create(
+                    business_id=upload.business_id,
+                    sale_item_id=item.id,
+                    refund_amount=abs(row.quantity * row.unit_price),
+                )
             if product_id is not None:
                 movement_repo.create(
                     business_id=upload.business_id,
                     product_id=product_id,
                     quantity_delta=-row.quantity,
-                    reason="sale",
+                    # -row.quantity is already the correct signed delta
+                    # for a return (row.quantity < 0, so this comes out
+                    # positive — stock restored) — only the *reason*
+                    # needs to reflect what actually happened, for an
+                    # honest audit trail and so anything that filters
+                    # movements by reason sees the truth.
+                    reason="return" if row.is_return else "sale",
                     reference_id=item.id,
                     # sale.sold_at is midnight-UTC on the group's plain
                     # sale_date (see its own construction above) — .date()
@@ -731,7 +876,9 @@ def _write_inventory(
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
+    category_repo = ProductCategoryRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
 
     business = db.get(Business, upload.business_id)
     today_local = datetime.now(timezone.utc).astimezone(ZoneInfo(business.timezone)).date()
@@ -742,6 +889,9 @@ def _write_inventory(
     for row in parsed_rows:
         as_of_date = row.as_of_date or today_local
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
+        category_id = _resolve_category_id(
+            category_repo, category_matcher, business_id=upload.business_id, name=row.category
+        )
         if match.action == "create":
             product = product_repo.create(
                 business_id=upload.business_id,
@@ -752,6 +902,7 @@ def _write_inventory(
                 # there's no existing row to update yet.
                 cost_price=row.unit_cost,
                 sell_price=None,
+                category_id=category_id,
             )
             matcher.register_created(product)
             resolved.append(
@@ -770,6 +921,10 @@ def _write_inventory(
             if match.name_mismatch:
                 warnings["product_name_mismatch"].append(
                     {"row_number": row.row_number, "product_name": row.product_name}
+                )
+            if category_id is not None:
+                product_repo.update_category(
+                    business_id=upload.business_id, product_id=match.product_id, category_id=category_id
                 )
             resolved.append(
                 ResolvedInventoryRow(
@@ -840,7 +995,9 @@ def _write_purchases(
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
+    category_repo = ProductCategoryRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
+    category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
     # Keyed by (reference, product_id), not reference alone — a real
     # purchase order routinely covers several different products under one
     # PO/invoice number (found live: a 1656-row file with one PO number per
@@ -865,6 +1022,9 @@ def _write_purchases(
     duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
+        category_id = _resolve_category_id(
+            category_repo, category_matcher, business_id=upload.business_id, name=row.category
+        )
         if match.action == "create":
             product = product_repo.create(
                 business_id=upload.business_id,
@@ -872,6 +1032,7 @@ def _write_purchases(
                 name=match.create_name,
                 cost_price=row.unit_cost,
                 sell_price=None,
+                category_id=category_id,
             )
             matcher.register_created(product)
             product_id = product.id
@@ -879,6 +1040,10 @@ def _write_purchases(
             # Never "none" here — validate_and_parse_purchase_row already
             # rejects rows with no sku and no product_name before this point.
             product_id = match.product_id
+            if category_id is not None:
+                product_repo.update_category(
+                    business_id=upload.business_id, product_id=product_id, category_id=category_id
+                )
 
         # Informational only — see latest_adjustment_by_product's own
         # comment above. Same boundary as sum_by_product_ids: on-or-before
@@ -925,6 +1090,13 @@ def _write_purchases(
             import_record_id=import_record.id,
             purchase_reference=row.reference,
             event_date=row.purchase_date,
+            # Historical, per-transaction — see InventoryMovement.unit_cost's
+            # own docstring for why this is captured separately from
+            # Product.cost_price (updated just above, but that's a single
+            # "current" value with no history). Feeds category/product
+            # "expenses" (InventoryMovementRepository.
+            # aggregate_purchase_cost_by_product_in_range).
+            unit_cost=row.unit_cost,
         )
         touched_product_ids.add(product_id)
         rows_imported += 1

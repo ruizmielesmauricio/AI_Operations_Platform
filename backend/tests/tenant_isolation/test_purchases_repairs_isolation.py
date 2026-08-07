@@ -16,6 +16,7 @@ _PURCHASE_FIELD_MAPPING = {
     "quantity_received": "Qty Received",
     "unit_cost": "Unit Cost",
     "purchase_reference": None,
+    "category": None,
 }
 _REPAIR_FIELD_MAPPING = {
     "repair_date": "Date",

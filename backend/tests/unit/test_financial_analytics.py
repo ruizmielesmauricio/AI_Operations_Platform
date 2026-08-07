@@ -1,7 +1,12 @@
 import uuid
 from decimal import Decimal
 
-from app.analytics.financial import compute_gross_margin, compute_revenue_change, rank_products_by_margin
+from app.analytics.financial import (
+    compute_gross_margin,
+    compute_returns_summary,
+    compute_revenue_change,
+    rank_products_by_margin,
+)
 from app.analytics.types import ProductPeriodAggregate
 
 _P1, _P2, _P3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -136,6 +141,28 @@ def test_revenue_change_with_zero_previous_period_has_no_meaningful_percentage()
     trend = compute_revenue_change(Decimal("500"), Decimal("0"))
     assert trend.current == Decimal("500.00")
     assert trend.change_pct is None
+
+
+def test_returns_summary_computes_gross_from_net_plus_returns():
+    # net_revenue (Sale.total_amount summed as-is) already has returns
+    # netted in — gross is derived from it, not queried separately.
+    summary = compute_returns_summary(net_revenue=Decimal("990.01"), returns_amount=Decimal("9.99"), return_count=1)
+    assert summary.net_revenue == Decimal("990.01")
+    assert summary.returns_amount == Decimal("9.99")
+    assert summary.gross_revenue == Decimal("1000.00")
+    assert summary.return_count == 1
+    assert summary.return_rate_pct == Decimal("1.0")
+
+
+def test_returns_summary_with_no_returns_has_zero_rate_not_none():
+    summary = compute_returns_summary(net_revenue=Decimal("1000.00"), returns_amount=Decimal("0"), return_count=0)
+    assert summary.gross_revenue == Decimal("1000.00")
+    assert summary.return_rate_pct == Decimal("0.0")
+
+
+def test_returns_summary_with_zero_gross_revenue_has_no_meaningful_rate():
+    summary = compute_returns_summary(net_revenue=Decimal("0"), returns_amount=Decimal("0"), return_count=0)
+    assert summary.return_rate_pct is None
 
 
 def test_rank_products_by_margin_excludes_products_with_unknown_cost():
