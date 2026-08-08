@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiGet, apiPatch } from "@/lib/api/client";
+import { ApiError, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
+import type { AddressValidationResponse, Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
 
 // Descriptive contact/location record-keeping only — not a second login
 // (confirmed with the user, see backend/app/models/business.py). Most
@@ -63,6 +63,15 @@ export default function BusinessProfilePage() {
   const [form, setForm] = useState<BusinessProfileUpdate>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // A discrete "Validate address" action, not autocomplete-as-you-type —
+  // one call per click (backend/app/geocoding/service.py's own scope
+  // decision, to keep Geoapify request volume bounded and predictable).
+  // The result is only a suggestion until "Use this address" is clicked,
+  // which fills the form fields (including the suggested timezone) —
+  // still needs the normal Save click below like any other edit, never
+  // saved on its own.
+  const [validating, setValidating] = useState(false);
+  const [validation, setValidation] = useState<AddressValidationResponse | null>(null);
 
   useEffect(() => {
     if (!session || !businessId) return;
@@ -109,6 +118,49 @@ export default function BusinessProfilePage() {
 
   function handleCancel() {
     router.push("/onboarding");
+  }
+
+  async function handleValidateAddress() {
+    setValidating(true);
+    setValidation(null);
+    try {
+      const result = await apiPost<AddressValidationResponse>(`/businesses/${businessId}/validate-address`, {
+        address_line1: form.address_line1 || null,
+        city: form.city || null,
+        postal_code: form.postal_code || null,
+        country: form.country || null,
+      });
+      setValidation(result);
+    } catch {
+      setValidation({
+        matched: false,
+        reason: "Could not reach the address validation service — try again shortly.",
+        formatted_address: null,
+        address_line1: null,
+        city: null,
+        postal_code: null,
+        country: null,
+        confidence: null,
+        timezone: null,
+      });
+    } finally {
+      setValidating(false);
+    }
+  }
+
+  function handleUseValidatedAddress() {
+    if (!validation || !validation.matched) return;
+    setForm((prev) => ({
+      ...prev,
+      address_line1: validation.address_line1 ?? prev.address_line1,
+      city: validation.city ?? prev.city,
+      postal_code: validation.postal_code ?? prev.postal_code,
+      country: validation.country ?? prev.country,
+      // Still a suggestion, not forced — an owner who knows better can
+      // still overwrite this field manually afterward like any other.
+      timezone: validation.timezone ?? prev.timezone,
+    }));
+    setValidation(null);
   }
 
   if (checkingSession) {
@@ -173,6 +225,35 @@ export default function BusinessProfilePage() {
             />
           </div>
         ))}
+
+        <div>
+          <button type="button" disabled={validating} onClick={handleValidateAddress}>
+            {validating ? "Validating…" : "Validate address"}
+          </button>
+          <span className="hint"> Checks the address fields above and suggests the correct timezone.</span>
+        </div>
+        {validation && (
+          <div className={validation.matched ? "status-ok" : "status-error"}>
+            {validation.matched ? (
+              <>
+                <p>
+                  Found: {validation.formatted_address}
+                  {validation.timezone && ` — timezone ${validation.timezone}`}
+                  {validation.confidence !== null && ` (confidence ${Math.round(validation.confidence * 100)}%)`}
+                </p>
+                <button type="button" onClick={handleUseValidatedAddress}>
+                  Use this address
+                </button>{" "}
+                <button type="button" onClick={() => setValidation(null)}>
+                  Dismiss
+                </button>
+              </>
+            ) : (
+              <p>{validation.reason}</p>
+            )}
+          </div>
+        )}
+
         {saveError && <p className="status-error">{saveError}</p>}
         <button type="submit" disabled={saving}>
           {saving ? "Saving…" : "Save"}

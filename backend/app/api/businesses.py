@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.billing.service import cancel_subscription
+from app.geocoding.service import validate_address
 from app.models.business import Business
 from app.models.membership import Membership
 from app.repositories.business import (
@@ -16,7 +17,13 @@ from app.repositories.business import (
     soft_delete_business,
     update_business_profile,
 )
-from app.schemas.business import BusinessCreate, BusinessOut, BusinessProfileUpdate
+from app.schemas.business import (
+    AddressValidationRequest,
+    AddressValidationResponse,
+    BusinessCreate,
+    BusinessOut,
+    BusinessProfileUpdate,
+)
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -130,6 +137,28 @@ def update_business(
     updates = payload.model_dump(exclude_unset=True)
     business = update_business_profile(db, business=business, updates=updates)
     return _to_business_out(business, role=membership.role)
+
+
+@router.post("/{business_id}/validate-address", response_model=AddressValidationResponse)
+def validate_business_address(
+    business_id: uuid.UUID,
+    payload: AddressValidationRequest,
+    membership: Membership = Depends(get_current_membership),
+) -> AddressValidationResponse:
+    # Deliberately does not save anything itself — a discrete "Validate
+    # address" action (frontend/app/onboarding/[id]/page.tsx) that returns
+    # a suggestion for the owner to accept (which then goes through the
+    # normal PATCH above, same as any other profile edit). business_id in
+    # the URL exists only for the tenant-scoping gate (get_current_
+    # membership) and audit-trail consistency with every other route here
+    # — the validation itself has nothing business-specific about it.
+    result = validate_address(
+        address_line1=payload.address_line1,
+        city=payload.city,
+        postal_code=payload.postal_code,
+        country=payload.country,
+    )
+    return AddressValidationResponse.model_validate(result)
 
 
 @router.post("/{business_id}/branches", response_model=BusinessOut, status_code=status.HTTP_201_CREATED)

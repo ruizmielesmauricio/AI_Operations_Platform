@@ -24,6 +24,22 @@ export interface Business {
   deleted_at: string | null;
 }
 
+// POST /businesses/{id}/validate-address response — a suggestion only,
+// never saved automatically (frontend/app/onboarding/[id]/page.tsx's own
+// "Validate address" action applies it into the profile form, which
+// still needs its own Save click like any other edit).
+export interface AddressValidationResponse {
+  matched: boolean;
+  reason: string | null;
+  formatted_address: string | null;
+  address_line1: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
+  confidence: number | null;
+  timezone: string | null;
+}
+
 // PATCH /businesses/{id} body — every field optional, only what actually
 // changed needs sending (frontend/app/onboarding/page.tsx's edit form).
 export interface BusinessProfileUpdate {

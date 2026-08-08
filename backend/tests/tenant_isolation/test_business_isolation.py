@@ -169,6 +169,38 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     assert refetched["manager_name"] is None
 
 
+# --- POST /businesses/{id}/validate-address ---------------------------------
+
+
+def test_validate_address_requires_membership(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
+
+    response = client.post(
+        f"/businesses/{business['id']}/validate-address", json={"address_line1": "1 Main St"}, headers=headers_b
+    )
+    assert response.status_code == 403
+
+
+def test_validate_address_degrades_gracefully_when_not_configured(client):
+    # No GEOAPIFY_API_KEY in the test environment — proves the route
+    # never 500s just because address validation isn't set up, it
+    # returns a normal, honest "not matched" response.
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    response = client.post(
+        f"/businesses/{business['id']}/validate-address",
+        json={"address_line1": "1 Main St", "city": "Dublin"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["matched"] is False
+    assert body["reason"]
+
+
 def test_include_deleted_only_ever_shows_the_caller_s_own_archived_businesses(client):
     headers_a = bearer_header("user-a", "a@example.com")
     headers_b = bearer_header("user-b", "b@example.com")

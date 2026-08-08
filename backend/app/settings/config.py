@@ -102,6 +102,14 @@ class Settings(BaseSettings):
 
     resend_api_key: str = ""
 
+    # Address validation + geocoding for app/geocoding/client.py — empty by
+    # default (never committed), matching every other optional provider key
+    # in this file. "Validate address" degrades gracefully (a clear
+    # "address validation isn't configured" result, never a crash) when
+    # this is unset, same PR-5.4-style graceful-degradation posture already
+    # used for the AI provider gateway.
+    geoapify_api_key: str = ""
+
     app_base_url: str = "http://localhost:3000"
 
     @property
