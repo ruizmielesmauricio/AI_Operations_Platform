@@ -271,98 +271,67 @@ export default function OnboardingPage() {
             // user only discovers after clicking through.
             const canUpload = status === "active";
             return (
-              <li key={b.id}>
-                {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
-                {b.name} — {b.template} ({b.role})
-                {" — "}
-                {canUpload ? (
-                  <a href={`/uploads?business=${b.id}`}>Upload data</a>
-                ) : (
-                  <span className="hint">Upload data (subscribe first)</span>
-                )}
-                {" — "}
-                {isRecoverableInPortal ? (
-                  <>
-                    <span className={status === "active" ? "status-ok" : "status-error"}>
-                      {status === "active" ? "subscribed" : `subscription ${status}`}
-                    </span>{" "}
-                    <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
-                      {busy ? "Opening…" : "Manage billing"}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span>
-                      {status === "canceled"
-                        ? "subscription canceled"
-                        : b.parent_business_id
-                          ? "payment incomplete"
-                          : "not subscribed"}
-                    </span>{" "}
-                    <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
-                      {busy
-                        ? "Starting…"
-                        : b.parent_business_id
-                          ? "Complete payment (€30/mo)"
-                          : "Subscribe"}
-                    </button>
-                  </>
-                )}
-                {" — "}
-                {confirmingDeleteId === b.id ? (
-                  <span>
-                    Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
-                    your sales, products, and reports stay on record, but you&apos;ll lose access to them
-                    here.{" "}
-                    <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
-                      {deleting ? "Deleting…" : "Yes, delete"}
-                    </button>{" "}
-                    <button type="button" disabled={deleting} onClick={handleCancelDelete}>
-                      No
-                    </button>
-                  </span>
-                ) : (
-                  <button type="button" onClick={() => handleRequestDelete(b.id)}>
-                    Delete this shop
-                  </button>
-                )}
-                {" — "}
-                <button type="button" onClick={() => handleOpenProfile(b)}>
-                  {profileFormOpenFor === b.id ? "Cancel" : "Edit profile"}
-                </button>
-                {profileFormOpenFor === b.id && (
-                  <form onSubmit={(e) => handleSaveProfile(e, b.id)}>
-                    {PROFILE_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <label htmlFor={`profile-${key}-${b.id}`}>{label}</label>
-                        <br />
-                        <input
-                          id={`profile-${key}-${b.id}`}
-                          value={profileForm[key] ?? ""}
-                          onChange={(e) =>
-                            setProfileForm((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                        />
-                      </div>
-                    ))}
-                    {profileError && <p className="status-error">{profileError}</p>}
-                    <button type="submit" disabled={profileSubmitting}>
-                      {profileSubmitting ? "Saving…" : "Save profile"}
-                    </button>
-                  </form>
-                )}
+              <li key={b.id} style={{ marginBottom: "1em" }}>
+                <div>
+                  <strong>
+                    {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
+                    {b.name}
+                  </strong>{" "}
+                  — {b.template} ({b.role})
+                </div>
+                <div>
+                  {canUpload ? (
+                    <a href={`/uploads?business=${b.id}`}>Upload data</a>
+                  ) : (
+                    <span className="hint">Upload data (subscribe first)</span>
+                  )}
+                </div>
+                <div>
+                  {isRecoverableInPortal ? (
+                    <>
+                      <span className={status === "active" ? "status-ok" : "status-error"}>
+                        {status === "active" ? "subscribed" : `subscription ${status}`}
+                      </span>{" "}
+                      <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
+                        {busy ? "Opening…" : "Manage billing"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        {status === "canceled"
+                          ? "subscription canceled"
+                          : b.parent_business_id
+                            ? "payment incomplete"
+                            : "not subscribed"}
+                      </span>{" "}
+                      <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
+                        {busy
+                          ? "Starting…"
+                          : b.parent_business_id
+                            ? "Complete payment (€30/mo)"
+                            : "Subscribe"}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {/* Its own line, ahead of the more incidental actions below
+                    (delete/edit profile) — "we are missing the button to
+                    add more branches" was reported directly after it was
+                    buried at the end of one long run-on line of buttons;
+                    only shown for a standalone shop, since a branch can't
+                    itself have branches. */}
                 {isStandalone && (
-                  <>
-                    {" — "}
+                  <div>
                     <button
                       type="button"
                       onClick={() =>
                         setBranchFormOpenFor(branchFormOpenFor === b.id ? null : b.id)
                       }
                     >
-                      {branchFormOpenFor === b.id ? "Cancel" : "Add a branch (€30/mo)"}
+                      {branchFormOpenFor === b.id ? "Cancel" : "+ Add a branch (€30/mo)"}
                     </button>
-                  </>
+                  </div>
                 )}
                 {isStandalone && branchFormOpenFor === b.id && (
                   <form onSubmit={(e) => handleAddBranch(e, b.id)}>
@@ -388,6 +357,49 @@ export default function OnboardingPage() {
                     {branchError && <p className="status-error">{branchError}</p>}
                     <button type="submit" disabled={branchSubmitting}>
                       {branchSubmitting ? "Adding…" : "Add branch"}
+                    </button>
+                  </form>
+                )}
+                <div>
+                  {confirmingDeleteId === b.id ? (
+                    <span>
+                      Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
+                      your sales, products, and reports stay on record, but you&apos;ll lose access to
+                      them here.{" "}
+                      <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
+                        {deleting ? "Deleting…" : "Yes, delete"}
+                      </button>{" "}
+                      <button type="button" disabled={deleting} onClick={handleCancelDelete}>
+                        No
+                      </button>
+                    </span>
+                  ) : (
+                    <button type="button" onClick={() => handleRequestDelete(b.id)}>
+                      Delete this shop
+                    </button>
+                  )}{" "}
+                  <button type="button" onClick={() => handleOpenProfile(b)}>
+                    {profileFormOpenFor === b.id ? "Cancel" : "Edit profile"}
+                  </button>
+                </div>
+                {profileFormOpenFor === b.id && (
+                  <form onSubmit={(e) => handleSaveProfile(e, b.id)}>
+                    {PROFILE_FIELDS.map(({ key, label }) => (
+                      <div key={key}>
+                        <label htmlFor={`profile-${key}-${b.id}`}>{label}</label>
+                        <br />
+                        <input
+                          id={`profile-${key}-${b.id}`}
+                          value={profileForm[key] ?? ""}
+                          onChange={(e) =>
+                            setProfileForm((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                        />
+                      </div>
+                    ))}
+                    {profileError && <p className="status-error">{profileError}</p>}
+                    <button type="submit" disabled={profileSubmitting}>
+                      {profileSubmitting ? "Saving…" : "Save profile"}
                     </button>
                   </form>
                 )}
