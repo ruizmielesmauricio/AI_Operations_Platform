@@ -1,18 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiPost } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { ChatResponse } from "@/types";
 
-// Stage E19-E24 — PR-5.6's business-data Q&A lane. Single-turn for this
-// pass: each question is sent independently, with no conversation
-// history resent as model context, to keep token cost down (a known,
-// stated limitation — no "what about last month?" follow-up support
-// yet). The thread shown here is purely a local display list; nothing
-// about it is persisted server-side.
+// Stage E19-E24 — PR-5.6's business-data Q&A lane. Last-exchange-only
+// memory: each question resends just the immediately preceding
+// question/answer as conversation context, never the whole thread, to
+// keep per-request token cost bounded (a deliberate scope choice, see
+// app/ai/service.py::answer_question's own docstring) — a follow-up like
+// "what about last month?" now resolves correctly, but ORLA still has no
+// memory of anything further back than one exchange. The thread shown
+// here is purely a local display list; nothing about it is persisted
+// server-side.
 interface ChatMessage {
   role: "user" | "assistant";
   text: string;
@@ -37,6 +40,18 @@ export default function ChatPage() {
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  // Last-exchange-only memory — tracked separately from the displayed
+  // `messages` thread (which may also hold an error state) so exactly
+  // one real question/answer pair is ever resent as context, per the
+  // scope decision above. Reset whenever the selected business changes:
+  // a different business has entirely different data, so a prior
+  // exchange from another business would be actively wrong to carry
+  // into it, not just stale.
+  const [lastExchange, setLastExchange] = useState<{ question: string; answer: string; intent: string } | null>(null);
+
+  useEffect(() => {
+    setLastExchange(null);
+  }, [businessId]);
 
   async function handleSend() {
     const trimmed = question.trim();
@@ -48,11 +63,17 @@ export default function ChatPage() {
     setError(undefined);
 
     try {
-      const response = await apiPost<ChatResponse>(`/businesses/${businessId}/ai/chat`, { question: trimmed });
+      const response = await apiPost<ChatResponse>(`/businesses/${businessId}/ai/chat`, {
+        question: trimmed,
+        previous_question: lastExchange?.question,
+        previous_answer: lastExchange?.answer,
+        previous_intent: lastExchange?.intent,
+      });
       setMessages((prev) => [
         ...prev,
         { role: "assistant", text: response.answer, grounded: response.grounded, links: response.links },
       ]);
+      setLastExchange({ question: trimmed, answer: response.answer, intent: response.intent });
     } catch {
       setError("Could not reach the assistant. Your dashboard and reports are unaffected — try again shortly.");
     } finally {
@@ -94,8 +115,9 @@ export default function ChatPage() {
       <p className="hint">
         ORLA can answer questions about your revenue, retail or workshop performance, forecast, recommendations, or
         your latest report. Not a general chatbot — answers are grounded only in your own calculated data, and
-        questions outside that scope get a plain "I can't help with that" response rather than a guess. Each
-        question is independent — follow-ups like "what about last month?" aren't remembered yet.
+        questions outside that scope get a plain "I can't help with that" response rather than a guess. ORLA
+        remembers your last question and answer, so a follow-up like "what about the previous period?" works —
+        but only one exchange back, not the whole conversation.
       </p>
 
       {businesses.length > 1 && (

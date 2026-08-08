@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api/client";
+import { ApiError, apiGet, apiPost } from "@/lib/api/client";
+import { redirectToCheckout } from "@/lib/billing";
 import { AppNav } from "@/components/AppNav";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -132,6 +133,13 @@ export default function UploadsPage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Set on a 402 from either request_upload or run_import
+  // (app/billing/access.py::require_active_subscription) — a distinct
+  // banner with a real Subscribe action, not just another string in
+  // `error`, since "the subscription lapsed" is a whole-business state
+  // that deserves a fix, not just a retry.
+  const [subscriptionRequired, setSubscriptionRequired] = useState(false);
+  const [subscribing, setSubscribing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The upload currently going through mapping confirmation, if any.
@@ -269,11 +277,15 @@ export default function UploadsPage() {
       await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
       loadUploads(businessId);
       loadFreshness(businessId);
-    } catch {
-      setActionErrors((prev) => ({
-        ...prev,
-        [uploadId]: "Could not run the import. Try again, or check the file hasn't changed.",
-      }));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        setSubscriptionRequired(true);
+      } else {
+        setActionErrors((prev) => ({
+          ...prev,
+          [uploadId]: "Could not run the import. Try again, or check the file hasn't changed.",
+        }));
+      }
     } finally {
       setRunningUploadId(null);
     }
@@ -323,10 +335,25 @@ export default function UploadsPage() {
       if (fileInputRef.current) fileInputRef.current.value = "";
       loadUploads(businessId);
       await startMapping(id, entityType);
-    } catch {
-      setError("Upload failed. Make sure the file is a CSV, XLS, or XLSX export.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        setSubscriptionRequired(true);
+      } else {
+        setError("Upload failed. Make sure the file is a CSV, XLS, or XLSX export.");
+      }
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleSubscribeClick() {
+    if (!businessId) return;
+    setSubscribing(true);
+    try {
+      await redirectToCheckout(businessId);
+    } catch {
+      setSubscribing(false);
+      setError("Could not start checkout. Try again shortly.");
     }
   }
 
@@ -361,6 +388,15 @@ export default function UploadsPage() {
     <main>
       <AppNav businessId={businessId} />
       <h1>Upload data</h1>
+
+      {subscriptionRequired && (
+        <p className="status-error">
+          This shop&apos;s subscription isn&apos;t active, so uploads and imports are paused.{" "}
+          <button type="button" disabled={subscribing} onClick={handleSubscribeClick}>
+            {subscribing ? "Starting…" : "Subscribe"}
+          </button>
+        </p>
+      )}
 
       {freshness.length > 0 && (
         <ul>

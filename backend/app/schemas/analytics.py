@@ -57,6 +57,9 @@ class ReturnsOut(BaseModel):
 
 class FinancialPerformanceOut(BaseModel):
     period: PeriodOut
+    # The exact date range revenue.previous was computed over — see
+    # FinancialPerformanceSummary.previous_period's own comment for why.
+    previous_period: PeriodOut
     revenue: RevenueOut
     gross_margin: GrossMarginOut
     top_margin_products: list[ProductMarginOut]

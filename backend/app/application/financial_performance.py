@@ -34,6 +34,14 @@ _TOP_N = 5
 @dataclass(frozen=True)
 class FinancialPerformanceSummary:
     period: MetricPeriod
+    # The exact date range revenue.previous was computed over — live-
+    # reported gap: a chat follow-up asking "what is the last/previous
+    # period?" had no real dates anywhere in this payload to answer from,
+    # only the previous period's revenue figure, so an honest answer
+    # could say the number but never the actual dates. Was already
+    # computed locally below (needed to run the previous-period query)
+    # and simply never carried onto the summary before this.
+    previous_period: MetricPeriod
     revenue: RevenueTrend
     gross_margin: GrossMarginResult
     top_margin_products: list[ProductMarginRow]
@@ -128,6 +136,7 @@ def get_financial_performance(
 
     return FinancialPerformanceSummary(
         period=period,
+        previous_period=previous_period,
         revenue=revenue_trend,
         gross_margin=gross_margin,
         top_margin_products=top,

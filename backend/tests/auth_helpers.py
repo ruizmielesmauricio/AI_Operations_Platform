@@ -8,8 +8,12 @@ app.security.auth._jwks_client to hand back the public half instead of
 fetching a real JWKS document.
 """
 
+import uuid
+
 import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import sessionmaker
 
 _private_key = ec.generate_private_key(ec.SECP256R1())
 _public_key = _private_key.public_key()
@@ -38,3 +42,31 @@ def bearer_header(user_id: str, email: str) -> dict:
         algorithm="ES256",
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+def seed_active_subscription(engine: Engine, business_id: str) -> None:
+    """Directly inserts an active Subscription row, bypassing Stripe/
+    checkout entirely — for tests where an active subscription is a
+    precondition for whatever's actually under test (uploads/imports now
+    require one, per app/billing/access.py::require_active_subscription),
+    not the thing being tested itself. Opens its own short-lived session
+    against the same engine each tenant-isolation test file already
+    constructs, rather than requiring every call site to thread a session
+    through — mirrors this module's own bearer_header/patch_jwks style of
+    small, self-contained test utilities.
+    """
+    from app.models.subscription import Subscription
+
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    try:
+        session.add(
+            Subscription(
+                business_id=uuid.UUID(business_id),
+                stripe_customer_id=f"cus_test_{business_id}",
+                stripe_subscription_id=f"sub_test_{business_id}",
+                status="active",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()

@@ -12,6 +12,7 @@ from app.imports.exceptions import (
     ImportRecordNotReady,
     MappedColumnMissing,
 )
+from app.billing.access import require_active_subscription
 from app.models.membership import Membership
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.upload import UploadRepository
@@ -27,7 +28,12 @@ router = APIRouter(prefix="/businesses/{business_id}", tags=["imports"])
 @router.post("/uploads/{upload_id}/import", response_model=ImportRunResponse)
 def run_import(
     upload_id: uuid.UUID,
-    membership: Membership = Depends(get_current_membership),
+    # require_active_subscription — this is the actual data-processing
+    # trigger, the second (and last) real "creates new business value"
+    # entry point alongside app/api/uploads.py::request_upload. undo_import
+    # below stays on plain get_current_membership deliberately: fixing a
+    # mistake in data you already paid to import isn't creating new value.
+    membership: Membership = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ) -> ImportRunResponse:
     upload = UploadRepository(db).get_for_business(upload_id, membership.business_id)

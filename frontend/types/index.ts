@@ -4,6 +4,10 @@ export interface Business {
   template: string;
   timezone: string;
   role: string;
+  // null = a standalone/primary shop; set = a branch of that parent
+  // business, billed separately (see app/api/businesses.py's
+  // POST /businesses/{id}/branches).
+  parent_business_id: string | null;
 }
 
 export interface SubscriptionStatus {

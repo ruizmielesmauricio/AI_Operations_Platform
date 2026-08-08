@@ -92,6 +92,15 @@ _MAX_EXPLICIT_DATE_YEARS_FORWARD = 1
 _MIN_HORIZON_DAYS = 1
 _MAX_HORIZON_DAYS = 90
 _DEFAULT_HORIZON_DAYS = 7
+# Last-exchange-only conversation memory (see answer_question's own
+# docstring): how much of the previous answer's text is given to the
+# *classify* call specifically. Classify only needs enough to tell what
+# topic/period a follow-up is referring to, not the full text — kept
+# short to control the reasoning-token-budget risk this module already
+# hit once from a growing classify prompt (see _classify_intent's own
+# max_tokens comment). The *explain* call gets the full previous_answer,
+# uncapped here — it has a bigger budget and benefits from full fidelity.
+_CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS = 500
 
 _LANE = "business_qa"
 _PROVIDER = "openrouter"
@@ -146,8 +155,33 @@ class ClassifyResult:
 
 
 def answer_question(
-    db: Session, *, business_id: uuid.UUID, user_id: str, question: str, now: datetime | None = None
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    user_id: str,
+    question: str,
+    now: datetime | None = None,
+    previous_question: str | None = None,
+    previous_answer: str | None = None,
+    previous_intent: str | None = None,
 ) -> AnswerResult:
+    """`previous_question`/`previous_answer` are optional, last-exchange-
+    only conversation memory (not a full thread — the frontend resends
+    just the immediately preceding Q/A, never the whole session, to keep
+    per-request token cost bounded; a deliberate scope choice, not a
+    technical ceiling). Both None on the first question of a session, or
+    whenever the frontend has no prior exchange to send. Threaded into
+    both the classify and explain calls as real prior turns in the
+    `messages` array (not spliced into either system prompt as text) —
+    the standard, safest shape for giving a chat-completions API
+    conversational context, and it sidesteps any prompt-injection-style
+    risk a hand-built string insertion would carry.
+
+    `previous_intent` is the intent that answered the previous question
+    (echoed back from the prior AnswerResult.intent) — untrusted client
+    input, never used directly, only ever checked for membership in
+    _CONTINUABLE_INTENTS before being used to deterministically recover
+    an unresolved follow-up (see the out_of_scope branch below)."""
     resolved_now = now or datetime.now(timezone.utc)
 
     # Zero-cost path: an obvious "what does X mean?" question never
@@ -169,6 +203,7 @@ def answer_question(
     classify = _classify_intent(
         request_repo, business_id=business_id, user_id=user_id, question=question,
         business_timezone=business.timezone, now=resolved_now,
+        previous_question=previous_question, previous_answer=previous_answer,
     )
     intent = classify.intent
 
@@ -199,6 +234,23 @@ def answer_question(
                 intent="forecast", period=classify.period, start_date=classify.start_date, end_date=classify.end_date
             )
             intent = "forecast"
+        elif _looks_like_a_period_follow_up_question(question) and previous_intent in _CONTINUABLE_INTENTS:
+            # Second, narrower recovery net, same shape as the reorder
+            # one above: a "what/when was the previous/last period?"
+            # follow-up only makes sense in light of whatever was just
+            # discussed — recover to that exact intent (validated against
+            # the fixed _CONTINUABLE_INTENTS allow-list, never trusted as
+            # client input past that membership check) rather than
+            # guessing a default. No previous_intent, or one outside the
+            # allow-list (a lookup intent, or another out_of_scope/
+            # provider_unavailable/metric_definition turn) -> falls
+            # through to the same safe refusal as any other unresolved
+            # out_of_scope, never guessed.
+            classify = ClassifyResult(
+                intent=previous_intent, period=classify.period, start_date=classify.start_date,
+                end_date=classify.end_date,
+            )
+            intent = previous_intent
         else:
             return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
@@ -222,7 +274,8 @@ def answer_question(
     all_forecast_products = context.pop("_all_products_for_priority_list", None)
 
     answer_text = _generate_answer(
-        request_repo, business_id=business_id, user_id=user_id, question=question, context=context
+        request_repo, business_id=business_id, user_id=user_id, question=question, context=context,
+        previous_question=previous_question, previous_answer=previous_answer,
     )
     if answer_text is None:
         # Tagged "provider_unavailable", not the already-classified
@@ -236,7 +289,7 @@ def answer_question(
         # shown to the user was already correct.
         return AnswerResult(answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False)
 
-    result = validate_grounded(answer_text, context, question=question)
+    result = validate_grounded(answer_text, context, question=question, previous_answer=previous_answer)
     if not result.grounded:
         logger.warning(
             "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
@@ -321,6 +374,50 @@ def _looks_like_a_reorder_question(question: str) -> bool:
     unrelated product-reorder list appended."""
     lowered = question.lower()
     return any(keyword in lowered for keyword in _REORDER_KEYWORDS)
+
+
+# Intents safe to silently continue on an unresolved follow-up — every
+# one of these is a whole-topic aggregate where "same topic, a different
+# angle on it" is a safe assumption to make without the classify step's
+# own judgment. Deliberately excludes: metric_definition/out_of_scope/
+# provider_unavailable/usage_limit_reached (not real data topics to
+# continue); product_lookup/purchase_lookup/repair_lookup (continuing
+# one of these blindly would mean re-running a lookup with a stale
+# search_term and no new one — those already have their own
+# disambiguation flow via app/application/lookups.py, a silent intent
+# swap here would only make that worse, not better).
+_CONTINUABLE_INTENTS = frozenset(
+    {
+        "financial_performance",
+        "retail_operations",
+        "workshop_performance",
+        "forecast",
+        "findings_recommendations",
+        "category_breakdown",
+        "latest_report",
+    }
+)
+
+# Live-verified real, repeated bug: three separate transcripts, three
+# different phrasings ("what was the previous period?", "when was the
+# previous period?", "what is the last period?"), all classified
+# out_of_scope despite a clear prior exchange to resolve against — a
+# prompt-only fix (telling the classify model to infer the same intent
+# as the previous turn) held for the one exact phrasing it was tuned
+# against and failed to generalise to the others on this free-tier
+# model. This is the same "don't trust the model to reliably do this,
+# build a deterministic net instead" reasoning as the reorder recovery
+# above, extended to the one other question shape that's now shown up
+# three times independently.
+_PERIOD_FOLLOW_UP_KEYWORDS = (
+    "previous period", "last period", "prior period", "the period before",
+    "that period", "this period", "which period", "what period",
+)
+
+
+def _looks_like_a_period_follow_up_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _PERIOD_FOLLOW_UP_KEYWORDS)
 
 
 # Zero-cost — this is local formatting after the AI calls are already
@@ -653,7 +750,16 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     'forecast, recommendations, reports, or a specific product/purchase/repair — never invent an intent '
     "outside the list above. "
     'Use "default_recent" as the period unless the question clearly asks about last week, last month, or '
-    'names a specific date or date range (use "explicit_date" for that last case).'
+    'names a specific date or date range (use "explicit_date" for that last case). '
+    "If a previous question/answer in this conversation is shown to you: when the new question is a short "
+    'follow-up that only makes sense in light of it (a pronoun, "that", "those", "the previous period", '
+    '"and last month?", "why", "what about..."), it is almost always about the SAME topic as the previous '
+    "exchange — default to the SAME intent the previous answer was about, adjusting only the period/metric/"
+    "search_term the new wording implies, rather than falling back to \"out_of_scope\". For example, if the "
+    'previous answer was about revenue and the new question asks "what was the previous period?", classify '
+    'it "financial_performance" (its own data already includes both the current and previous-period figures) '
+    "rather than treating it as unrelated. Only ignore the previous exchange, and classify on the new "
+    "question's own merits, when it clearly stands alone or changes topic."
 )
 
 
@@ -664,13 +770,25 @@ def _today_in_timezone(business_timezone: str, now: datetime) -> date:
 def _classify_intent(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str,
     business_timezone: str, now: datetime,
+    previous_question: str | None = None, previous_answer: str | None = None,
 ) -> ClassifyResult:
     today = _today_in_timezone(business_timezone, now)
     system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat(), weekday=today.strftime("%A"))
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question},
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
+    if previous_question and previous_answer:
+        # Last-exchange-only memory, given as real prior turns rather than
+        # spliced into the system prompt as text — the standard shape for
+        # conversational context with a chat-completions API, and it
+        # avoids any prompt-injection-style string-insertion risk.
+        # previous_answer is truncated here specifically (not for the
+        # explain call below) because this module already hit a real
+        # regression once from the classify prompt growing too large for
+        # its reasoning-token budget (see this call's own max_tokens
+        # comment) — classify only needs enough of the prior answer to
+        # tell what was being discussed, not the full text.
+        messages.append({"role": "user", "content": previous_question})
+        messages.append({"role": "assistant", "content": previous_answer[:_CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS]})
+    messages.append({"role": "user", "content": question})
     try:
         # max_tokens=700, not the ~20-50 a plain classification would
         # need: the default model is a reasoning model that spends
@@ -745,17 +863,35 @@ def _parse_explicit_dates(raw_start: Any, raw_end: Any, *, today: date) -> tuple
 
 
 def _parse_intent_json(content: str | None, *, today: date) -> ClassifyResult:
+    """`content is None`, a JSON-decode failure, or a non-dict payload
+    all fall back to "out_of_scope" — but unlike a model genuinely
+    deciding a question is out of scope (a normal, silent outcome), each
+    of these means something went wrong upstream (the model didn't
+    respect response_format, ran out of its token budget before emitting
+    visible content, ...), so each is logged. Found live: this silence
+    made a real regression (a newly added fallback model returning
+    unparseable content) look identical to ordinary "not about this
+    business" refusals for every single question, with zero trace in the
+    logs to tell the two apart — this is the fix for that blind spot."""
     if content is None:
+        logger.warning("Classify call returned no content — provider likely exhausted its token budget")
         return ClassifyResult(intent="out_of_scope")
     try:
         data = json.loads(content)
     except (json.JSONDecodeError, TypeError):
+        logger.warning("Classify call returned non-JSON content, defaulting to out_of_scope: %r", content[:500])
         return ClassifyResult(intent="out_of_scope")
     if not isinstance(data, dict):
+        logger.warning("Classify call returned JSON that wasn't an object, defaulting to out_of_scope: %r", content[:500])
         return ClassifyResult(intent="out_of_scope")
 
     intent = data.get("intent")
     if intent not in ALLOWED_INTENTS:
+        if intent is not None:
+            # Present but not a recognised value — likely a hallucinated
+            # intent name, distinct from the model simply omitting the
+            # field (already covered by data.get returning None above).
+            logger.warning("Classify call returned an unrecognised intent %r, defaulting to out_of_scope", intent)
         intent = "out_of_scope"
 
     period = data.get("period")
@@ -829,13 +965,20 @@ _EXPLAIN_SYSTEM_PROMPT_PREFIX = f"{_ORLA_CONSTITUTION}\n\n{_ORLA_PERSONALITY}\n\
 
 
 def _generate_answer(
-    request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict
+    request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict,
+    previous_question: str | None = None, previous_answer: str | None = None,
 ) -> str | None:
     system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + json.dumps(context, default=str)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question},
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
+    if previous_question and previous_answer:
+        # Same last-exchange-only shape as _classify_intent above, given
+        # as real prior turns — full previous_answer here, not truncated,
+        # since the explain call already has a larger token budget and
+        # this is exactly where natural conversational recall matters
+        # (e.g. correctly restating a figure it already gave).
+        messages.append({"role": "user", "content": previous_question})
+        messages.append({"role": "assistant", "content": previous_answer})
+    messages.append({"role": "user", "content": question})
     try:
         # Same reasoning-token headroom rationale as _classify_intent
         # above; raised from 500 after a live fire-test run showed a

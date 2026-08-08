@@ -47,11 +47,31 @@ class Settings(BaseSettings):
     openrouter_model: str = "openai/gpt-oss-20b:free"
     # Comma-separated OpenRouter model ids tried, in order, if the primary
     # model fails or times out (05_AI_Architecture.md's "fallback
-    # behaviour"). Both also verified compliant with data_collection=deny
-    # — currently prone to free-tier shared-pool rate-limiting (expected
-    # for a free model, not a bug), which is exactly what a fallback
-    # chain is for.
-    openrouter_fallback_models: str = "google/gemma-4-31b-it:free,inclusionai/ling-3.0-tiny:free"
+    # behaviour"). Capped at 2 fallbacks (3 models total, including the
+    # primary): OpenRouter's API itself rejects a `models` array longer
+    # than 3 with a 400 — live-verified hitting this exact limit after
+    # first trying 4 (also defended in code — see app/ai/client.py's
+    # _MAX_MODELS_PER_REQUEST).
+    #
+    # Every candidate here was live-tested end-to-end against this app's
+    # ACTUAL request shape (data_collection=deny + response_format=
+    # json_object, both set on every call) before being added — a real
+    # regression was caught doing this the first time: several
+    # plausible-looking free models on OpenRouter's public catalog
+    # (nvidia/nemotron-3-nano-30b-a3b:free, poolside/laguna-s-2.1:free)
+    # 404 outright under data_collection=deny ("No endpoints found
+    # matching your data policy (Free model training)" — i.e. that
+    # provider's free tier requires allowing training on the data, which
+    # this app's own privacy stance forbids), and the model that had been
+    # sitting here since before this fix (inclusionai/ling-3.0-tiny:free)
+    # 400s on every classify call specifically, because it doesn't
+    # support structured-outputs mode at all — a pre-existing, silent gap
+    # this investigation surfaced, not something introduced here.
+    # cohere/north-mini-code:free is the replacement, confirmed live to
+    # return clean, valid JSON under both restrictions. Re-verify before
+    # relying on this list long-term — OpenRouter's free catalog, and
+    # which providers permit data_collection=deny, both change over time.
+    openrouter_fallback_models: str = "google/gemma-4-31b-it:free,cohere/north-mini-code:free"
     # PR-5.5 — per-tenant AI usage limit, enforced server-side. Raised
     # from 30 to 200 for the testing/pilot phase, per direct instruction:
     # the configured model is the `:free` OpenRouter tier (see
@@ -72,6 +92,13 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_id: str = ""
+    # A branch (Business.parent_business_id set) gets its own separate
+    # Subscription row/Stripe subscription at this discounted price,
+    # rather than a shared quantity line item on the primary shop's
+    # subscription — reuses the exact same checkout/webhook/cancel flow
+    # already built and tested for the primary price, just a different
+    # price id (see app/billing/service.py::start_checkout).
+    stripe_branch_price_id: str = ""
 
     resend_api_key: str = ""
 

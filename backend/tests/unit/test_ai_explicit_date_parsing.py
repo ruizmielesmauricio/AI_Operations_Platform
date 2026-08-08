@@ -5,11 +5,28 @@ check, exactly the same "fail closed, never guess" posture as every
 other field _parse_intent_json already validated before this pass.
 """
 
+import logging
 from datetime import date
+
+import pytest
 
 from app.ai.service import ClassifyResult, _parse_explicit_dates, _parse_intent_json
 
 _TODAY = date(2026, 6, 24)
+
+
+@pytest.fixture
+def _reenable_service_logger(monkeypatch):
+    """Alembic's own CLI calls logging.config.fileConfig(...), which
+    defaults to disable_existing_loggers=True — a real, live-encountered
+    gotcha: any integration test that runs a migration (this codebase's
+    conftest does, per-test) silently disables app.ai.service's logger
+    for the rest of the pytest session, so a caplog assertion here would
+    pass or fail for the wrong reason depending on run order/what ran
+    first, rather than on whether _parse_intent_json actually logs.
+    Forces it back on for the duration of one test; monkeypatch restores
+    the previous value afterward, same as every other fixture here."""
+    monkeypatch.setattr(logging.getLogger("app.ai.service"), "disabled", False)
 
 
 def test_valid_single_date_is_accepted():
@@ -107,3 +124,48 @@ def test_parse_intent_json_rejects_unknown_intent():
     content = '{"intent": "delete_everything", "period": null}'
     result = _parse_intent_json(content, today=_TODAY)
     assert result.intent == "out_of_scope"
+
+
+# --- logging the malformed-output cases -------------------------------
+# Real regression found live: a newly added fallback model returning
+# unparseable content silently defaulted to out_of_scope with zero trace
+# in the logs — identical, from the outside, to the model genuinely
+# deciding a question wasn't about this business. Each of these cases is
+# now logged so the two are distinguishable during live debugging.
+
+
+def test_parse_intent_json_logs_a_warning_when_content_is_none(caplog, _reenable_service_logger):
+    with caplog.at_level("WARNING"):
+        result = _parse_intent_json(None, today=_TODAY)
+    assert result.intent == "out_of_scope"
+    assert any("no content" in record.message for record in caplog.records)
+
+
+def test_parse_intent_json_logs_a_warning_on_non_json_content(caplog, _reenable_service_logger):
+    with caplog.at_level("WARNING"):
+        result = _parse_intent_json("this is not json", today=_TODAY)
+    assert result.intent == "out_of_scope"
+    assert any("non-JSON" in record.message for record in caplog.records)
+
+
+def test_parse_intent_json_logs_a_warning_on_a_json_array_instead_of_an_object(caplog, _reenable_service_logger):
+    with caplog.at_level("WARNING"):
+        result = _parse_intent_json("[1, 2, 3]", today=_TODAY)
+    assert result.intent == "out_of_scope"
+    assert any("wasn't an object" in record.message for record in caplog.records)
+
+
+def test_parse_intent_json_logs_a_warning_on_an_unrecognised_intent(caplog, _reenable_service_logger):
+    with caplog.at_level("WARNING"):
+        result = _parse_intent_json('{"intent": "delete_everything", "period": null}', today=_TODAY)
+    assert result.intent == "out_of_scope"
+    assert any("unrecognised intent" in record.message for record in caplog.records)
+
+
+def test_parse_intent_json_does_not_log_when_the_model_genuinely_says_out_of_scope(caplog, _reenable_service_logger):
+    # A real, valid "not about this business" verdict must stay silent —
+    # logging every legitimate refusal would drown out the cases above.
+    with caplog.at_level("WARNING"):
+        result = _parse_intent_json('{"intent": "out_of_scope", "period": null}', today=_TODAY)
+    assert result.intent == "out_of_scope"
+    assert caplog.records == []

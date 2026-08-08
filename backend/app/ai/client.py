@@ -6,10 +6,32 @@ service.py and app/imports/r2_client.py <-> service.py splits already
 used in this codebase.
 """
 
+import time
+
 import httpx
 
 from app.ai.exceptions import AIProviderError
 from app.settings.config import get_settings
+
+# How many times to retry the WHOLE request (every model in the chain,
+# not just one) after a 429 from every model in it. Live-verified during
+# a fire test: under sustained load, OpenRouter's own per-request
+# model-chain fallback (the `models` list below) can still exhaust every
+# configured free model in a single attempt, but a short retry often
+# succeeds — OpenRouter's routing isn't perfectly sticky, so a second
+# attempt a couple of seconds later can land on a different, less-
+# congested backend instance for the same free models. Bounded to one
+# retry with a short fixed backoff (NOT the `retry_after_seconds` an
+# OpenRouter 429 body reports, which can be 20+ seconds — too slow for a
+# synchronous chat response the user is actively waiting on); if that
+# also fails, this still degrades to the existing graceful
+# "unavailable" fallback (PR-5.4), never a raised, unhandled error.
+_RATE_LIMIT_RETRY_ATTEMPTS = 1
+_RATE_LIMIT_RETRY_BACKOFF_SECONDS = 2.0
+# OpenRouter's own hard limit on the `models` fallback array — live-
+# verified via a real 400 ("'models' array must have 3 items or fewer")
+# after this codebase briefly shipped a 4-model chain.
+_MAX_MODELS_PER_REQUEST = 3
 
 
 def _headers() -> dict[str, str]:
@@ -44,6 +66,11 @@ def chat_completion(
 
     fallbacks = [m.strip() for m in settings.openrouter_fallback_models.split(",") if m.strip()]
     models = [settings.openrouter_model, *fallbacks]
+    # OpenRouter's own API rejects a `models` array longer than 3 with a
+    # 400 (live-verified) — capped here defensively, not just by keeping
+    # app/settings/config.py's own list short, so a future edit that adds
+    # one more fallback can't silently reintroduce every call failing.
+    models = models[:_MAX_MODELS_PER_REQUEST]
 
     body: dict = {
         "model": settings.openrouter_model,
@@ -71,20 +98,40 @@ def chat_completion(
     if response_format is not None:
         body["response_format"] = response_format
 
-    try:
-        response = httpx.post(
-            f"{settings.openrouter_base_url}/chat/completions",
-            headers=_headers(),
-            json=body,
-            timeout=settings.ai_request_timeout_seconds,
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        # The response body carries OpenRouter's actual error detail
-        # (bad model id, no credits, auth failure, ...) — str(exc) alone
-        # is just the status line, not enough to debug a live failure.
-        raise AIProviderError(f"{exc}: {exc.response.text}") from exc
-    except httpx.HTTPError as exc:
-        raise AIProviderError(str(exc)) from exc
+    last_exc: Exception | None = None
+    for attempt in range(_RATE_LIMIT_RETRY_ATTEMPTS + 1):
+        if attempt > 0:
+            time.sleep(_RATE_LIMIT_RETRY_BACKOFF_SECONDS)
+        try:
+            response = httpx.post(
+                f"{settings.openrouter_base_url}/chat/completions",
+                headers=_headers(),
+                json=body,
+                timeout=settings.ai_request_timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if exc.response.status_code != 429 or attempt == _RATE_LIMIT_RETRY_ATTEMPTS:
+                # Not a rate limit (a bad model id, no credits, auth
+                # failure, ...) — retrying wouldn't help, fail now. The
+                # response body carries OpenRouter's actual error detail;
+                # str(exc) alone is just the status line, not enough to
+                # debug a live failure.
+                raise AIProviderError(f"{exc}: {exc.response.text}") from exc
+            # 429 with a retry attempt left — every model in `models`
+            # was rate-limited on this attempt, but OpenRouter's routing
+            # isn't perfectly sticky, so a short pause and a fresh
+            # attempt across the same model list can still land on a
+            # backend that's since freed up.
+        except httpx.HTTPError as exc:
+            # A network-level failure (timeout, connection error) — not
+            # provider-side congestion, so retrying on the same schedule
+            # wouldn't be expected to behave differently; fail immediately
+            # rather than doubling the user's wait for no real benefit.
+            raise AIProviderError(str(exc)) from exc
 
-    return response.json()
+    # Unreachable in practice (every loop iteration either returns or
+    # raises), kept only so a type checker sees every path covered.
+    raise AIProviderError(str(last_exc))

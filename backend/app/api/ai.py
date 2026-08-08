@@ -20,5 +20,9 @@ def chat(
     # it catches AIProviderError internally and returns a friendly
     # fallback AnswerResult) — this route stays thin and always returns
     # 200 with a message the frontend can render directly.
-    result = answer_question(db, business_id=membership.business_id, user_id=membership.user_id, question=body.question)
+    result = answer_question(
+        db, business_id=membership.business_id, user_id=membership.user_id, question=body.question,
+        previous_question=body.previous_question, previous_answer=body.previous_answer,
+        previous_intent=body.previous_intent,
+    )
     return ChatResponse(answer=result.answer, intent=result.intent, grounded=result.grounded, links=list(result.links))

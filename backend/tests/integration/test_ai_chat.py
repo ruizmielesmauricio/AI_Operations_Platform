@@ -606,3 +606,204 @@ def test_a_correct_numbered_list_answer_is_not_rejected_for_its_own_list_markers
 
     assert result.intent == "findings_recommendations"
     assert result.grounded is True
+
+
+# --- last-exchange-only conversation memory ----------------------------
+# Direct request: give ORLA memory of the immediately preceding question/
+# answer only (never a full thread) so a follow-up like "what was the
+# previous period?" can be resolved, without resending the whole
+# conversation on every call.
+
+
+def test_previous_exchange_is_threaded_into_both_classify_and_explain_as_prior_turns(
+    db_session, business_id, monkeypatch
+):
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _classify_response("financial_performance")
+        return _canned_response("The previous period's revenue was €80,603.30, as I mentioned.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What was the previous period?", now=_NOW,
+        previous_question="How's my revenue doing?",
+        previous_answer="Your revenue was €49,986.73, down from €80,603.30 the period before.",
+    )
+
+    assert result.grounded is True  # the restated €80,603.30 must not be flagged as invented
+
+    classify_messages, explain_messages = calls[0], calls[1]
+    # Both calls carry the prior exchange as real user/assistant turns,
+    # not spliced into the system prompt text.
+    assert classify_messages[1] == {"role": "user", "content": "How's my revenue doing?"}
+    assert classify_messages[2]["role"] == "assistant"
+    assert classify_messages[3] == {"role": "user", "content": "What was the previous period?"}
+    assert explain_messages[1] == {"role": "user", "content": "How's my revenue doing?"}
+    assert explain_messages[2] == {
+        "role": "assistant",
+        "content": "Your revenue was €49,986.73, down from €80,603.30 the period before.",
+    }
+    assert explain_messages[3] == {"role": "user", "content": "What was the previous period?"}
+
+
+def test_classify_call_truncates_the_previous_answer_but_explain_gets_the_full_text(
+    db_session, business_id, monkeypatch
+):
+    long_previous_answer = "X" * 2000  # well past _CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS (500)
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _classify_response("financial_performance")
+        return _canned_response("Your revenue this period is €100.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="Tell me more.", now=_NOW,
+        previous_question="How's my revenue doing?", previous_answer=long_previous_answer,
+    )
+
+    classify_messages, explain_messages = calls[0], calls[1]
+    assert len(classify_messages[2]["content"]) == 500
+    assert len(explain_messages[2]["content"]) == 2000
+
+
+def test_without_a_previous_exchange_the_messages_are_unchanged_from_before_memory_existed(
+    db_session, business_id, monkeypatch
+):
+    # Regression guard — previous_question/previous_answer are optional
+    # and both None by default; every question that isn't a follow-up
+    # (including the very first one in a session) must produce the exact
+    # same two-message shape as before this feature existed.
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _classify_response("financial_performance")
+        return _canned_response("Your revenue this period is €100.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(db_session, business_id=business_id, user_id="user-1", question="How's my revenue doing?", now=_NOW)
+
+    classify_messages, explain_messages = calls[0], calls[1]
+    assert len(classify_messages) == 2
+    assert len(explain_messages) == 2
+
+
+def test_a_lone_previous_question_with_no_previous_answer_is_treated_as_no_prior_exchange(
+    db_session, business_id, monkeypatch
+):
+    # Half-supplied memory (e.g. a frontend bug, or the very first
+    # message where only one side could ever exist) must not produce a
+    # malformed messages array — treated the same as no memory at all.
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _classify_response("financial_performance")
+        return _canned_response("Your revenue this period is €100.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="How's my revenue doing?", now=_NOW,
+        previous_question="Some earlier question", previous_answer=None,
+    )
+
+    classify_messages, explain_messages = calls[0], calls[1]
+    assert len(classify_messages) == 2
+    assert len(explain_messages) == 2
+
+
+# --- deterministic period-follow-up recovery ----------------------------
+# Live-verified real bug, reported three times with three different
+# phrasings ("what was the previous period?", "when was the previous
+# period?", "what is the last period?") — a prompt-only "infer the same
+# intent as the previous turn" instruction held for the one exact
+# phrasing it was tuned against and failed to generalise to the others
+# on this free-tier model. Fixed with a deterministic recovery net, same
+# shape as the reorder recovery above.
+
+
+def test_period_follow_up_recovers_to_the_previous_turns_intent(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("The previous period ran from 20 to 26 July 2026.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What is the last period?", now=_NOW,
+        previous_question="How's my revenue doing?", previous_answer="Your revenue was €100.00.",
+        previous_intent="financial_performance",
+    )
+
+    assert result.intent == "financial_performance"
+
+
+def test_period_follow_up_does_not_recover_without_a_previous_intent(db_session, business_id, monkeypatch):
+    # No previous_intent at all (e.g. the very first question in a
+    # session, or a page refresh that reset memory) — nothing to recover
+    # to, must fall through to the same safe refusal as before.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What is the last period?", now=_NOW
+    )
+
+    assert result.intent == "out_of_scope"
+
+
+def test_period_follow_up_ignores_a_previous_intent_outside_the_continuable_allow_list(
+    db_session, business_id, monkeypatch
+):
+    # previous_intent is untrusted client input — a value outside the
+    # fixed allow-list (here, a lookup intent that shouldn't be blindly
+    # continued) must never be used, even if a period-shaped question
+    # was asked right after it.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What is the last period?", now=_NOW,
+        previous_question="How much Chain Lube do I have?", previous_answer="You have 12 units.",
+        previous_intent="product_lookup",
+    )
+
+    assert result.intent == "out_of_scope"
+
+
+def test_a_genuine_topic_change_after_a_continuable_intent_is_not_swallowed_by_recovery(
+    db_session, business_id, monkeypatch
+):
+    # The recovery net only ever fires when the question itself looks
+    # like a period follow-up — a question that doesn't match those
+    # keywords, and that classify genuinely refuses, must stay refused
+    # even with a perfectly valid previous_intent sitting right there.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What's the weather like today?", now=_NOW,
+        previous_question="How's my revenue doing?", previous_answer="Your revenue was €100.00.",
+        previous_intent="financial_performance",
+    )
+
+    assert result.intent == "out_of_scope"

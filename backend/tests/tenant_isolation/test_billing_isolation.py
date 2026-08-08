@@ -76,7 +76,7 @@ def test_checkout_session_uses_verified_email_not_client_input(client_and_sessio
     captured = {}
 
     def fake_create_checkout_session(
-        *, business_id, business_email, success_url, cancel_url, existing_stripe_customer_id=None
+        *, business_id, business_email, success_url, cancel_url, price_id, existing_stripe_customer_id=None
     ):
         captured["business_email"] = business_email
         return SimpleNamespace(url="https://checkout.stripe.com/fake")
@@ -107,7 +107,7 @@ def test_checkout_session_reuses_existing_stripe_customer_on_resubscribe(client_
     captured = {}
 
     def fake_create_checkout_session(
-        *, business_id, business_email, success_url, cancel_url, existing_stripe_customer_id=None
+        *, business_id, business_email, success_url, cancel_url, price_id, existing_stripe_customer_id=None
     ):
         captured["existing_stripe_customer_id"] = existing_stripe_customer_id
         return SimpleNamespace(url="https://checkout.stripe.com/fake")
@@ -188,3 +188,121 @@ def test_require_active_subscription_gate(client_and_session):
     db.close()
 
     assert test_client.get(f"/__test_paid_only__/{business_id}", headers=headers).status_code == 200
+
+
+# --- branch billing: separate subscription at the discounted price -------
+# A branch (Business.parent_business_id set) gets its own Subscription
+# row, same as any standalone business — the only difference is which
+# Stripe price checkout charges. app/billing/service.py::start_checkout
+# is the one place that decision is made.
+
+
+def test_checkout_uses_the_standard_price_for_a_standalone_business(client_and_session, monkeypatch):
+    test_client, _ = client_and_session
+    headers = bearer_header("user-a", "a@example.com")
+    business_id = test_client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()["id"]
+
+    captured = {}
+
+    def fake_create_checkout_session(
+        *, business_id, business_email, success_url, cancel_url, price_id, existing_stripe_customer_id=None
+    ):
+        captured["price_id"] = price_id
+        return SimpleNamespace(url="https://checkout.stripe.com/fake")
+
+    monkeypatch.setattr(client, "create_checkout_session", fake_create_checkout_session)
+    monkeypatch.setenv("STRIPE_PRICE_ID", "price_standard")
+    monkeypatch.setenv("STRIPE_BRANCH_PRICE_ID", "price_branch")
+    from app.settings.config import get_settings
+
+    get_settings.cache_clear()
+
+    response = test_client.post(f"/businesses/{business_id}/billing/checkout-session", headers=headers)
+    assert response.status_code == 200
+    assert captured["price_id"] == "price_standard"
+    get_settings.cache_clear()
+
+
+def test_checkout_uses_the_discounted_branch_price_for_a_branch(client_and_session, monkeypatch):
+    test_client, _ = client_and_session
+    headers = bearer_header("user-a", "a@example.com")
+    primary_id = test_client.post("/businesses", json={"name": "Text Bike Shop"}, headers=headers).json()["id"]
+    branch = test_client.post(f"/businesses/{primary_id}/branches", json={"name": "Test Shop"}, headers=headers)
+    assert branch.status_code == 201
+    branch_id = branch.json()["id"]
+
+    captured = {}
+
+    def fake_create_checkout_session(
+        *, business_id, business_email, success_url, cancel_url, price_id, existing_stripe_customer_id=None
+    ):
+        captured["price_id"] = price_id
+        return SimpleNamespace(url="https://checkout.stripe.com/fake")
+
+    monkeypatch.setattr(client, "create_checkout_session", fake_create_checkout_session)
+    monkeypatch.setenv("STRIPE_PRICE_ID", "price_standard")
+    monkeypatch.setenv("STRIPE_BRANCH_PRICE_ID", "price_branch")
+    from app.settings.config import get_settings
+
+    get_settings.cache_clear()
+
+    response = test_client.post(f"/businesses/{branch_id}/billing/checkout-session", headers=headers)
+    assert response.status_code == 200
+    assert captured["price_id"] == "price_branch"
+    get_settings.cache_clear()
+
+
+# --- POST /businesses/{id}/branches ---------------------------------------
+
+
+def test_owner_can_add_a_branch(client_and_session):
+    test_client, _ = client_and_session
+    headers = bearer_header("user-a", "a@example.com")
+    primary_id = test_client.post("/businesses", json={"name": "Text Bike Shop"}, headers=headers).json()["id"]
+
+    response = test_client.post(f"/businesses/{primary_id}/branches", json={"name": "Test Shop"}, headers=headers)
+    assert response.status_code == 201
+    assert response.json()["parent_business_id"] == primary_id
+
+
+def test_adding_a_branch_does_not_block_the_owner_from_ever_having_created_their_primary_shop(client_and_session):
+    # The real end-to-end scenario this feature exists for: one owner,
+    # one standalone shop, one branch under it — a POST /businesses for
+    # a *second standalone* shop must still be rejected, but the branch
+    # itself must never have been blocked by that same limit.
+    test_client, _ = client_and_session
+    headers = bearer_header("user-a", "a@example.com")
+    primary_id = test_client.post("/businesses", json={"name": "Text Bike Shop"}, headers=headers).json()["id"]
+    test_client.post(f"/businesses/{primary_id}/branches", json={"name": "Test Shop"}, headers=headers)
+
+    second_standalone = test_client.post("/businesses", json={"name": "Another Shop"}, headers=headers)
+    assert second_standalone.status_code == 409
+
+    listing = test_client.get("/businesses", headers=headers).json()
+    assert len(listing) == 2
+
+
+def test_a_non_owner_cannot_add_a_branch(client_and_session):
+    test_client, _ = client_and_session
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_other = bearer_header("user-b", "b@example.com")
+    primary_id = test_client.post("/businesses", json={"name": "Text Bike Shop"}, headers=headers_owner).json()["id"]
+
+    response = test_client.post(
+        f"/businesses/{primary_id}/branches", json={"name": "Test Shop"}, headers=headers_other
+    )
+    assert response.status_code == 403
+
+
+def test_cannot_add_a_branch_to_a_business_you_are_not_a_member_of(client_and_session):
+    """The core tenant-isolation guarantee (PR-6.1/6.2, ED-008) extended to
+    branch creation: a stranger can't add a branch under a business they
+    have no membership in at all, even by guessing a real id.
+    """
+    test_client, _ = client_and_session
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = test_client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()["id"]
+
+    response = test_client.post(f"/businesses/{business_a}/branches", json={"name": "Branch"}, headers=headers_b)
+    assert response.status_code == 403

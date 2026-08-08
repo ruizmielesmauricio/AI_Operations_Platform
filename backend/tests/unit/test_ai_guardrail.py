@@ -174,3 +174,27 @@ def test_validate_grounded_without_a_question_behaves_exactly_as_before():
     answer = "Revenue was €100.00."
     result = validate_grounded(answer, context)
     assert result.grounded is True
+
+
+def test_validate_grounded_accepts_a_number_orla_itself_stated_in_the_previous_answer():
+    # Last-exchange-only conversation memory: a follow-up question can
+    # make a correct new answer naturally restate a figure ORLA already
+    # gave last turn — that number was already grounded when it was
+    # first produced, so restating it isn't a fresh claim needing
+    # re-proof against this turn's (possibly unrelated) context.
+    context = {"forecast": {"horizon_days": 14}}
+    previous_answer = "Revenue for the previous period was €80,603.30."
+    answer = "As I mentioned, the previous period's revenue was €80,603.30."
+    result = validate_grounded(answer, context, previous_answer=previous_answer)
+    assert result.grounded is True
+    assert result.unsupported_claims == []
+
+
+def test_validate_grounded_still_rejects_an_invented_number_even_with_a_previous_answer_supplied():
+    # Additive only — must not blanket-allow every number in the answer.
+    context = {"forecast": {"horizon_days": 14}}
+    previous_answer = "Revenue for the previous period was €80,603.30."
+    answer = "You're on track for €999,999.99 next month."
+    result = validate_grounded(answer, context, previous_answer=previous_answer)
+    assert result.grounded is False
+    assert "999,999.99" in result.unsupported_claims

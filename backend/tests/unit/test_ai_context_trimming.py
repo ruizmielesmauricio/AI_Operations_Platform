@@ -1,8 +1,10 @@
 from app.ai.service import (
+    _CONTINUABLE_INTENTS,
     _MAX_CONTEXT_ROWS,
     _MAX_PRIORITY_LIST_DISPLAY,
     _append_truncation_disclosure,
     _build_priority_order_list,
+    _looks_like_a_period_follow_up_question,
     _looks_like_a_reorder_question,
     _trim_findings,
     _trim_forecast,
@@ -113,6 +115,35 @@ def test_looks_like_a_reorder_question_matches_run_out_of_stock_phrasings():
     assert _looks_like_a_reorder_question("What is likely to run out of stock during the next two weeks?") is True
     assert _looks_like_a_reorder_question("Which products are at risk of a stock out?") is True
     assert _looks_like_a_reorder_question("Is anything close to a stockout?") is True
+
+
+def test_looks_like_a_period_follow_up_question_matches_the_three_live_reported_phrasings():
+    # Three separate real transcripts, three different phrasings, all
+    # classified out_of_scope despite an obvious prior exchange to
+    # resolve against — these keywords back answer_question's
+    # out_of_scope -> previous_intent recovery.
+    assert _looks_like_a_period_follow_up_question("What was the previous period?") is True
+    assert _looks_like_a_period_follow_up_question("When was the previous period?") is True
+    assert _looks_like_a_period_follow_up_question("What is the last period?") is True
+
+
+def test_looks_like_a_period_follow_up_question_does_not_match_an_unrelated_question():
+    assert _looks_like_a_period_follow_up_question("How's my revenue doing?") is False
+    assert _looks_like_a_period_follow_up_question("What's the weather like today?") is False
+
+
+def test_continuable_intents_excludes_lookup_and_zero_cost_intents():
+    # The allow-list a recovered previous_intent must be a member of —
+    # lookup intents have their own disambiguation flow and shouldn't be
+    # blindly continued; metric_definition/out_of_scope/
+    # provider_unavailable/usage_limit_reached aren't real data topics.
+    assert "financial_performance" in _CONTINUABLE_INTENTS
+    assert "product_lookup" not in _CONTINUABLE_INTENTS
+    assert "purchase_lookup" not in _CONTINUABLE_INTENTS
+    assert "repair_lookup" not in _CONTINUABLE_INTENTS
+    assert "metric_definition" not in _CONTINUABLE_INTENTS
+    assert "out_of_scope" not in _CONTINUABLE_INTENTS
+    assert "provider_unavailable" not in _CONTINUABLE_INTENTS
 
 
 def test_build_priority_order_list_orders_by_the_input_order_and_skips_zero_quantity():

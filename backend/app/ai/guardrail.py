@@ -135,17 +135,20 @@ def flatten_numeric_values(context: Any) -> set[Decimal]:
     return values
 
 
-def validate_grounded(answer_text: str, context: Any, *, question: str | None = None) -> GuardrailResult:
+def validate_grounded(
+    answer_text: str, context: Any, *, question: str | None = None, previous_answer: str | None = None
+) -> GuardrailResult:
     """PR-5.3's actual enforcement: every numeric claim in `answer_text`
-    must equal some number found anywhere in `context`, OR in the user's
-    own `question` (Decimal equality ignores trailing-zero formatting
-    differences, e.g. Decimal("39.9") == Decimal("39.90") — but not
-    rounding: "€11,908" will not match a true 11907.76, by design. Fails
-    closed on any ambiguity rather than silently accepting a rounded/
-    reworded figure — better to occasionally reject a legitimate answer
-    than let an invented number through). A claim that fails to parse as
-    a number is skipped, not flagged (it wasn't a numeric claim at all —
-    e.g. a list marker or a stray word fragment the regex still matched).
+    must equal some number found anywhere in `context`, in the user's own
+    `question`, or in ORLA's own `previous_answer` (Decimal equality
+    ignores trailing-zero formatting differences, e.g. Decimal("39.9") ==
+    Decimal("39.90") — but not rounding: "€11,908" will not match a true
+    11907.76, by design. Fails closed on any ambiguity rather than
+    silently accepting a rounded/reworded figure — better to occasionally
+    reject a legitimate answer than let an invented number through). A
+    claim that fails to parse as a number is skipped, not flagged (it
+    wasn't a numeric claim at all — e.g. a list marker or a stray word
+    fragment the regex still matched).
 
     `question` is optional and additive only — a number the user
     themselves supplied (e.g. "if I had €2,000 to spend...") is a safe
@@ -156,10 +159,19 @@ def validate_grounded(answer_text: str, context: Any, *, question: str | None = 
     own stated budget figure was being rejected as "unsupported" purely
     because that number only ever existed in the question, never in the
     fetched context.
+
+    `previous_answer` is the same idea, one exchange back: single-turn
+    "last exchange only" memory (app/ai/service.py::answer_question) lets
+    a follow-up question naturally reference a figure ORLA itself just
+    stated ("that €80,603.30 figure...") — that number was already
+    validated as grounded when it was first produced, so restating it
+    isn't a new claim that needs re-proving against `context`.
     """
     allowed = flatten_numeric_values(context)
-    if question:
-        for raw in extract_numeric_claims(question):
+    for extra_text in (question, previous_answer):
+        if not extra_text:
+            continue
+        for raw in extract_numeric_claims(extra_text):
             parsed = _parse_claim(raw)
             if parsed is not None:
                 _add(allowed, parsed)

@@ -16,6 +16,7 @@ from app.billing.status import (
     SUBSCRIPTION_LIFECYCLE_EVENTS,
     derive_subscription_status,
 )
+from app.models.business import Business
 from app.repositories.subscription import ProcessedStripeEventRepository, SubscriptionRepository
 from app.settings.config import get_settings
 
@@ -24,6 +25,15 @@ logger = logging.getLogger(__name__)
 
 def start_checkout(*, db: Session, business_id: uuid.UUID, business_email: str) -> str:
     settings = get_settings()
+    # A branch (Business.parent_business_id set) checks out at the
+    # discounted branch price, in its own separate Stripe subscription —
+    # not a shared line item on the primary shop's subscription. This is
+    # the one place that decision is made; app/billing/client.py just
+    # takes whatever price_id it's given.
+    business = db.get(Business, business_id)
+    is_branch = business is not None and business.parent_business_id is not None
+    price_id = settings.stripe_branch_price_id if is_branch else settings.stripe_price_id
+
     # Reuse the existing Stripe Customer on a resubscribe (e.g. after a
     # cancellation) rather than letting Checkout mint a new one each time —
     # keeps one Customer per business in Stripe, matching the one-row-per-
@@ -32,11 +42,37 @@ def start_checkout(*, db: Session, business_id: uuid.UUID, business_email: str) 
     session = client.create_checkout_session(
         business_id=business_id,
         business_email=business_email,
+        price_id=price_id,
         existing_stripe_customer_id=existing.stripe_customer_id if existing else None,
         success_url=f"{settings.app_base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{settings.app_base_url}/billing/cancel",
     )
     return session.url
+
+
+def cancel_subscription(db: Session, *, business_id: uuid.UUID) -> None:
+    """Called from app/api/businesses.py's DELETE route when a business is
+    soft-deleted — stops billing immediately rather than leaving a live
+    Stripe subscription running against an archived business. A no-op,
+    not an error, when the business never had a subscription at all, or
+    only ever reached checkout.session.completed without a subscription
+    id yet (upsert_from_stripe leaves stripe_subscription_id None until a
+    customer.subscription.* event arrives) — nothing to cancel in either
+    case. Updates the local row's status immediately rather than waiting
+    on the customer.subscription.deleted webhook round trip: the business
+    is about to disappear from every listing regardless, but keeping
+    Subscription.status accurate is still worth the one extra write, and
+    the webhook (once it does arrive) is idempotent via
+    ProcessedStripeEventRepository, so this doesn't risk a duplicate
+    state change.
+    """
+    subscription = SubscriptionRepository(db).get_by_business_id(business_id)
+    if subscription is None or subscription.stripe_subscription_id is None:
+        return
+    client.cancel_subscription(subscription.stripe_subscription_id)
+    SubscriptionRepository(db).upsert_from_stripe(
+        business_id=business_id, stripe_customer_id=subscription.stripe_customer_id, status="canceled"
+    )
 
 
 def start_portal_session(*, stripe_customer_id: str) -> str:

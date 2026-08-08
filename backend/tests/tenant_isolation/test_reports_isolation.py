@@ -81,7 +81,10 @@ def test_cannot_fetch_another_business_s_report_by_id(client):
     assert own_response.status_code == 200
 
     # Business B cannot fetch it even by guessing/reusing the ID, scoped
-    # under its own business_id in the URL.
-    cross_business = _create_business(client, headers_b, "Shop B 2")
-    cross_response = client.get(f"/businesses/{cross_business['id']}/reports/{report_id}", headers=headers_b)
+    # under its own business_id in the URL. A third user/business, not a
+    # second one for user B — one shop per account now, see
+    # test_business_isolation.py's own test of that limit.
+    headers_c = bearer_header("user-c", "c@example.com")
+    cross_business = _create_business(client, headers_c, "Shop C")
+    cross_response = client.get(f"/businesses/{cross_business['id']}/reports/{report_id}", headers=headers_c)
     assert cross_response.status_code == 404
