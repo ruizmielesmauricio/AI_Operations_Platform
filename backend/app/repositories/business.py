@@ -197,3 +197,47 @@ def update_business_profile(db: Session, *, business: Business, updates: dict) -
     db.commit()
     db.refresh(business)
     return business
+
+
+def get_business_group(db: Session, *, business_id: uuid.UUID) -> list[Business] | None:
+    """The full standalone-shop-plus-branches family a business belongs
+    to, given ANY member of it (the primary shop's own id, or one of its
+    branch ids) — symmetric, since a branch's parent_business_id always
+    points at the same primary shop regardless of which one you start
+    from. Returns None if business_id doesn't resolve to any live
+    (non-deleted) business at all; otherwise always includes business_id's
+    own row.
+
+    Deleted businesses are excluded — an archived branch shouldn't
+    silently reappear inside a combined "All branches" dashboard view,
+    consistent with it staying hidden from every other business listing
+    once deleted (app/repositories/business.py::list_businesses_for_user's
+    own default).
+
+    This is exactly the same set backend/app/api/businesses.py's plain
+    GET /businesses already returns for that owner (the one-standalone-
+    shop-per-account limit guarantees a user never has more than one
+    primary shop, so "everything this user owns" and "this business's
+    group" are the same set) — kept as its own explicit function rather
+    than relying on that overlap, since group resolution needs to work
+    from ANY member's id, not just "list everything the current caller
+    owns."
+    """
+    business = db.get(Business, business_id)
+    if business is None or business.deleted_at is not None:
+        return None
+    parent_id = business.parent_business_id or business.id
+    parent = db.get(Business, parent_id)
+    if parent is None or parent.deleted_at is not None:
+        # The parent itself was deleted but this branch wasn't (shouldn't
+        # normally happen — deleting a shop doesn't cascade to its
+        # branches — but if it does, fall back to just this one business
+        # rather than silently returning nothing for a business that
+        # itself is still live).
+        return [business]
+    branches = (
+        db.query(Business)
+        .filter(Business.parent_business_id == parent.id, Business.deleted_at.is_(None))
+        .all()
+    )
+    return [parent, *branches]

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet } from "@/lib/api/client";
+import { ApiError, apiGet } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
@@ -49,6 +49,15 @@ export default function DashboardPage() {
 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  // Direct request: combine every section across this business's whole
+  // standalone-shop-plus-branches group into one view. Only offered when
+  // there's more than one business at all — the one-shop-per-account
+  // limit guarantees `businesses` here IS exactly that group already (no
+  // separate "which businesses form a group" question to ask). Backend
+  // additionally requires every business in the group to share one
+  // timezone (app/application/business_group.py) — surfaced as a plain
+  // 409 error below, not silently worked around.
+  const [allBranches, setAllBranches] = useState(false);
 
   const [financial, setFinancial] = useState<FinancialPerformance | null>(null);
   const [retail, setRetail] = useState<RetailOperations | null>(null);
@@ -84,33 +93,45 @@ export default function DashboardPage() {
     setErrors({});
 
     apiGet<FinancialPerformance>(
-      `/businesses/${businessId}/analytics/financial-performance${periodQuery(startDate, endDate, financialCategoryId)}`
+      `/businesses/${businessId}/analytics/financial-performance${periodQuery(startDate, endDate, financialCategoryId, allBranches)}`
     )
       .then(setFinancial)
-      .catch(() => setErrors((prev) => ({ ...prev, financial: "Could not load financial performance." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, financial: sectionErrorMessage(err, "Could not load financial performance.") }))
+      );
 
     apiGet<RetailOperations>(
-      `/businesses/${businessId}/analytics/retail-operations${periodQuery(startDate, endDate, retailCategoryId)}`
+      `/businesses/${businessId}/analytics/retail-operations${periodQuery(startDate, endDate, retailCategoryId, allBranches)}`
     )
       .then(setRetail)
-      .catch(() => setErrors((prev) => ({ ...prev, retail: "Could not load retail operations." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, retail: sectionErrorMessage(err, "Could not load retail operations.") }))
+      );
 
-    apiGet<WorkshopPerformance>(`/businesses/${businessId}/analytics/workshop-performance${periodQuery(startDate, endDate)}`)
+    apiGet<WorkshopPerformance>(
+      `/businesses/${businessId}/analytics/workshop-performance${periodQuery(startDate, endDate, undefined, allBranches)}`
+    )
       .then(setWorkshop)
-      .catch(() => setErrors((prev) => ({ ...prev, workshop: "Could not load workshop performance." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, workshop: sectionErrorMessage(err, "Could not load workshop performance.") }))
+      );
 
     apiGet<Findings>(
-      `/businesses/${businessId}/analytics/findings${periodQuery(startDate, endDate, findingsCategoryId)}`
+      `/businesses/${businessId}/analytics/findings${periodQuery(startDate, endDate, findingsCategoryId, allBranches)}`
     )
       .then(setFindings)
-      .catch(() => setErrors((prev) => ({ ...prev, findings: "Could not load findings." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, findings: sectionErrorMessage(err, "Could not load findings.") }))
+      );
 
     // Alerts aren't period-scoped (they're the current active set), unlike
-    // the four analytics endpoints above.
+    // the four analytics endpoints above — and not combined across
+    // branches either: an alert is already tied to one business's own
+    // stock, so "all branches" has no extra meaning for it here.
     apiGet<Alert[]>(`/businesses/${businessId}/alerts`)
       .then(setAlerts)
       .catch(() => setErrors((prev) => ({ ...prev, alerts: "Could not load alerts." })));
-  }, [businessId, startDate, endDate, financialCategoryId, retailCategoryId, findingsCategoryId]);
+  }, [businessId, startDate, endDate, financialCategoryId, retailCategoryId, findingsCategoryId, allBranches]);
 
   // Forecast is forward-looking from "today," not the start/end period
   // filter above — it depends only on the chosen horizon (plus category,
@@ -119,10 +140,15 @@ export default function DashboardPage() {
     if (!businessId) return;
     setErrors((prev) => ({ ...prev, forecast: undefined }));
     const categoryQs = forecastCategoryId ? `&category_id=${forecastCategoryId}` : "";
-    apiGet<Forecast>(`/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}${categoryQs}`)
+    const allBranchesQs = allBranches ? "&all_branches=true" : "";
+    apiGet<Forecast>(
+      `/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}${categoryQs}${allBranchesQs}`
+    )
       .then(setForecast)
-      .catch(() => setErrors((prev) => ({ ...prev, forecast: "Could not load forecast." })));
-  }, [businessId, horizonDays, forecastCategoryId]);
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, forecast: sectionErrorMessage(err, "Could not load forecast.") }))
+      );
+  }, [businessId, horizonDays, forecastCategoryId, allBranches]);
 
   if (checkingSession) {
     return (
@@ -160,13 +186,27 @@ export default function DashboardPage() {
         <div>
           <label htmlFor="business">Business</label>
           <br />
-          <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
+          <select
+            id="business"
+            value={businessId}
+            onChange={(e) => setBusinessId(e.target.value)}
+            disabled={allBranches}
+          >
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
             ))}
-          </select>
+          </select>{" "}
+          <label htmlFor="all-branches">
+            <input
+              id="all-branches"
+              type="checkbox"
+              checked={allBranches}
+              onChange={(e) => setAllBranches(e.target.checked)}
+            />{" "}
+            Combine all branches into one view
+          </label>
         </div>
       )}
 
@@ -678,13 +718,23 @@ function AlertsSection({ alerts, error }: { alerts: Alert[]; error?: string }) {
 
 // --- Page-local helpers ------------------------------------------------
 
-function periodQuery(start: string, end: string, categoryId?: string): string {
+function periodQuery(start: string, end: string, categoryId?: string, allBranches?: boolean): string {
   const params = new URLSearchParams();
   if (start) params.set("start", start);
   if (end) params.set("end", end);
   if (categoryId) params.set("category_id", categoryId);
+  if (allBranches) params.set("all_branches", "true");
   const qs = params.toString();
   return qs ? `?${qs}` : "";
+}
+
+// The backend's own detail message matters here more than usual — a 409
+// ("these branches don't share one timezone") or 403 ("not a member of
+// every business in this group") is specific and actionable, not just
+// "something failed," so it's surfaced directly rather than replaced with
+// the generic per-section fallback.
+function sectionErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
 }
 
 function dedupeByProduct(rows: ProductMarginRow[]): ProductMarginRow[] {
