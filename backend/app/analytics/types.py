@@ -40,6 +40,29 @@ class ProductPeriodAggregate:
 
 
 @dataclass(frozen=True)
+class ProductPurchaseCostAggregate:
+    """One product's purchase activity within a date range, as summed from
+    inventory_movements (reason="purchase"). Feeds category/product
+    "expenses" (app/analytics/category.py) — deliberately separate from
+    ProductPeriodAggregate's cogs, which is cost of goods *sold*, not
+    purchased; these are two different figures by design (see
+    docs/governance/11_Development_Roadmap.md's category-breakdown entry).
+
+    quantity_received is every purchase row's quantity, regardless of
+    whether unit_cost is known (most purchase rows predate that column —
+    see InventoryMovement.unit_cost's own docstring). cost only sums rows
+    where unit_cost was captured; quantity_received_with_known_cost lets a
+    caller compute a completeness ratio (PR-3.5-style disclosure) rather
+    than silently understating expenses for a period with sparse cost data.
+    """
+
+    product_id: uuid.UUID
+    quantity_received: int
+    quantity_received_with_known_cost: int
+    cost: Decimal
+
+
+@dataclass(frozen=True)
 class RepairPeriodTotals:
     """Business-wide totals for completed repairs in a period, as summed
     from production_events — no per-product breakdown (a repair isn't tied

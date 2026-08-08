@@ -114,12 +114,25 @@ def test_known_tax_amount_explains_a_total_that_would_otherwise_mismatch():
     assert result.unit_price == Decimal("12.29")  # 36.86 / 3 — total still wins for revenue
 
 
-def test_zero_or_negative_quantity_is_rejected():
+def test_zero_quantity_is_rejected():
     columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3}
-    for qty in ("0", "-2"):
-        result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "9.99", qty, "50.00"], columns))
-        assert isinstance(result, RejectedRow)
-        assert result.code == "non_positive_quantity"
+    result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "9.99", "0", "50.00"], columns))
+    assert isinstance(result, RejectedRow)
+    assert result.code == "zero_quantity"
+
+
+def test_negative_quantity_is_accepted_as_a_return_not_rejected():
+    # Real POS exports commonly mix returns into the sales file as
+    # negative-quantity rows (Gate B testing, synthetic_sales.csv) —
+    # these must be accepted and flagged, not discarded.
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3}
+    result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "85.77", "-1", "-105.50"], columns))
+    assert isinstance(result, ParsedSaleRow)
+    assert result.is_return is True
+    assert result.quantity == -1
+    # total_amount / quantity with both negative divides to a positive
+    # per-unit price — the refund amount, not a negated one.
+    assert result.unit_price == Decimal("105.50")
 
 
 def test_garbled_cost_price_is_never_a_rejection():

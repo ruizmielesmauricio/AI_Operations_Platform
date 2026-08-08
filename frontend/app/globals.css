@@ -61,3 +61,43 @@ td {
   text-align: left;
   padding: 0.25rem 0.75rem 0.25rem 0;
 }
+
+/* Stage E19-E24's chat thread — a plain message list, matching this
+   prototype's deliberate no-framework minimalism (see AppNav's own
+   comment) rather than a full chat-bubble UI. */
+.chat-thread {
+  margin: 1.5rem 0;
+}
+
+.chat-user {
+  color: #57606a;
+}
+
+.chat-assistant {
+  margin-bottom: 1rem;
+}
+
+/* Reports page's "Download PDF" (frontend/app/reports/[id]/page.tsx) —
+   uses the browser's own print-to-PDF rather than a new client-side PDF
+   library, so this stylesheet is what actually makes that produce a
+   clean document: no nav/controls, no page-break-splitting a table row
+   or a chart in half. */
+.no-print {
+  display: block;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  main.wide {
+    max-width: 100%;
+  }
+  section {
+    break-inside: avoid-page;
+  }
+  table,
+  tr {
+    break-inside: avoid;
+  }
+}

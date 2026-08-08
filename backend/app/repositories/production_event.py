@@ -93,6 +93,48 @@ class ProductionEventRepository:
         ).all()
         return {(ref, description, price_charged, labour_cost) for ref, description, price_charged, labour_cost in rows}
 
+    def find_repairs(
+        self,
+        business_id: uuid.UUID,
+        *,
+        repair_reference: str | None = None,
+        description_contains: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 10,
+    ) -> list[ProductionEvent]:
+        """Backs ORLA's repair_lookup chat intent ("how much did repair
+        JOB-364 cost" / "what repairs did I do last week") — event_type
+        is always fixed to "repair" here, unlike this repository's other
+        read paths, which are business-wide across both event types; a
+        lookup should never accidentally surface a production batch.
+        Tries `repair_reference` first (case-insensitive substring, same
+        reasoning as InventoryMovementRepository.list_purchases's
+        purchase_reference match); `description_contains` is a fallback
+        for when no reference was named — repairs have no product_id or
+        reliable customer name to search by instead
+        (ProductionEvent.customer_id is NULL on every imported repair, no
+        match key from free text in a file). Most-recent-first by
+        opened_at, capped at `limit` for the same reason every other new
+        lookup method in this pass is capped.
+        """
+        conditions = [ProductionEvent.business_id == business_id, ProductionEvent.event_type == "repair"]
+        if repair_reference is not None:
+            needle = repair_reference.strip().upper()
+            conditions.append(func.upper(ProductionEvent.repair_reference).like(f"%{needle}%"))
+        if description_contains is not None:
+            needle = description_contains.strip().lower()
+            conditions.append(func.lower(ProductionEvent.description).like(f"%{needle}%"))
+        if start is not None:
+            conditions.append(ProductionEvent.opened_at >= start)
+        if end is not None:
+            conditions.append(ProductionEvent.opened_at < end)
+        return list(
+            self.session.scalars(
+                select(ProductionEvent).where(*conditions).order_by(ProductionEvent.opened_at.desc()).limit(limit)
+            )
+        )
+
     def aggregate_completed_repairs_in_range(
         self, business_id: uuid.UUID, start: datetime, end: datetime
     ) -> RepairPeriodTotals:

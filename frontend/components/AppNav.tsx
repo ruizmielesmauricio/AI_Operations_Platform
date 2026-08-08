@@ -15,6 +15,10 @@ export function AppNav({ businessId }: { businessId?: string }) {
       <a href={`/dashboard${suffix}`}>Dashboard</a>
       {" · "}
       <a href={`/uploads${suffix}`}>Upload data</a>
+      {" · "}
+      <a href={`/reports${suffix}`}>Reports</a>
+      {" · "}
+      <a href={`/chat${suffix}`}>Ask ORLA</a>
     </nav>
   );
 }

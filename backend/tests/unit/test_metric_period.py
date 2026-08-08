@@ -1,7 +1,14 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.analytics.period import group_amounts_by_local_date, resolve_period
+import pytest
+
+from app.analytics.period import (
+    compute_report_period,
+    group_amounts_by_local_date,
+    is_report_period_due,
+    resolve_period,
+)
 
 
 def test_default_window_is_trailing_30_days_ending_today_in_business_timezone():
@@ -88,3 +95,82 @@ def test_group_amounts_ignores_rows_outside_the_window():
         rows, "UTC", window_start=date(2026, 1, 5), window_end=date(2026, 1, 5)
     )
     assert buckets == {date(2026, 1, 5): Decimal("3.00")}
+
+
+# --- compute_report_period (Stage D17/D18) --------------------------------
+
+
+def test_weekly_report_period_covers_the_previous_completed_week():
+    # 2026-08-06 is a Thursday; the most recent Monday is 2026-08-03.
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc)
+    start, end = compute_report_period("UTC", "weekly", now=now)
+    assert start == date(2026, 7, 27)
+    assert end == date(2026, 8, 2)
+
+
+def test_weekly_report_period_on_a_monday_still_covers_last_week_not_this_one():
+    now = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)  # a Monday
+    start, end = compute_report_period("UTC", "weekly", now=now)
+    assert start == date(2026, 7, 27)
+    assert end == date(2026, 8, 2)
+
+
+def test_monthly_report_period_covers_the_previous_calendar_month():
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc)
+    start, end = compute_report_period("UTC", "monthly", now=now)
+    assert start == date(2026, 7, 1)
+    assert end == date(2026, 7, 31)
+
+
+def test_monthly_report_period_on_the_1st_still_covers_last_month():
+    now = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    start, end = compute_report_period("UTC", "monthly", now=now)
+    assert start == date(2026, 8, 1)
+    assert end == date(2026, 8, 31)
+
+
+def test_report_period_uses_business_local_date_not_utc():
+    # 23:30 UTC on a Sunday is already Monday in Tokyo (fixed UTC+9) — the
+    # weekly period boundary must follow the business's own calendar, not UTC's.
+    now = datetime(2026, 8, 2, 23, 30, tzinfo=timezone.utc)  # Sunday in UTC, Monday in Tokyo
+    start, end = compute_report_period("Asia/Tokyo", "weekly", now=now)
+    assert start == date(2026, 7, 27)
+    assert end == date(2026, 8, 2)
+
+
+def test_report_period_rejects_an_unknown_report_type():
+    with pytest.raises(ValueError):
+        compute_report_period("UTC", "daily", now=datetime(2026, 8, 6, tzinfo=timezone.utc))
+
+
+# --- is_report_period_due (Stage D17/D18) ---------------------------------
+
+
+def test_period_is_not_due_before_generation_hour_on_the_transition_day():
+    # Weekly period ends 2026-08-02 (Sunday) -> due Monday 2026-08-03 08:00.
+    # 07:59 that Monday: not yet due.
+    now = datetime(2026, 8, 3, 7, 59, tzinfo=timezone.utc)
+    assert is_report_period_due("UTC", date(2026, 8, 2), now=now) is False
+
+
+def test_period_is_due_exactly_at_the_generation_hour():
+    now = datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc)
+    assert is_report_period_due("UTC", date(2026, 8, 2), now=now) is True
+
+
+def test_period_stays_due_days_later_recovery_case():
+    # The tick was down for a few days — must still recognize the period
+    # as due once it eventually runs, not just on the exact generation day.
+    now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+    assert is_report_period_due("UTC", date(2026, 8, 2), now=now) is True
+
+
+def test_period_due_check_uses_business_local_time_not_utc():
+    # 2026-08-02 22:30 UTC is already 2026-08-03 07:30 in Tokyo (UTC+9) —
+    # local generation hour (08:00) hasn't arrived yet even though the UTC
+    # calendar date has already rolled to the 3rd.
+    now = datetime(2026, 8, 2, 22, 30, tzinfo=timezone.utc)
+    assert is_report_period_due("Asia/Tokyo", date(2026, 8, 2), now=now) is False
+
+    later = datetime(2026, 8, 2, 23, 1, tzinfo=timezone.utc)  # 08:01 Tokyo time
+    assert is_report_period_due("Asia/Tokyo", date(2026, 8, 2), now=later) is True

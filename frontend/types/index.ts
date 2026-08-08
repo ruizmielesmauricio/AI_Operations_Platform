@@ -97,6 +97,37 @@ export interface Period {
   end: string;
 }
 
+// --- Product categories (dashboard filters + reports breakdown table) --
+
+export interface ProductCategory {
+  id: string;
+  name: string;
+}
+
+export interface CategoryBreakdownRow {
+  category_id: string | null;
+  // "Uncategorized" for the synthetic no-category bucket.
+  category_name: string;
+  revenue: string;
+  // Purchase cost (unit cost x qty received) — NOT cost of goods sold, a
+  // different, already-existing figure this deliberately doesn't reuse.
+  expenses: string;
+  // Null when this category had zero purchase quantity in the period at
+  // all; otherwise the % of that quantity whose cost is actually known
+  // (most purchases before this feature shipped have no per-purchase
+  // cost captured — see backend InventoryMovement.unit_cost).
+  expenses_data_coverage_pct: string | null;
+  // Current stock on hand x SELL price — deliberately different from
+  // Retail Operations' inventory_value stat, which stays at cost.
+  stock_value: string;
+  products_excluded_from_stock_value: number;
+}
+
+export interface CategoryBreakdown {
+  period: Period;
+  rows: CategoryBreakdownRow[];
+}
+
 export interface Revenue {
   current: string;
   previous: string;
@@ -125,6 +156,21 @@ export interface ProductMarginRow {
   revenue: string;
   gross_profit: string;
   gross_margin_pct: string;
+  // Null when the product has no category set (the overwhelming majority
+  // until categories are actively imported via an upload's optional
+  // "category" column).
+  category_name: string | null;
+}
+
+export interface Returns {
+  gross_revenue: string;
+  returns_amount: string;
+  return_count: number;
+  // Always equal to revenue.current above — this just decomposes it
+  // explicitly (gross minus returns) rather than leaving returns
+  // silently netted in with no visibility.
+  net_revenue: string;
+  return_rate_pct: string | null;
 }
 
 export interface FinancialPerformance {
@@ -134,6 +180,7 @@ export interface FinancialPerformance {
   top_margin_products: ProductMarginRow[];
   bottom_margin_products: ProductMarginRow[];
   products_excluded_from_ranking: number;
+  returns: Returns;
 }
 
 export interface ProductSalesRow {
@@ -141,6 +188,7 @@ export interface ProductSalesRow {
   name: string;
   units_sold: number;
   revenue: string;
+  category_name: string | null;
 }
 
 export interface StockCoverRow {
@@ -150,6 +198,7 @@ export interface StockCoverRow {
   units_sold_in_period: number;
   cover_days: string | null;
   revenue_in_period: string;
+  category_name: string | null;
 }
 
 export interface DeadStockRow {
@@ -157,6 +206,7 @@ export interface DeadStockRow {
   name: string;
   stock_on_hand: number;
   value_at_cost: string | null;
+  category_name: string | null;
 }
 
 export interface InventoryValue {
@@ -267,6 +317,7 @@ export interface ProductDemandForecast {
   // current stock) — does not model supplier lead time or safety stock.
   suggested_reorder_quantity: number;
   days_of_cover_at_forecast_rate: string | null;
+  category_name: string | null;
 }
 
 export interface Forecast {
@@ -274,4 +325,80 @@ export interface Forecast {
   revenue: RevenueForecast;
   products: ProductDemandForecast[];
   products_excluded_insufficient_data: number;
+}
+
+// --- Stage D17/D18 — scheduled weekly/monthly reports -----------------
+//
+// The report payload (app/application/report.py::_assemble_payload)
+// reuses the exact same dashboard Pydantic schemas to serialize each
+// section, so it's reusing the exact same TypeScript shapes here too —
+// a report and the live dashboard can never disagree about a number's
+// shape.
+
+export interface ReportSummary {
+  id: string;
+  report_type: "weekly" | "monthly";
+  period_start: string;
+  period_end: string;
+  status: string;
+  created_at: string;
+  expires_at: string | null;
+}
+
+export interface ReportExecutiveSummary {
+  narrative: string[];
+  transactions: number;
+  average_sale: string | null;
+  low_stock_count: number;
+  dead_stock_count: number;
+  top_recommendations: Recommendation[];
+}
+
+export interface ReportInventoryHealth {
+  fast_movers: StockCoverRow[];
+  slow_movers: StockCoverRow[];
+  // A simplification, stated on the page: current inventory value, not a
+  // true period-average — see app/analytics/retail.py::compute_inventory_turnover.
+  turnover_ratio: string | null;
+}
+
+export interface ReportPayload {
+  business_name: string;
+  business_type: string;
+  report_type: "weekly" | "monthly";
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  executive_summary: ReportExecutiveSummary;
+  financial_performance: FinancialPerformance;
+  retail_operations: RetailOperations;
+  inventory_health: ReportInventoryHealth;
+  forecast: Forecast;
+  findings: Findings;
+  // Omitted (null), not faked, for any business whose template isn't
+  // "bicycle_shop" (PR-8.3's "sections omitted, not faked when
+  // inapplicable").
+  workshop_performance: WorkshopPerformance | null;
+  // Never filtered (unlike the dashboard's per-section category
+  // dropdowns) — a report always shows every category.
+  category_breakdown: CategoryBreakdown;
+}
+
+export interface ReportDetail extends ReportSummary {
+  payload: ReportPayload | null;
+}
+
+// --- Stage E19-E24 — AI business Q&A chat -------------------------------
+
+export interface ChatResponse {
+  answer: string;
+  intent: string;
+  // False when the AI's raw answer failed the PR-5.3 grounding guardrail
+  // and `answer` is a safe fallback message instead.
+  grounded: boolean;
+  // A fixed, small set of app pages ("dashboard" | "reports") the answer
+  // references. Rendered as real <a> elements by the chat page itself —
+  // never by treating any part of `answer` (which may include
+  // model-generated text) as HTML.
+  links: string[];
 }

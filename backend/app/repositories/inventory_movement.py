@@ -1,12 +1,15 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
+from app.analytics.types import ProductPurchaseCostAggregate
 from app.models.inventory_movement import InventoryMovement
 
 _STOCK_AFFECTING_REASONS = ("sale", "purchase", "return", "production_consumption", "production_output")
+_LOOKUP_LIMIT = 10
 
 
 class InventoryMovementRepository:
@@ -25,6 +28,7 @@ class InventoryMovementRepository:
         purchase_reference: str | None = None,
         event_date: date | None = None,
         resulting_quantity_on_hand: int | None = None,
+        unit_cost: Decimal | None = None,
     ) -> InventoryMovement:
         # Flush only — app/imports/importer.py owns the single commit.
         movement = InventoryMovement(
@@ -37,6 +41,7 @@ class InventoryMovementRepository:
             purchase_reference=purchase_reference,
             event_date=event_date,
             resulting_quantity_on_hand=resulting_quantity_on_hand,
+            unit_cost=unit_cost,
         )
         self.session.add(movement)
         self.session.flush()
@@ -112,6 +117,95 @@ class InventoryMovementRepository:
             totals[product_id] = totals.get(product_id, 0) + quantity_delta
 
         return totals
+
+    def list_purchases(
+        self,
+        business_id: uuid.UUID,
+        *,
+        product_id: uuid.UUID | None = None,
+        purchase_reference: str | None = None,
+        start: date | None = None,
+        end: date | None = None,
+        limit: int = _LOOKUP_LIMIT,
+    ) -> list[InventoryMovement]:
+        """Backs ORLA's purchase_lookup chat intent ("what did I order
+        under PO-123" / "when did X get delivered") — a single purchase
+        is just one reason="purchase" row (purchase_reference/event_date/
+        quantity_delta are all stored per-row already), never a separate
+        query before now. Every filter is optional and AND-ed together;
+        the caller picks whichever combination the question actually
+        gave (a reference, a product, a date range, or several). A
+        `purchase_reference` filter is a case-insensitive substring
+        match, not exact — real references get typo'd/abbreviated in
+        conversation more than product SKUs do. Most-recent-first,
+        capped at `limit` for the same prompt-size/UX reason
+        ProductRepository.search_by_name_or_sku is capped.
+        """
+        conditions = [InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase"]
+        if product_id is not None:
+            conditions.append(InventoryMovement.product_id == product_id)
+        if purchase_reference is not None:
+            needle = purchase_reference.strip().upper()
+            conditions.append(func.upper(InventoryMovement.purchase_reference).like(f"%{needle}%"))
+        if start is not None:
+            conditions.append(InventoryMovement.event_date >= start)
+        if end is not None:
+            conditions.append(InventoryMovement.event_date <= end)
+        return list(
+            self.session.scalars(
+                select(InventoryMovement)
+                .where(*conditions)
+                .order_by(InventoryMovement.event_date.desc())
+                .limit(limit)
+            )
+        )
+
+    def aggregate_purchase_cost_by_product_in_range(
+        self, business_id: uuid.UUID, start: date, end: date
+    ) -> list[ProductPurchaseCostAggregate]:
+        """Per-product purchase quantity/cost totals for [start, end]
+        (both inclusive — event_date is a plain calendar date, same
+        convention as list_purchases above, not the half-open UTC-
+        datetime convention MetricPeriod uses for timestamp columns).
+        Feeds category/product "expenses" (app/analytics/category.py).
+
+        cost only sums rows where unit_cost is known — most purchase
+        rows predate that column (see InventoryMovement.unit_cost's own
+        docstring), so silently treating an unknown cost as zero would
+        understate expenses without any way to tell. quantity_received
+        counts every row regardless; quantity_received_with_known_cost
+        lets the caller report how much of that quantity's cost is
+        actually reflected in `cost`, mirroring the same known/unknown
+        completeness split ProductPeriodAggregate already uses for COGS.
+        """
+        known_cost = InventoryMovement.unit_cost.isnot(None)
+        line_cost = InventoryMovement.quantity_delta * InventoryMovement.unit_cost
+
+        rows = self.session.execute(
+            select(
+                InventoryMovement.product_id,
+                func.sum(InventoryMovement.quantity_delta),
+                func.sum(case((known_cost, InventoryMovement.quantity_delta), else_=0)),
+                func.sum(case((known_cost, line_cost), else_=0)),
+            )
+            .where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.reason == "purchase",
+                InventoryMovement.event_date >= start,
+                InventoryMovement.event_date <= end,
+            )
+            .group_by(InventoryMovement.product_id)
+        ).all()
+
+        return [
+            ProductPurchaseCostAggregate(
+                product_id=product_id,
+                quantity_received=int(quantity_received or 0),
+                quantity_received_with_known_cost=int(quantity_known or 0),
+                cost=Decimal(cost or 0),
+            )
+            for product_id, quantity_received, quantity_known, cost in rows
+        ]
 
     def bulk_delete_by_reference_ids(self, sale_item_ids: list[uuid.UUID]) -> None:
         if not sale_item_ids:

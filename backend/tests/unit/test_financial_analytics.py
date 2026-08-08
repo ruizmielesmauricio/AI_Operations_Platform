@@ -1,7 +1,12 @@
 import uuid
 from decimal import Decimal
 
-from app.analytics.financial import compute_gross_margin, compute_revenue_change, rank_products_by_margin
+from app.analytics.financial import (
+    compute_gross_margin,
+    compute_returns_summary,
+    compute_revenue_change,
+    rank_products_by_margin,
+)
 from app.analytics.types import ProductPeriodAggregate
 
 _P1, _P2, _P3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -138,6 +143,28 @@ def test_revenue_change_with_zero_previous_period_has_no_meaningful_percentage()
     assert trend.change_pct is None
 
 
+def test_returns_summary_computes_gross_from_net_plus_returns():
+    # net_revenue (Sale.total_amount summed as-is) already has returns
+    # netted in — gross is derived from it, not queried separately.
+    summary = compute_returns_summary(net_revenue=Decimal("990.01"), returns_amount=Decimal("9.99"), return_count=1)
+    assert summary.net_revenue == Decimal("990.01")
+    assert summary.returns_amount == Decimal("9.99")
+    assert summary.gross_revenue == Decimal("1000.00")
+    assert summary.return_count == 1
+    assert summary.return_rate_pct == Decimal("1.0")
+
+
+def test_returns_summary_with_no_returns_has_zero_rate_not_none():
+    summary = compute_returns_summary(net_revenue=Decimal("1000.00"), returns_amount=Decimal("0"), return_count=0)
+    assert summary.gross_revenue == Decimal("1000.00")
+    assert summary.return_rate_pct == Decimal("0.0")
+
+
+def test_returns_summary_with_zero_gross_revenue_has_no_meaningful_rate():
+    summary = compute_returns_summary(net_revenue=Decimal("0"), returns_amount=Decimal("0"), return_count=0)
+    assert summary.return_rate_pct is None
+
+
 def test_rank_products_by_margin_excludes_products_with_unknown_cost():
     aggregates = [
         _aggregate(_P1, units_sold=10, revenue="1000", revenue_with_known_cost="1000", cogs="800"),  # 20% margin
@@ -146,12 +173,13 @@ def test_rank_products_by_margin_excludes_products_with_unknown_cost():
     ]
     products_by_id = {_P1: "Chain", _P2: "Saddle", _P3: "Mystery Item"}
 
-    top, bottom, excluded_count = rank_products_by_margin(aggregates, products_by_id, top_n=5)
+    top, bottom, excluded_count, all_rows = rank_products_by_margin(aggregates, products_by_id, top_n=5)
 
     assert excluded_count == 1
     assert {row.product_id for row in top} == {_P1, _P2}
     assert {row.product_id for row in bottom} == set()  # fewer than top_n * 2 candidates
     assert top[0].product_id == _P2  # higher gross profit first ($400 vs $200)
+    assert {row.product_id for row in all_rows} == {_P1, _P2}  # unsliced, but still excludes unknown-cost rows
 
 
 def test_rank_products_by_margin_top_and_bottom_dont_overlap_with_enough_products():
@@ -161,7 +189,7 @@ def test_rank_products_by_margin_top_and_bottom_dont_overlap_with_enough_product
     ]
     products_by_id = {a.product_id: f"Product {i}" for i, a in enumerate(aggregates)}
 
-    top, bottom, excluded_count = rank_products_by_margin(aggregates, products_by_id, top_n=3)
+    top, bottom, excluded_count, all_rows = rank_products_by_margin(aggregates, products_by_id, top_n=3)
 
     assert excluded_count == 0
     assert len(top) == 3

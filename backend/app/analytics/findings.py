@@ -25,7 +25,7 @@ from decimal import Decimal
 # into the pure analytics layer, inverting CLAUDE.md's "logic in domain/ or
 # analytics/" layering. app/application/findings.py unpacks the summaries'
 # fields before calling in.
-from app.analytics.financial import GrossMarginResult, ProductMarginRow, RevenueTrend
+from app.analytics.financial import GrossMarginResult, ProductMarginRow, ReturnsSummary, RevenueTrend
 from app.analytics.retail import DeadStockEntry, StockCoverRow
 
 # Bumped whenever a rule's trigger condition or evidence shape changes, so a
@@ -37,6 +37,15 @@ DEFAULT_LOW_STOCK_THRESHOLD_DAYS = Decimal("7")
 _REVENUE_DECLINE_THRESHOLD_PCT = Decimal("-10")
 _LOW_MARGIN_THRESHOLD_PCT = Decimal("20")
 _INCOMPLETE_COST_DATA_THRESHOLD_PCT = Decimal("50")
+_HIGH_RETURN_RATE_THRESHOLD_PCT = Decimal("10")
+# How many of the top-revenue products to examine for evaluate_thin_
+# margin_high_revenue, and how far below the business's own overall
+# margin (in percentage points) counts as "meaningfully thin" rather
+# than ordinary product-to-product variation. 5 mirrors the same top_n
+# default rank_products_by_margin already uses everywhere else; 10
+# points is a real, explainable gap — not a rounding-noise difference.
+_THIN_MARGIN_TOP_N = 5
+_THIN_MARGIN_GAP_PCT = Decimal("10")
 
 Severity = str  # "critical" | "warning" | "info"
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
@@ -83,6 +92,11 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
         description="This product sold at a net loss over the period — its sale price is below its "
         "recorded cost.",
     ),
+    "high_revenue_thin_margin": RecommendationTemplate(
+        title="Review pricing on this top seller",
+        description="This product sells well but its margin is well below your overall average — strong "
+        "revenue alone doesn't mean it's healthy for profitability. Consider a price or supplier-cost review.",
+    ),
     "low_stock": RecommendationTemplate(
         title="Reorder soon",
         description="At the recent sales rate, this product is projected to run out shortly.",
@@ -91,6 +105,11 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
         title="Consider a markdown or return to supplier",
         description="This product has stock on hand but hasn't sold at all in the period — cash is tied "
         "up in stock that isn't moving.",
+    ),
+    "high_return_rate": RecommendationTemplate(
+        title="Investigate why customers are returning items",
+        description="A larger-than-usual share of this period's gross revenue was refunded. Check for a "
+        "product quality issue, a sizing/description mismatch, or a specific batch/supplier.",
     ),
 }
 
@@ -169,6 +188,27 @@ def evaluate_incomplete_cost_data(gross_margin: GrossMarginResult) -> list[Findi
     ]
 
 
+def evaluate_high_return_rate(returns: ReturnsSummary) -> list[Finding]:
+    rate_pct = returns.return_rate_pct
+    if rate_pct is None or rate_pct < _HIGH_RETURN_RATE_THRESHOLD_PCT:
+        return []
+    return [
+        Finding(
+            type="high_return_rate",
+            severity="warning",
+            message=f"{rate_pct}% of gross revenue was refunded this period "
+            f"({returns.return_count} return(s) totaling {returns.returns_amount}).",
+            evidence={
+                "return_rate_pct": rate_pct,
+                "returns_amount": returns.returns_amount,
+                "return_count": returns.return_count,
+                "gross_revenue": returns.gross_revenue,
+            },
+            rule_id="high_return_rate",
+        )
+    ]
+
+
 def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[Finding]:
     """Pass the union of top_margin_products + bottom_margin_products
     (rank_products_by_margin's two lists), not bottom_margin_products
@@ -196,8 +236,64 @@ def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[F
                     "revenue": row.revenue,
                     "gross_profit": row.gross_profit,
                     "gross_margin_pct": row.gross_margin_pct,
+                    "category_name": row.category_name,
                 },
                 rule_id="product_selling_at_loss",
+            )
+        )
+    return findings
+
+
+def evaluate_thin_margin_high_revenue(
+    all_margin_products: list[ProductMarginRow], business_gross_margin_pct: Decimal | None
+) -> list[Finding]:
+    """A distinct, real question from "sold at a net loss"
+    (evaluate_products_at_loss): a product can be genuinely profitable
+    (gross_profit >= 0) and still be quietly dragging down overall
+    profitability if it sells in volume at a much thinner margin than the
+    rest of the business — "hurting profitability despite selling well."
+    Live-verified real gap: rank_products_by_margin's top_n/bottom_n
+    slices are ranked by gross profit, so a strong-revenue, thin-but-
+    positive-margin product can rank outside both windows entirely and
+    never reach evaluate_products_at_loss at all — this rule re-ranks by
+    revenue instead, over the full unsliced list, specifically to find
+    that product.
+
+    No baseline to compare against without a real business-wide margin
+    figure — returns [] rather than guessing when business_gross_margin_
+    pct is None (no cost data at all), matching this file's established
+    completeness-flag philosophy. Skips anything already caught by
+    evaluate_products_at_loss (gross_profit < 0) to avoid double-flagging
+    the same product under two different findings.
+    """
+    if business_gross_margin_pct is None:
+        return []
+    top_sellers_by_revenue = sorted(all_margin_products, key=lambda row: row.revenue, reverse=True)[
+        :_THIN_MARGIN_TOP_N
+    ]
+    findings = []
+    for row in top_sellers_by_revenue:
+        if row.gross_profit < 0:
+            continue
+        if row.gross_margin_pct > business_gross_margin_pct - _THIN_MARGIN_GAP_PCT:
+            continue
+        findings.append(
+            Finding(
+                type="high_revenue_thin_margin",
+                severity="warning",
+                message=f"{row.name} is one of your top sellers by revenue ({row.revenue}) but its "
+                f"{row.gross_margin_pct}% margin is well below your {business_gross_margin_pct}% overall "
+                f"average — it may be dragging down profitability despite strong sales.",
+                evidence={
+                    "product_id": str(row.product_id),
+                    "name": row.name,
+                    "revenue": row.revenue,
+                    "gross_profit": row.gross_profit,
+                    "gross_margin_pct": row.gross_margin_pct,
+                    "business_gross_margin_pct": business_gross_margin_pct,
+                    "category_name": row.category_name,
+                },
+                rule_id="high_revenue_thin_margin",
             )
         )
     return findings
@@ -256,6 +352,7 @@ def evaluate_low_stock(
                     "cover_days": row.cover_days,
                     "revenue_in_period": row.revenue_in_period,
                     "threshold_days": threshold_days,
+                    "category_name": row.category_name,
                 },
                 rule_id="low_stock",
             )
@@ -276,6 +373,7 @@ def evaluate_dead_stock(dead_stock: list[DeadStockEntry]) -> list[Finding]:
                     "name": entry.name,
                     "stock_on_hand": entry.stock_on_hand,
                     "value_at_cost": entry.value_at_cost,
+                    "category_name": entry.category_name,
                 },
                 rule_id="dead_stock",
             )
@@ -289,16 +387,20 @@ def evaluate_all(
     gross_margin: GrossMarginResult,
     top_margin_products: list[ProductMarginRow],
     bottom_margin_products: list[ProductMarginRow],
+    all_margin_products: list[ProductMarginRow],
     stock_cover: list[StockCoverRow],
     dead_stock: list[DeadStockEntry],
+    returns: ReturnsSummary,
 ) -> list[Finding]:
     return [
         *evaluate_revenue_decline(revenue),
         *evaluate_low_gross_margin(gross_margin),
         *evaluate_incomplete_cost_data(gross_margin),
         *evaluate_products_at_loss(top_margin_products + bottom_margin_products),
+        *evaluate_thin_margin_high_revenue(all_margin_products, gross_margin.gross_margin_pct),
         *evaluate_low_stock(stock_cover),
         *evaluate_dead_stock(dead_stock),
+        *evaluate_high_return_rate(returns),
     ]
 
 
@@ -316,6 +418,13 @@ def _impact_score(finding: Finding) -> Decimal:
         return evidence["total_revenue"] - evidence["revenue_with_known_cost"]
     if finding.type == "product_selling_at_loss":
         return abs(evidence["gross_profit"])
+    if finding.type == "high_revenue_thin_margin":
+        # Same dollar-weighted-gap shape as low_gross_margin's own score,
+        # applied at the single-product level: how far below the
+        # business's overall margin this product sits, scaled onto the
+        # revenue it applies to.
+        gap_pct = evidence["business_gross_margin_pct"] - evidence["gross_margin_pct"]
+        return (gap_pct / 100) * evidence["revenue"]
     if finding.type == "low_stock":
         return evidence["revenue_in_period"]
     if finding.type == "dead_stock":
@@ -323,6 +432,8 @@ def _impact_score(finding: Finding) -> Decimal:
         # Fallback proxy when cost is unknown, documented on DeadStockEntry
         # itself — count-based, not comparable across dollar-based scores.
         return value_at_cost if value_at_cost is not None else Decimal(evidence["stock_on_hand"])
+    if finding.type == "high_return_rate":
+        return evidence["returns_amount"]
     raise ValueError(f"No impact scoring rule for finding type: {finding.type}")  # pragma: no cover
 
 

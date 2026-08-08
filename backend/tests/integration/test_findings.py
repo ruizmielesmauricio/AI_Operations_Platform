@@ -152,3 +152,54 @@ def test_get_findings_end_to_end(db_session, business_id):
     assert len(summary.recommendations) == len(summary.findings)
     severities = [r.severity for r in summary.recommendations]
     assert severities == sorted(severities, key=lambda s: {"critical": 0, "warning": 1, "info": 2}[s])
+
+
+def test_get_findings_surfaces_a_top_seller_dragging_down_profitability(db_session, business_id):
+    """Live-verified real gap: a user asked ORLA "Which products are
+    hurting my profitability even though they sell well?" and got "I
+    don't have any profitability figures" — rank_products_by_margin's
+    top/bottom-by-gross-profit slices left this exact product outside
+    both windows (it's neither the single most nor least profitable in
+    absolute terms), so no rule ever saw it. Four products, three with a
+    healthy 50% margin and one dominant by revenue at a thin 5% margin —
+    the thin one must be flagged even though it's comfortably profitable
+    (not caught by product_selling_at_loss), and the healthy ones must
+    not be.
+    """
+    bestseller = _make_product(db_session, business_id, name="Bestseller Thin Margin", cost_price=Decimal("9.50"))
+    healthy = [
+        _make_product(db_session, business_id, name=f"Healthy Item {i}", cost_price=Decimal("5.00")) for i in range(3)
+    ]
+
+    # Bestseller: 100 units @ 10.00 = 1000 revenue, cost 950 -> 5% margin.
+    _make_sale_with_item(
+        db_session, business_id, sold_at=datetime(2026, 1, 2, 10, 0, tzinfo=timezone.utc),
+        product_id=bestseller.id, quantity=100, unit_price=Decimal("10.00"), cost_price_at_sale=Decimal("9.50"),
+    )
+    _make_movement(db_session, business_id, product_id=bestseller.id, quantity_delta=500, reason="purchase")
+    _make_movement(db_session, business_id, product_id=bestseller.id, quantity_delta=-100, reason="sale")
+
+    # Each healthy item: 10 units @ 10.00 = 100 revenue, cost 50 -> 50% margin.
+    for product in healthy:
+        _make_sale_with_item(
+            db_session, business_id, sold_at=datetime(2026, 1, 3, 10, 0, tzinfo=timezone.utc),
+            product_id=product.id, quantity=10, unit_price=Decimal("10.00"), cost_price_at_sale=Decimal("5.00"),
+        )
+        _make_movement(db_session, business_id, product_id=product.id, quantity_delta=50, reason="purchase")
+        _make_movement(db_session, business_id, product_id=product.id, quantity_delta=-10, reason="sale")
+
+    db_session.commit()
+
+    summary = get_findings(db_session, business_id=business_id, start_date=_PERIOD_START, end_date=_PERIOD_END)
+
+    thin_margin_findings = [f for f in summary.findings if f.type == "high_revenue_thin_margin"]
+    assert len(thin_margin_findings) == 1
+    assert thin_margin_findings[0].evidence["product_id"] == str(bestseller.id)
+    assert thin_margin_findings[0].evidence["gross_margin_pct"] == Decimal("5.00")
+
+    # The healthy, above-average-margin products must not be flagged.
+    flagged_ids = {f.evidence["product_id"] for f in thin_margin_findings}
+    assert not flagged_ids.intersection({str(p.id) for p in healthy})
+
+    recommendation = next(r for r in summary.recommendations if r.finding_type == "high_revenue_thin_margin")
+    assert recommendation.title == "Review pricing on this top seller"

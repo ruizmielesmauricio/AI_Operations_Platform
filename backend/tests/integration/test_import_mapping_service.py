@@ -28,6 +28,7 @@ _FULL_FIELD_MAPPING = {
     "cost_price_at_sale": None,
     "tax_amount": None,
     "order_reference": None,
+    "category": None,
 }
 
 
