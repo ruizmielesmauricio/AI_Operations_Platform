@@ -32,6 +32,11 @@ const LINK_TARGETS: Record<string, { label: string; path: string }> = {
   reports: { label: "Reports", path: "/reports" },
 };
 
+// The dropdown's sentinel value for "combine every branch" — never a real
+// business id, so it can share one <select> with the real business
+// options below rather than needing a second control.
+const ALL_BRANCHES_VALUE = "__all_branches__";
+
 export default function ChatPage() {
   const { session, checkingSession } = useRequireSession();
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
@@ -40,18 +45,33 @@ export default function ChatPage() {
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  // Direct request: an "All branches" option alongside individual
+  // businesses. businessId still names which group to resolve from (the
+  // backend's group resolution is symmetric — any member's id works, see
+  // app/application/business_group.py), this flag is the only thing that
+  // actually changes what gets sent.
+  const [allBranches, setAllBranches] = useState(false);
   // Last-exchange-only memory — tracked separately from the displayed
   // `messages` thread (which may also hold an error state) so exactly
   // one real question/answer pair is ever resent as context, per the
-  // scope decision above. Reset whenever the selected business changes:
-  // a different business has entirely different data, so a prior
-  // exchange from another business would be actively wrong to carry
-  // into it, not just stale.
+  // scope decision above. Reset whenever the selected business or the
+  // all-branches toggle changes: a different scope has entirely
+  // different data, so a prior exchange from elsewhere would be actively
+  // wrong to carry into it, not just stale.
   const [lastExchange, setLastExchange] = useState<{ question: string; answer: string; intent: string } | null>(null);
 
   useEffect(() => {
     setLastExchange(null);
-  }, [businessId]);
+  }, [businessId, allBranches]);
+
+  function handleSelectorChange(value: string) {
+    if (value === ALL_BRANCHES_VALUE) {
+      setAllBranches(true);
+    } else {
+      setAllBranches(false);
+      setBusinessId(value);
+    }
+  }
 
   async function handleSend() {
     const trimmed = question.trim();
@@ -65,6 +85,7 @@ export default function ChatPage() {
     try {
       const response = await apiPost<ChatResponse>(`/businesses/${businessId}/ai/chat`, {
         question: trimmed,
+        all_branches: allBranches,
         previous_question: lastExchange?.question,
         previous_answer: lastExchange?.answer,
         previous_intent: lastExchange?.intent,
@@ -124,18 +145,35 @@ export default function ChatPage() {
         <div>
           <label htmlFor="business">Business</label>
           <br />
-          <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
+          <select
+            id="business"
+            value={allBranches ? ALL_BRANCHES_VALUE : businessId}
+            onChange={(e) => handleSelectorChange(e.target.value)}
+          >
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
             ))}
+            <option value={ALL_BRANCHES_VALUE}>All branches</option>
           </select>
+          {/* A question can still name one specific branch by itself
+              (e.g. "revenue at Galway last week?") and ORLA answers about
+              that branch regardless of what's selected here — see
+              app/ai/service.py's deterministic branch-name detection. */}
+          <span className="hint"> Or just name a branch in your question — ORLA understands either way.</span>
         </div>
       )}
 
       <div className="chat-thread">
-        {messages.length === 0 && !sending && <p className="hint">No questions yet — try "How is my revenue doing?"</p>}
+        {messages.length === 0 && !sending && (
+          <p className="hint">
+            <strong>ORLA:</strong> Hello, I&apos;m ORLA — Operational Reporting and Logic Analytics.
+            {businesses.length > 1
+              ? " Which branch would you like information about? Pick one above, or just name it in your question."
+              : ' Try asking something like "How is my revenue doing?"'}
+          </p>
+        )}
         {messages.map((m, i) => (
           <p
             key={i}

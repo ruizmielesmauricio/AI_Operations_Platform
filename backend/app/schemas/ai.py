@@ -3,6 +3,14 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
+    # Direct request: combine every branch in this business's group into
+    # one answer instead of reading business_id alone — reuses
+    # app/application/business_group.py exactly as the dashboard's own
+    # "Combine all branches" checkbox does. A question that names one
+    # specific branch by itself still overrides this for that turn (see
+    # app/ai/service.py's deterministic branch-name detection) — an
+    # explicit mention is always more specific than a blanket toggle.
+    all_branches: bool = False
     # Last-exchange-only conversation memory — the frontend resends just
     # the immediately preceding question/answer, never the whole thread,
     # to keep per-request token cost bounded (a deliberate scope choice,

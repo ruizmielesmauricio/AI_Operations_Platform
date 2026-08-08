@@ -11,6 +11,7 @@ saw it.
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -26,6 +27,16 @@ from app.ai.exceptions import AIProviderError
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
 from app.analytics.period import compute_report_period
+from app.application.business_group import (
+    MixedTimezoneGroup,
+    NotGroupMember,
+    get_financial_performance_for_group,
+    get_findings_for_group,
+    get_forecast_for_group,
+    get_retail_operations_for_group,
+    get_workshop_performance_for_group,
+    resolve_authorized_group,
+)
 from app.application.category_breakdown import get_category_breakdown
 from app.application.financial_performance import get_financial_performance
 from app.application.findings import get_findings
@@ -35,6 +46,7 @@ from app.application.retail_operations import get_retail_operations
 from app.application.workshop_performance import get_workshop_performance
 from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
+from app.repositories.business import list_businesses_for_user
 from app.repositories.report import ReportRepository
 from app.schemas.analytics import (
     CategoryBreakdownOut,
@@ -161,6 +173,7 @@ def answer_question(
     user_id: str,
     question: str,
     now: datetime | None = None,
+    all_branches: bool = False,
     previous_question: str | None = None,
     previous_answer: str | None = None,
     previous_intent: str | None = None,
@@ -181,7 +194,17 @@ def answer_question(
     (echoed back from the prior AnswerResult.intent) — untrusted client
     input, never used directly, only ever checked for membership in
     _CONTINUABLE_INTENTS before being used to deterministically recover
-    an unresolved follow-up (see the out_of_scope branch below)."""
+    an unresolved follow-up (see the out_of_scope branch below).
+
+    `all_branches` combines every business in business_id's group into
+    one answer (app/application/business_group.py, same as the
+    dashboard's own "Combine all branches" checkbox) — but a question
+    naming one specific branch by itself always wins over it
+    (_detect_named_business, deterministic, never classify-based): an
+    explicit mention is more specific than a blanket toggle, the same
+    way asking about one branch by name while browsing another
+    business's chat page should still answer about the one actually
+    named."""
     resolved_now = now or datetime.now(timezone.utc)
 
     # Zero-cost path: an obvious "what does X mean?" question never
@@ -199,6 +222,32 @@ def answer_question(
     business = db.get(Business, business_id)
     if business is None:
         return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
+
+    # A question naming one of the account's own branches by name always
+    # wins, even under all_branches — see _detect_named_business's own
+    # docstring. Only ever matches a business the caller is actually a
+    # member of (list_businesses_for_user is scoped to user_id), so this
+    # can never leak another account's data.
+    own_businesses = [b for b, _membership in list_businesses_for_user(db, user_id=user_id)]
+    named_business = _detect_named_business(question, own_businesses)
+    combined_businesses: list[Business] | None = None
+    if named_business is not None:
+        business = named_business
+    elif all_branches:
+        try:
+            combined_businesses = resolve_authorized_group(db, business_id=business_id, user_id=user_id)
+        except NotGroupMember:
+            return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
+        except MixedTimezoneGroup as exc:
+            return AnswerResult(
+                answer=(
+                    "Your branches don't all share one timezone ("
+                    f"{', '.join(exc.timezones)}), so I can't combine them into one answer — "
+                    "ask about one branch at a time instead."
+                ),
+                intent="out_of_scope",
+                grounded=True,
+            )
 
     classify = _classify_intent(
         request_repo, business_id=business_id, user_id=user_id, question=question,
@@ -259,7 +308,10 @@ def answer_question(
         if early_result is not None:
             return early_result
     else:
-        context = _fetch_context(db, business=business, intent=intent, classify=classify, now=resolved_now)
+        context = _fetch_context(
+            db, business=business, intent=intent, classify=classify, now=resolved_now,
+            combined_businesses=combined_businesses,
+        )
         if context is None:
             # Not applicable (e.g. workshop performance for a non-bike-shop
             # template, or no report exists yet) — same safe fallback, zero
@@ -420,6 +472,34 @@ def _looks_like_a_period_follow_up_question(question: str) -> bool:
     return any(keyword in lowered for keyword in _PERIOD_FOLLOW_UP_KEYWORDS)
 
 
+def _detect_named_business(question: str, businesses: list[Business]) -> Business | None:
+    """Deterministic, not LLM-based — direct scope decision: a question
+    naming one of the account's own branches by name ("what was revenue
+    at the Galway branch?") should answer about that branch specifically,
+    regardless of whatever business the chat page happens to be scoped
+    to. Reuses the exact same "don't trust the model to reliably do this"
+    reasoning as the reorder/period-follow-up recovery above — the
+    classify prompt already regressed twice this session from growing
+    too large for its own token budget, so this never touches it.
+
+    Whole-word, case-insensitive matching (not a bare substring) against
+    each business's real `name` — guards against a short/generic name
+    accidentally matching inside an unrelated word. Returns None (no
+    override) if zero or more than one distinct business matches; an
+    ambiguous match falls through to whatever scope was already
+    selected rather than guessing between two real candidates.
+    """
+    lowered = question.lower()
+    matches = [
+        business
+        for business in businesses
+        if business.name and re.search(rf"\b{re.escape(business.name.lower())}\b", lowered)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 # Zero-cost — this is local formatting after the AI calls are already
 # done, not another prompt — so it can afford to be far more generous
 # than _MAX_CONTEXT_ROWS (which bounds what's actually sent to the
@@ -544,23 +624,61 @@ def _dispatch_lookup(
     return result.matches[0], None
 
 
-def _fetch_context(db: Session, *, business: Business, intent: str, classify: ClassifyResult, now: datetime) -> dict | None:
+def _fetch_context(
+    db: Session,
+    *,
+    business: Business,
+    intent: str,
+    classify: ClassifyResult,
+    now: datetime,
+    combined_businesses: list[Business] | None = None,
+) -> dict | None:
+    """`combined_businesses`, when set (answer_question's all_branches
+    path, never set together with a named-branch override — see its own
+    docstring), only applies to the five intents that also support it on
+    the dashboard (app/api/analytics.py's own all_branches scope):
+    financial/retail/workshop/forecast/findings. category_breakdown and
+    latest_report stay single-business regardless — a stored report
+    belongs to one business's own row (no "combined report" concept
+    exists), and category_breakdown was never offered in combined form
+    on the dashboard either, so chat doesn't invent a wider scope for it
+    than the UI it mirrors already has.
+    """
     business_id = business.id
     start_date, end_date = _resolve_dates(business, classify, now)
 
     if intent == "financial_performance":
-        summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
+        if combined_businesses is not None:
+            summary = get_financial_performance_for_group(
+                db, businesses=combined_businesses, start_date=start_date, end_date=end_date
+            )
+        else:
+            summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
     if intent == "retail_operations":
-        summary = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
+        if combined_businesses is not None:
+            summary = get_retail_operations_for_group(
+                db, businesses=combined_businesses, start_date=start_date, end_date=end_date
+            )
+        else:
+            summary = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_retail_operations(RetailOperationsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "workshop_performance":
         if business.template != "bicycle_shop":
             return None
-        summary = get_workshop_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
+        if combined_businesses is not None:
+            summary = get_workshop_performance_for_group(
+                db, businesses=combined_businesses, start_date=start_date, end_date=end_date
+            )
+        else:
+            summary = get_workshop_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return WorkshopPerformanceOut.model_validate(summary).model_dump(mode="json")
     if intent == "forecast":
-        summary = get_forecast(db, business_id=business_id, now=now, horizon_days=classify.horizon_days or _DEFAULT_HORIZON_DAYS)
+        horizon_days = classify.horizon_days or _DEFAULT_HORIZON_DAYS
+        if combined_businesses is not None:
+            summary = get_forecast_for_group(db, businesses=combined_businesses, now=now, horizon_days=horizon_days)
+        else:
+            summary = get_forecast(db, business_id=business_id, now=now, horizon_days=horizon_days)
         full = ForecastOut.model_validate(summary).model_dump(mode="json")
         trimmed = _trim_forecast(full)
         # Stashed for answer_question's deterministic priority-list
@@ -570,7 +688,10 @@ def _fetch_context(db: Session, *, business: Business, intent: str, classify: Cl
         trimmed["_all_products_for_priority_list"] = full.get("products", [])
         return trimmed
     if intent == "findings_recommendations":
-        summary = get_findings(db, business_id=business_id, start_date=start_date, end_date=end_date)
+        if combined_businesses is not None:
+            summary = get_findings_for_group(db, businesses=combined_businesses, start_date=start_date, end_date=end_date)
+        else:
+            summary = get_findings(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_findings(FindingsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "category_breakdown":
         summary = get_category_breakdown(db, business_id=business_id, start_date=start_date, end_date=end_date)

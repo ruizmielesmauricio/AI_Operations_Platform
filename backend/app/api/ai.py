@@ -22,6 +22,7 @@ def chat(
     # 200 with a message the frontend can render directly.
     result = answer_question(
         db, business_id=membership.business_id, user_id=membership.user_id, question=body.question,
+        all_branches=body.all_branches,
         previous_question=body.previous_question, previous_answer=body.previous_answer,
         previous_intent=body.previous_intent,
     )
