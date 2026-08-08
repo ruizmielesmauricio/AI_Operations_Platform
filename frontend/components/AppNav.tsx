@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiGet } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase/client";
+import type { SubscriptionStatus } from "@/types";
 
 /**
  * The first shared nav in this frontend — everything up to now
@@ -19,6 +22,26 @@ import { supabase } from "@/lib/supabase/client";
 export function AppNav({ businessId }: { businessId?: string }) {
   const router = useRouter();
   const suffix = businessId ? `?business=${businessId}` : "";
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+
+  // "Upload data" used to render unconditionally here regardless of the
+  // selected business's subscription status — the upload/import routes
+  // are correctly 402'd server-side either way, but the link itself
+  // implied real access for an unsubscribed (or unpaid branch) business,
+  // which is exactly the false impression the onboarding page's own list
+  // was already fixed to avoid. Mirrors that same fix here, the one other
+  // place a business-scoped "Upload data" link lives.
+  useEffect(() => {
+    if (!businessId) {
+      setSubscriptionStatus(null);
+      return;
+    }
+    apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
+      .then((s) => setSubscriptionStatus(s.status))
+      .catch(() => setSubscriptionStatus(null));
+  }, [businessId]);
+
+  const canUpload = subscriptionStatus === "active";
 
   async function handleLogout() {
     await supabase?.auth.signOut();
@@ -29,7 +52,18 @@ export function AppNav({ businessId }: { businessId?: string }) {
     <nav>
       <a href={`/dashboard${suffix}`}>Dashboard</a>
       {" · "}
-      <a href={`/uploads${suffix}`}>Upload data</a>
+      {/* No businessId at all (onboarding) — nothing to link to yet,
+          onboarding's own per-business list already has the real,
+          correctly-gated links. */}
+      {businessId ? (
+        canUpload ? (
+          <a href={`/uploads${suffix}`}>Upload data</a>
+        ) : (
+          <span title="This shop's subscription isn't active yet">Upload data (subscribe first)</span>
+        )
+      ) : (
+        <a href="/uploads">Upload data</a>
+      )}
       {" · "}
       <a href={`/reports${suffix}`}>Reports</a>
       {" · "}
