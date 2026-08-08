@@ -183,10 +183,27 @@ def test_validate_address_requires_membership(client):
     assert response.status_code == 403
 
 
-def test_validate_address_degrades_gracefully_when_not_configured(client):
-    # No GEOAPIFY_API_KEY in the test environment — proves the route
-    # never 500s just because address validation isn't set up, it
-    # returns a normal, honest "not matched" response.
+def test_validate_address_returns_not_matched_when_geocoding_is_unavailable(client, monkeypatch):
+    # Explicitly mocked at the service boundary, not relying on
+    # GEOAPIFY_API_KEY being absent from the real .env — a real key now
+    # exists there (this app's own dev setup), so relying on absence
+    # would silently start making a real live Geoapify network call from
+    # every test run instead of actually testing this path, a real gap
+    # caught live once a key was actually added. app/geocoding/service.py
+    # itself already catches GeocodingNotConfigured/GeocodingProviderError
+    # internally and returns a normal AddressValidationResult(matched=
+    # False, ...) rather than raising — this proves the route surfaces
+    # that contract correctly, without depending on what's really
+    # configured or ever calling out over the network.
+    from app.api import businesses as businesses_api
+    from app.geocoding.service import AddressValidationResult
+
+    monkeypatch.setattr(
+        businesses_api,
+        "validate_address",
+        lambda **kwargs: AddressValidationResult(matched=False, reason="Address validation isn't configured yet"),
+    )
+
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
 

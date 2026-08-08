@@ -249,6 +249,22 @@ def answer_question(
                 grounded=True,
             )
 
+    # Live-reproduced real bug: asking "what's my revenue in Galway?"
+    # correctly classified as financial_performance and correctly fetched
+    # Galway-only data, but the explain call had no way to know the JSON
+    # it was given was *already* scoped to Galway — nothing in the
+    # context names a business at all — so it answered "I don't have a
+    # location breakdown," 3/3 times reproduced live, even though the
+    # figure it needed was right there. Every context payload now carries
+    # an explicit scope label the explain prompt states outright, so the
+    # model never has to guess whether what it's looking at is already
+    # filtered.
+    scope_label = (
+        "Combined across: " + ", ".join(b.name for b in combined_businesses)
+        if combined_businesses is not None
+        else business.name
+    )
+
     classify = _classify_intent(
         request_repo, business_id=business_id, user_id=user_id, question=question,
         business_timezone=business.timezone, now=resolved_now,
@@ -327,7 +343,7 @@ def answer_question(
 
     answer_text = _generate_answer(
         request_repo, business_id=business_id, user_id=user_id, question=question, context=context,
-        previous_question=previous_question, previous_answer=previous_answer,
+        scope_label=scope_label, previous_question=previous_question, previous_answer=previous_answer,
     )
     if answer_text is None:
         # Tagged "provider_unavailable", not the already-classified
@@ -1087,9 +1103,17 @@ _EXPLAIN_SYSTEM_PROMPT_PREFIX = f"{_ORLA_CONSTITUTION}\n\n{_ORLA_PERSONALITY}\n\
 
 def _generate_answer(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict,
-    previous_question: str | None = None, previous_answer: str | None = None,
+    scope_label: str, previous_question: str | None = None, previous_answer: str | None = None,
 ) -> str | None:
-    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + json.dumps(context, default=str)
+    # Explicit, stated outright rather than left for the model to infer —
+    # live-reproduced bug: without this, a branch-scoped or combined-
+    # branches context (app/application/business_group.py) reads to the
+    # model as unlabelled generic figures, and a question naming the
+    # scope by name ("revenue in Galway?") gets answered "I don't have a
+    # location breakdown" even though the JSON below *is* that exact
+    # breakdown already.
+    scope_note = f"(This data is already scoped to: {scope_label} — it is not a whole-account total unless stated, and it does not need a further per-branch/location breakdown.)\n"
+    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + scope_note + json.dumps(context, default=str)
     messages = [{"role": "system", "content": system_prompt}]
     if previous_question and previous_answer:
         # Same last-exchange-only shape as _classify_intent above, given
