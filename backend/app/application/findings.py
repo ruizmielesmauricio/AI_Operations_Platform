@@ -62,6 +62,7 @@ def get_findings(
         gross_margin=financial.gross_margin,
         top_margin_products=product_financial.top_margin_products,
         bottom_margin_products=product_financial.bottom_margin_products,
+        all_margin_products=product_financial.all_margin_products,
         stock_cover=product_retail.stock_cover,
         dead_stock=product_retail.dead_stock,
         returns=financial.returns,

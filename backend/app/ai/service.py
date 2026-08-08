@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,7 @@ from app.ai.exceptions import AIProviderError
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
 from app.analytics.period import compute_report_period
+from app.application.category_breakdown import get_category_breakdown
 from app.application.financial_performance import get_financial_performance
 from app.application.findings import get_findings
 from app.application.forecast import get_forecast
@@ -35,6 +37,7 @@ from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
 from app.repositories.report import ReportRepository
 from app.schemas.analytics import (
+    CategoryBreakdownOut,
     FinancialPerformanceOut,
     FindingsOut,
     ForecastOut,
@@ -55,7 +58,13 @@ logger = logging.getLogger(__name__)
 # PO-123"/"how much did repair Z cost" — real questions a business
 # owner asks, and the underlying data (InventoryMovement.
 # purchase_reference/event_date, ProductionEvent.repair_reference) was
-# already there, just never made queryable per-record.
+# already there, just never made queryable per-record. category_breakdown
+# added after live testing showed another real gap: "what's my biggest
+# cost/expense" questions had no intent to land in at all (classified
+# out_of_scope, or landed on financial_performance — which has no
+# per-category cost breakdown to actually ground an answer in) — reuses
+# app/application/category_breakdown.py, already built for the dashboard
+# and reports.
 ALLOWED_INTENTS = (
     "financial_performance",
     "retail_operations",
@@ -67,6 +76,7 @@ ALLOWED_INTENTS = (
     "product_lookup",
     "purchase_lookup",
     "repair_lookup",
+    "category_breakdown",
     "out_of_scope",
 )
 # explicit_date added alongside the lookup intents — a question naming a
@@ -76,6 +86,12 @@ ALLOWED_PERIODS = ("default_recent", "last_completed_week", "last_completed_mont
 _MAX_SEARCH_TERM_LENGTH = 200
 _MAX_EXPLICIT_DATE_YEARS_BACK = 10
 _MAX_EXPLICIT_DATE_YEARS_FORWARD = 1
+# Same bounds the /forecast API route already enforces (Query(7, ge=1,
+# le=90) in app/api/analytics.py) — kept in sync deliberately, not
+# imported, since this module doesn't otherwise depend on the API layer.
+_MIN_HORIZON_DAYS = 1
+_MAX_HORIZON_DAYS = 90
+_DEFAULT_HORIZON_DAYS = 7
 
 _LANE = "business_qa"
 _PROVIDER = "openrouter"
@@ -117,6 +133,16 @@ class ClassifyResult:
     end_date: date | None = None
     metric: str | None = None
     search_term: str | None = None
+    # Only meaningful for "forecast" — how many days ahead the question
+    # actually asked about ("next two weeks" -> 14). None means "use the
+    # default 7". Added after a live fire-test found a real bug: a
+    # question about "the next two weeks" was answered against the
+    # default 7-day forecast, so the model's own correct "14 days"
+    # phrasing had no matching horizon in the fetched context and the
+    # guardrail (rightly) rejected it — the fix is giving the classify
+    # step a way to ask for the actual horizon the question named, not
+    # loosening the guardrail.
+    horizon_days: int | None = None
 
 
 def answer_question(
@@ -156,7 +182,25 @@ def answer_question(
         return AnswerResult(answer=definition, intent="metric_definition", grounded=True)
 
     if intent == "out_of_scope":
-        return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
+        # Defense in depth against classify unreliability (free-tier
+        # model variance) — live fire-test evidence: a reorder/stock-out-
+        # shaped question ("what's going to run out of stock", "what
+        # should I spend €2,000 on restocking") occasionally came back
+        # out_of_scope even though the classify prompt's own "forecast"
+        # description explicitly covers this exact question shape. Only
+        # ever promotes out_of_scope -> forecast, using the same
+        # deterministic keyword check already built for the priority-
+        # list feature — can never grant a more sensitive intent or
+        # override a genuine out-of-scope verdict for anything else, so
+        # this only recovers real questions, never weakens the refusal
+        # path itself.
+        if _looks_like_a_reorder_question(question):
+            classify = ClassifyResult(
+                intent="forecast", period=classify.period, start_date=classify.start_date, end_date=classify.end_date
+            )
+            intent = "forecast"
+        else:
+            return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
     if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
         context, early_result = _dispatch_lookup(db, business=business, intent=intent, classify=classify)
@@ -181,9 +225,18 @@ def answer_question(
         request_repo, business_id=business_id, user_id=user_id, question=question, context=context
     )
     if answer_text is None:
-        return AnswerResult(answer=_UNAVAILABLE_MESSAGE, intent=intent, grounded=False)
+        # Tagged "provider_unavailable", not the already-classified
+        # intent — same reasoning as the classify-step failure above:
+        # this means the provider call itself never completed (network/
+        # rate-limit/timeout) at the *explain* step, not that whatever
+        # was classified genuinely failed to produce an answer. Found
+        # live via a fire-test run: this branch was silently keeping the
+        # original intent, which is misleading for anything inspecting
+        # `result.intent` (logging, analytics) even though the message
+        # shown to the user was already correct.
+        return AnswerResult(answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False)
 
-    result = validate_grounded(answer_text, context)
+    result = validate_grounded(answer_text, context, question=question)
     if not result.grounded:
         logger.warning(
             "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
@@ -250,7 +303,15 @@ def _append_truncation_disclosure(answer_text: str, context: Any) -> str:
     return f"{answer_text} (Showing {'; '.join(notes)} — see the Dashboard or Reports page for the complete list.)"
 
 
-_REORDER_KEYWORDS = ("order", "reorder", "restock", "buy", "purchase", "stock up")
+_REORDER_KEYWORDS = (
+    "order", "reorder", "restock", "buy", "purchase", "stock up",
+    # Added after a live fire-test run showed "run out of stock"-shaped
+    # questions occasionally misclassified as out_of_scope despite the
+    # classify prompt's own "forecast" description explicitly covering
+    # them (free-tier model variance, not a prompt gap) — see
+    # answer_question's out_of_scope recovery below.
+    "run out", "stock out", "stockout",
+)
 
 
 def _looks_like_a_reorder_question(question: str) -> bool:
@@ -319,6 +380,17 @@ def _resolve_dates(business: Business, classify: ClassifyResult, now: datetime) 
     return None, None  # default_recent — same unset-range default the dashboard uses
 
 
+# One example phrasing per lookup intent, used only to fill in the
+# many-match disambiguation message below — {label} is substituted with
+# the first real match's own label, so the example always names a real
+# product/purchase/repair from this business, not a generic placeholder.
+_LOOKUP_EXAMPLE_PHRASING = {
+    "product_lookup": "how much stock of {label} do I have",
+    "purchase_lookup": "what did I order under {label}",
+    "repair_lookup": "how much did the repair {label} cost",
+}
+
+
 def _dispatch_lookup(
     db: Session, *, business: Business, intent: str, classify: ClassifyResult
 ) -> tuple[dict | None, AnswerResult | None]:
@@ -354,7 +426,22 @@ def _dispatch_lookup(
 
     if len(result.matches) > 1:
         listed = "; ".join(result.match_labels[:5])
-        message = f"I found several matching results: {listed}. Could you be more specific?"
+        # Explicitly models a full, self-contained follow-up question
+        # rather than just saying "be more specific" — ORLA has no
+        # conversation memory between messages (a stated, deliberate
+        # limitation to keep token cost down), so a reply that's just
+        # the bare item name/label (the natural thing to do after being
+        # shown a list) isn't a question the classify step has much to
+        # work with. Live-verified this matters: the model *usually*
+        # still resolves a bare label correctly, but it's a fragile,
+        # not-guaranteed shape to rely on — showing the example phrasing
+        # up front is a cheap, real improvement that doesn't require
+        # building actual multi-turn memory.
+        example = _LOOKUP_EXAMPLE_PHRASING[intent].format(label=result.match_labels[0])
+        message = (
+            f"I found several matching results: {listed}. Ask me again naming just the one you mean — "
+            f'for example, "{example}?"'
+        )
         return None, AnswerResult(answer=message, intent=intent, grounded=True)
 
     return result.matches[0], None
@@ -376,7 +463,7 @@ def _fetch_context(db: Session, *, business: Business, intent: str, classify: Cl
         summary = get_workshop_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return WorkshopPerformanceOut.model_validate(summary).model_dump(mode="json")
     if intent == "forecast":
-        summary = get_forecast(db, business_id=business_id, now=now)
+        summary = get_forecast(db, business_id=business_id, now=now, horizon_days=classify.horizon_days or _DEFAULT_HORIZON_DAYS)
         full = ForecastOut.model_validate(summary).model_dump(mode="json")
         trimmed = _trim_forecast(full)
         # Stashed for answer_question's deterministic priority-list
@@ -388,6 +475,9 @@ def _fetch_context(db: Session, *, business: Business, intent: str, classify: Cl
     if intent == "findings_recommendations":
         summary = get_findings(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_findings(FindingsOut.model_validate(summary).model_dump(mode="json"))
+    if intent == "category_breakdown":
+        summary = get_category_breakdown(db, business_id=business_id, start_date=start_date, end_date=end_date)
+        return _trim_category_breakdown(CategoryBreakdownOut.model_validate(summary).model_dump(mode="json"))
     if intent == "latest_report":
         reports = ReportRepository(db).list_active_for_business(business_id, now=now)
         if not reports:
@@ -419,8 +509,8 @@ def _cap_rows(trimmed: dict, key: str) -> None:
     still grounded, but the implied completeness wouldn't be true. The
     note gives the model something real to disclose instead (its own
     numbers are automatically grounded too — they're now literally in
-    the context). See _EXPLAIN_SYSTEM_PROMPT_TEMPLATE for the matching
-    instruction to actually say so and point to the full list elsewhere.
+    the context). See orla_constitution.md for the matching instruction
+    to actually say so and point to the full list elsewhere.
     """
     rows = trimmed.get(key)
     if not isinstance(rows, list):
@@ -475,6 +565,15 @@ def _trim_findings(findings: dict) -> dict:
     return trimmed
 
 
+def _trim_category_breakdown(breakdown: dict) -> dict:
+    trimmed = dict(breakdown)
+    # Already sorted by revenue descending (compute_category_breakdown's
+    # own docstring) — a business with many categories still gets the
+    # most significant ones first if this ever needs to cap.
+    _cap_rows(trimmed, "rows")
+    return trimmed
+
+
 def _trim_report_payload(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
         return payload
@@ -485,6 +584,8 @@ def _trim_report_payload(payload: dict | None) -> dict | None:
         trimmed["retail_operations"] = _trim_retail_operations(trimmed["retail_operations"])
     if isinstance(trimmed.get("findings"), dict):
         trimmed["findings"] = _trim_findings(trimmed["findings"])
+    if isinstance(trimmed.get("category_breakdown"), dict):
+        trimmed["category_breakdown"] = _trim_category_breakdown(trimmed["category_breakdown"])
     return trimmed
 
 
@@ -511,7 +612,11 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     f'"metric": one of {list(ALLOWED_METRIC_KEYS)} (only when intent is "metric_definition"), or null\n'
     '"search_term": the exact product name/SKU, purchase/PO/order reference, or repair/job/ticket '
     'reference the question names (only when intent is "product_lookup", "purchase_lookup", or '
-    '"repair_lookup"), or null\n\n'
+    '"repair_lookup"), or null\n'
+    '"horizon_days": only when intent is "forecast" and the question names a specific timeframe ahead '
+    '(e.g. "the next two weeks" -> 14, "next month" -> 30, "the next 10 days" -> 10) — the number of '
+    "days that timeframe covers, as an integer. Otherwise null (a plain \"what should I reorder\" with "
+    "no named timeframe uses a sensible default).\n\n"
     "What each intent actually contains, so you pick the one with the real data the question needs:\n"
     '- "forecast": projected demand AND a per-product suggested reorder quantity — use this for any '
     '"what/how much should I order/restock/reorder" question, not "findings_recommendations".\n'
@@ -535,7 +640,14 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '- "repair_lookup": detail about one specific repair — by ticket/job/invoice reference, or by date '
     'or a short description (e.g. "how much did repair JOB-364 cost", "what repairs did I do on the '
     '3rd"). Repairs have no stored customer name in this data — a question asking for repairs by a '
-    "customer's name can't be answered this way; classify it \"out_of_scope\" rather than guessing.\n\n"
+    "customer's name can't be answered this way; classify it \"out_of_scope\" rather than guessing.\n"
+    '- "category_breakdown": revenue, expenses (money spent buying stock — purchase cost, NOT cost of '
+    'goods sold), and stock value, broken down per product category — use this for "what\'s my biggest '
+    'cost/expense", "how much did I spend on [category]", "which category makes the most/least money" '
+    'questions. Different from "financial_performance": that\'s one whole-business revenue/margin figure '
+    'with no cost breakdown to point to; this intent is the one with an actual per-category cost/expense '
+    'figure to ground an answer in. Use period "explicit_date" the same way as financial_performance for '
+    "a question naming a specific date range.\n\n"
     'Use "metric_definition" when the question asks what a term/metric means, not for one of its numbers. '
     'Use "out_of_scope" for anything not about this business\'s revenue, retail/workshop performance, '
     'forecast, recommendations, reports, or a specific product/purchase/repair — never invent an intent '
@@ -666,38 +778,73 @@ def _parse_intent_json(content: str | None, *, today: date) -> ClassifyResult:
     else:
         search_term = search_term.strip()[:_MAX_SEARCH_TERM_LENGTH]
 
+    horizon_days = _parse_horizon_days(data.get("horizon_days"))
+
     return ClassifyResult(
-        intent=intent, period=period, start_date=start_date, end_date=end_date, metric=metric, search_term=search_term
+        intent=intent, period=period, start_date=start_date, end_date=end_date, metric=metric,
+        search_term=search_term, horizon_days=horizon_days,
     )
 
 
-_EXPLAIN_SYSTEM_PROMPT_TEMPLATE = (
-    "You are ORLA, a plain-language assistant for a small business's operations dashboard. "
-    "Answer the user's question using ONLY the JSON data below — never state a number, date, or fact "
-    "that isn't present in it, and never round or reformat a figure (quote it exactly as given). "
-    "If the data doesn't answer the question, say so plainly rather than guessing. "
-    "Keep your answer to 2-4 short sentences, plain text, no markdown, no bullet lists.\n\n"
-    'Some lists below are shortened to the most important rows for a field named e.g. '
-    '"products_shown_of_total": "15 of 152" — that means only 15 of 152 total rows are included here. '
-    "When such a field is present and the question asks for a count, a full list, or "
-    "\"everything\"/\"all\", say plainly that you're showing only the top ones (state both numbers) "
-    "and point them to the Reports or Dashboard page for the complete list — never imply the rows shown "
-    "are the whole picture, and never count or total a shortened list as if it were complete.\n\n"
-    "DATA:\n{context_json}"
-)
+def _parse_horizon_days(raw: Any) -> int | None:
+    """Server-side validation, same fail-closed pattern as
+    _parse_explicit_dates: never trust the model's number as-is. A
+    non-integer (a bool is deliberately rejected too — Python's bool is
+    an int subclass), or one outside the same [1, 90] bound the API
+    route itself enforces, falls back to None (the caller's own default
+    of 7), not a clamped/guessed value — a malformed number here isn't
+    worth silently reinterpreting."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    if raw < _MIN_HORIZON_DAYS or raw > _MAX_HORIZON_DAYS:
+        return None
+    return raw
+
+
+# Loaded once at import time, not read per-request — these two files are
+# the actual governance artifacts (Layer 1/Layer 4 of the ORLA AI Skills,
+# SOPs, Grounding & Personality plan): orla_constitution.md is the
+# immutable, versioned set of grounding/scope rules every explain-step
+# answer must follow (previously an inline f-string here, now a
+# reviewable, diffable file of its own); orla_personality.md is the tone
+# layer, explicitly subordinate to the constitution — it can change how
+# an answer sounds, never what it says. Deliberately NOT applied to the
+# classify step's prompt: that step is a pure structured-output/JSON
+# task, and this codebase already hit real trouble once (see
+# _classify_intent's own max_tokens comment) from a classify prompt
+# growing large enough to burn its whole reasoning-token budget before
+# emitting the JSON — adding a second large block of prose there risks
+# the same regression for close to no benefit (there is no free-text
+# "voice" for classify's JSON output to carry).
+_AI_MODULE_DIR = Path(__file__).parent
+_ORLA_CONSTITUTION = (_AI_MODULE_DIR / "orla_constitution.md").read_text(encoding="utf-8")
+_ORLA_PERSONALITY = (_AI_MODULE_DIR / "orla_personality.md").read_text(encoding="utf-8")
+
+# Plain concatenation, not str.format() — orla_constitution.md/orla_
+# personality.md are free-form prose that may contain a literal "{" or
+# "}" (e.g. quoting a field name), which .format() would misread as a
+# placeholder and raise on. context_json is appended directly in
+# _generate_answer instead, with no format-string parsing involved.
+_EXPLAIN_SYSTEM_PROMPT_PREFIX = f"{_ORLA_CONSTITUTION}\n\n{_ORLA_PERSONALITY}\n\nDATA:\n"
 
 
 def _generate_answer(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict
 ) -> str | None:
-    system_prompt = _EXPLAIN_SYSTEM_PROMPT_TEMPLATE.format(context_json=json.dumps(context, default=str))
+    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + json.dumps(context, default=str)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
     ]
     try:
-        # Same reasoning-token headroom rationale as _classify_intent above.
-        response = client.chat_completion(messages=messages, max_tokens=500, temperature=0.2)
+        # Same reasoning-token headroom rationale as _classify_intent
+        # above; raised from 500 after a live fire-test run showed a
+        # genuinely multi-part question ("give me 5 actions, cite the
+        # data, flag uncertainty for each") visibly truncating mid-word
+        # — 500 was enough for the usual 2-4-sentence answer but not for
+        # a question that explicitly asks the prompt above to cover
+        # several distinct items.
+        response = client.chat_completion(messages=messages, max_tokens=800, temperature=0.2)
     except AIProviderError as exc:
         logger.warning("AI explain call failed business=%s error=%s", business_id, exc)
         _log_request(request_repo, business_id=business_id, user_id=user_id, model="unknown", success=False)

@@ -74,6 +74,16 @@ def test_full_pipeline_classifies_fetches_and_explains(db_session, business_id, 
     assert db_session.query(AIRequest).count() == 2
     assert all(row.lane == "business_qa" for row in db_session.query(AIRequest).all())
 
+    # The explain call's system prompt must actually carry both
+    # governance layers — a disconnect here (e.g. someone rewrites the
+    # DATA prefix and forgets to fold the files back in) would silently
+    # strip every grounding/scope rule and the tone layer without any
+    # other test noticing, since nothing else asserts on prompt content.
+    explain_system_prompt = calls[1][0]["content"]
+    assert "ORLA Constitution" in explain_system_prompt
+    assert "ORLA Personality" in explain_system_prompt
+    assert "DATA:" in explain_system_prompt
+
 
 def test_out_of_scope_intent_skips_the_explain_call(db_session, business_id, monkeypatch):
     calls = []
@@ -362,4 +372,237 @@ def test_explicit_date_with_an_unparseable_date_falls_back_to_default_recent_ins
     # exactly the same "fail closed to a safe default" posture as an
     # unrecognized plain period value already had.
     assert result.intent == "financial_performance"
+    assert result.grounded is True
+
+
+# --- category_breakdown -----------------------------------------------------
+# Real gap found live: "what's my biggest cost/expense" questions had no
+# intent to land in at all.
+
+
+def test_category_breakdown_question_reaches_the_explain_call(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("category_breakdown")
+        # A category_breakdown context with zero categories/products still
+        # returns real (empty-list) JSON — echoes a fact that's always
+        # true of it regardless of seeded data.
+        return _canned_response("You don't have any product categories set up yet, so there's nothing to break down.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What's my biggest cost?", now=_NOW
+    )
+
+    assert result.intent == "category_breakdown"
+    assert result.grounded is True
+
+
+def test_category_breakdown_with_explicit_date_range(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response(
+                "category_breakdown", period="explicit_date", start_date="2026-01-01", end_date="2026-01-31"
+            )
+        return _canned_response("You don't have any product categories set up yet, so there's nothing to break down.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What was my largest expense from 1 to 31 January?", now=_NOW,
+    )
+
+    assert result.intent == "category_breakdown"
+    assert result.grounded is True
+
+
+# --- out_of_scope -> forecast recovery --------------------------------------
+# Real gap found live via a fire-test run: a reorder/stock-out-shaped
+# question occasionally classified out_of_scope even though the classify
+# prompt's own "forecast" description explicitly covers it.
+
+
+def test_reorder_shaped_question_recovers_from_a_stray_out_of_scope_classification(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("No products need reordering right now — not enough sales history yet to forecast demand.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What is likely to run out of stock during the next two weeks?", now=_NOW,
+    )
+
+    assert result.intent == "forecast"
+
+
+def test_a_genuinely_unrelated_question_still_falls_back_to_out_of_scope(db_session, business_id, monkeypatch):
+    # Confirms the recovery above is narrowly scoped to reorder-shaped
+    # language, not a general "trust the model less" loosening — a
+    # question with no such keywords stays out_of_scope, zero AI cost.
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What's the weather like today?", now=_NOW
+    )
+
+    assert result.intent == "out_of_scope"
+    assert len(calls) == 1  # classify only — the recovery never triggers a second AI call for a real refusal
+
+
+# --- explain-step provider failure keeps the right intent -------------------
+# Real bug found live: a provider failure during the *explain* call (as
+# opposed to classify) was silently tagged with whatever intent had
+# already been classified, instead of "provider_unavailable" — misleading
+# for anything inspecting result.intent, even though the message shown to
+# the user was already correct.
+
+
+def test_explain_step_provider_failure_is_tagged_provider_unavailable_not_the_original_intent(
+    db_session, business_id, monkeypatch
+):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("financial_performance")
+        from app.ai.exceptions import AIProviderError
+
+        raise AIProviderError("connection refused")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="How's my revenue doing?", now=_NOW
+    )
+
+    assert result.intent == "provider_unavailable"
+    assert result.grounded is False
+    assert "temporarily unavailable" in result.answer
+
+
+# --- forecast horizon_days threaded from the classify step -------------------
+# Real bug found live via a fire-test run: "What is likely to run out of
+# stock during the next two weeks?" always fetched the default 7-day
+# forecast, so a correct answer naturally saying "14 days" had no matching
+# horizon anywhere in the fetched context — the guardrail (rightly)
+# rejected it. The fix is giving classify a way to name the actual horizon
+# the question asked about, not loosening the guardrail.
+
+
+def test_forecast_question_naming_a_timeframe_fetches_that_horizon_not_the_default(db_session, business_id, monkeypatch):
+    import app.ai.service as service_module
+
+    captured_kwargs = {}
+    real_get_forecast = service_module.get_forecast
+
+    def _spy_get_forecast(db, *, business_id, now=None, horizon_days=7, category_id=None):
+        captured_kwargs["horizon_days"] = horizon_days
+        return real_get_forecast(db, business_id=business_id, now=now, horizon_days=horizon_days, category_id=category_id)
+
+    monkeypatch.setattr(service_module, "get_forecast", _spy_get_forecast)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("forecast", horizon_days=14)
+        return _canned_response("Nothing is projected to run out over the next 14 days based on your current sales rate.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What is likely to run out of stock during the next two weeks?", now=_NOW,
+    )
+
+    assert captured_kwargs["horizon_days"] == 14
+    assert result.intent == "forecast"
+
+
+def test_forecast_question_with_no_named_timeframe_uses_the_default_horizon(db_session, business_id, monkeypatch):
+    import app.ai.service as service_module
+
+    captured_kwargs = {}
+    real_get_forecast = service_module.get_forecast
+
+    def _spy_get_forecast(db, *, business_id, now=None, horizon_days=7, category_id=None):
+        captured_kwargs["horizon_days"] = horizon_days
+        return real_get_forecast(db, business_id=business_id, now=now, horizon_days=horizon_days, category_id=category_id)
+
+    monkeypatch.setattr(service_module, "get_forecast", _spy_get_forecast)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("forecast")  # no horizon_days at all
+        return _canned_response("Nothing is projected to run out soon based on your current sales rate.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What should I reorder soon?", now=_NOW
+    )
+
+    assert captured_kwargs["horizon_days"] == 7
+
+
+def test_forecast_horizon_days_out_of_range_falls_back_to_the_default(db_session, business_id, monkeypatch):
+    import app.ai.service as service_module
+
+    captured_kwargs = {}
+    real_get_forecast = service_module.get_forecast
+
+    def _spy_get_forecast(db, *, business_id, now=None, horizon_days=7, category_id=None):
+        captured_kwargs["horizon_days"] = horizon_days
+        return real_get_forecast(db, business_id=business_id, now=now, horizon_days=horizon_days, category_id=category_id)
+
+    monkeypatch.setattr(service_module, "get_forecast", _spy_get_forecast)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            # A hallucinated/malformed value (well past the API's own
+            # ge=1, le=90 bound) must not be trusted as-is.
+            return _classify_response("forecast", horizon_days=9999)
+        return _canned_response("Nothing is projected to run out soon based on your current sales rate.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What should I reorder in the next 9999 days?", now=_NOW
+    )
+
+    assert captured_kwargs["horizon_days"] == 7
+
+
+# --- guardrail: numbered-list markers in a multi-item answer -----------------
+# Real bug found live via a fire-test run: "give me the five actions..."
+# makes the explain prompt's own multi-item instruction kick in, and the
+# model naturally writes "1. ... 2. ... 3. ..." — every one of those list
+# markers parses as a Decimal and got wrongly flagged as an unsupported
+# numeric claim, rejecting an otherwise fully-grounded answer.
+
+
+def test_a_correct_numbered_list_answer_is_not_rejected_for_its_own_list_markers(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("findings_recommendations")
+        return _canned_response(
+            "Here are the top actions: 1. Reorder low-stock items soon. 2. Review your slowest-selling "
+            "products. 3. Investigate any recent revenue changes."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Give me the five actions I should take, ranked by impact.", now=_NOW,
+    )
+
+    assert result.intent == "findings_recommendations"
     assert result.grounded is True

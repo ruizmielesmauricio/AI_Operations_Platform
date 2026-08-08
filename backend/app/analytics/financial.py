@@ -172,12 +172,22 @@ def rank_products_by_margin(
     *,
     top_n: int = 5,
     category_name_by_product: dict[uuid.UUID, str | None] | None = None,
-) -> tuple[list[ProductMarginRow], list[ProductMarginRow], int]:
+) -> tuple[list[ProductMarginRow], list[ProductMarginRow], int, list[ProductMarginRow]]:
     """Returns (top_n by gross profit, bottom_n by gross profit, count of
-    products excluded for having no known cost). Products with no
-    revenue_with_known_cost are excluded from both lists — margin can't be
-    ranked for a product with no cost data, and silently ranking it at 0
-    would misreport it as break-even rather than unknown.
+    products excluded for having no known cost, every ranked row
+    unsliced). Products with no revenue_with_known_cost are excluded from
+    all three lists — margin can't be ranked for a product with no cost
+    data, and silently ranking it at 0 would misreport it as break-even
+    rather than unknown.
+
+    The unsliced `all_rows` exists for app/analytics/findings.py's
+    evaluate_thin_margin_high_revenue — a product that sells very well
+    but has a merely-thin (not negative) margin can rank far outside the
+    top_n/bottom_n-by-gross-profit window (it's neither the most nor
+    least profitable in absolute terms), so the capped top/bottom lists
+    alone can't answer "which of my best-sellers is dragging down
+    profitability" — that needs the full set, re-ranked by revenue
+    instead of profit.
     """
     category_name_by_product = category_name_by_product or {}
     rows: list[ProductMarginRow] = []
@@ -206,4 +216,4 @@ def rank_products_by_margin(
     # already shown in `top` when there are fewer than 2*top_n products.
     bottom_candidates = ranked[len(ranked) - top_n :] if len(ranked) > top_n else []
     bottom = list(reversed(bottom_candidates))
-    return top, bottom, excluded_count
+    return top, bottom, excluded_count, rows

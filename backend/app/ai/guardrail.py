@@ -15,6 +15,19 @@ from typing import Any
 
 _NUMBER_PATTERN = re.compile(r"[-+]?\d[\d,]*\.?\d*%?")
 _UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# A numbered-list marker ("1. ", "2) ") — document structure, not a claim
+# about the business. Matches a 1-2 digit token followed by "." or ")"
+# only when it stands alone as a whole token (not preceded by a
+# non-whitespace character, i.e. not part of a bigger number/date, and
+# followed by whitespace, i.e. not a decimal like "3.5") — so it catches
+# both a true line-start marker and one inline after a lead-in phrase
+# ("Here are the top actions: 1. Reorder... 2. Review..."), which is
+# exactly the shape live-verified in a real model answer (the explain
+# prompt forbids markdown/bullet lists, so a numbered list only ever
+# comes out as plain inline prose, not one marker per line). Anything
+# AFTER the marker (a real number inside a list item, e.g. "3. Reorder
+# 15 units") is untouched.
+_LIST_MARKER_PATTERN = re.compile(r"(?<!\S)\d{1,2}[.)](?=\s)")
 
 
 @dataclass(frozen=True)
@@ -30,7 +43,14 @@ class GuardrailResult:
 def extract_numeric_claims(text: str) -> list[str]:
     """Every numeric-looking substring in an AI answer, exactly as
     written (kept as raw strings, not yet parsed, so a caller can log
-    precisely what was flagged)."""
+    precisely what was flagged). Numbered-list markers are stripped
+    first (see _LIST_MARKER_PATTERN) — live-verified real bug: asking
+    ORLA "give me the five actions..." made the model answer with
+    "1. Reorder Widget... 2. Review pricing..." (the explain prompt's
+    own instruction for a multi-item question), and every marker parsed
+    as a plain Decimal claim needing grounding, rejecting an otherwise
+    fully correct answer 100% of the time."""
+    text = _LIST_MARKER_PATTERN.sub("", text)
     return _NUMBER_PATTERN.findall(text)
 
 
@@ -115,18 +135,34 @@ def flatten_numeric_values(context: Any) -> set[Decimal]:
     return values
 
 
-def validate_grounded(answer_text: str, context: Any) -> GuardrailResult:
+def validate_grounded(answer_text: str, context: Any, *, question: str | None = None) -> GuardrailResult:
     """PR-5.3's actual enforcement: every numeric claim in `answer_text`
-    must equal some number found anywhere in `context` (Decimal equality
-    ignores trailing-zero formatting differences, e.g. Decimal("39.9")
-    == Decimal("39.90") — but not rounding: "€11,908" will not match a
-    true 11907.76, by design. Fails closed on any ambiguity rather than
-    silently accepting a rounded/reworded figure — better to occasionally
-    reject a legitimate answer than let an invented number through). A
-    claim that fails to parse as a number is skipped, not flagged (it
-    wasn't a numeric claim at all — e.g. a list marker or a stray word
-    fragment the regex still matched)."""
+    must equal some number found anywhere in `context`, OR in the user's
+    own `question` (Decimal equality ignores trailing-zero formatting
+    differences, e.g. Decimal("39.9") == Decimal("39.90") — but not
+    rounding: "€11,908" will not match a true 11907.76, by design. Fails
+    closed on any ambiguity rather than silently accepting a rounded/
+    reworded figure — better to occasionally reject a legitimate answer
+    than let an invented number through). A claim that fails to parse as
+    a number is skipped, not flagged (it wasn't a numeric claim at all —
+    e.g. a list marker or a stray word fragment the regex still matched).
+
+    `question` is optional and additive only — a number the user
+    themselves supplied (e.g. "if I had €2,000 to spend...") is a safe
+    premise to reference back, not a business-data fact that needs
+    grounding in `context`; this guardrail's actual job is catching the
+    *model* inventing a business fact, not catching it restating what it
+    was asked. Found live: a real, correct answer that echoed the user's
+    own stated budget figure was being rejected as "unsupported" purely
+    because that number only ever existed in the question, never in the
+    fetched context.
+    """
     allowed = flatten_numeric_values(context)
+    if question:
+        for raw in extract_numeric_claims(question):
+            parsed = _parse_claim(raw)
+            if parsed is not None:
+                _add(allowed, parsed)
     unsupported: list[str] = []
 
     for raw_claim in extract_numeric_claims(answer_text):

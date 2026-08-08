@@ -173,12 +173,13 @@ def test_rank_products_by_margin_excludes_products_with_unknown_cost():
     ]
     products_by_id = {_P1: "Chain", _P2: "Saddle", _P3: "Mystery Item"}
 
-    top, bottom, excluded_count = rank_products_by_margin(aggregates, products_by_id, top_n=5)
+    top, bottom, excluded_count, all_rows = rank_products_by_margin(aggregates, products_by_id, top_n=5)
 
     assert excluded_count == 1
     assert {row.product_id for row in top} == {_P1, _P2}
     assert {row.product_id for row in bottom} == set()  # fewer than top_n * 2 candidates
     assert top[0].product_id == _P2  # higher gross profit first ($400 vs $200)
+    assert {row.product_id for row in all_rows} == {_P1, _P2}  # unsliced, but still excludes unknown-cost rows
 
 
 def test_rank_products_by_margin_top_and_bottom_dont_overlap_with_enough_products():
@@ -188,7 +189,7 @@ def test_rank_products_by_margin_top_and_bottom_dont_overlap_with_enough_product
     ]
     products_by_id = {a.product_id: f"Product {i}" for i, a in enumerate(aggregates)}
 
-    top, bottom, excluded_count = rank_products_by_margin(aggregates, products_by_id, top_n=3)
+    top, bottom, excluded_count, all_rows = rank_products_by_margin(aggregates, products_by_id, top_n=3)
 
     assert excluded_count == 0
     assert len(top) == 3

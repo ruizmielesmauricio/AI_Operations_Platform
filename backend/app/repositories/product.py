@@ -1,3 +1,4 @@
+import re
 import uuid
 from decimal import Decimal
 
@@ -7,6 +8,14 @@ from sqlalchemy.orm import Session
 from app.models.product import Product, ProductCategory
 
 _SEARCH_LIMIT = 5
+# Matches a trailing "(...)" annotation on an otherwise plain string, e.g.
+# "WorkshopPro Lubricant Plus (SKU-00175)" -> ("WorkshopPro Lubricant
+# Plus", "SKU-00175"). This is exactly the label format ORLA's own
+# many-match disambiguation messages use (app/application/lookups.py's
+# match_labels: f"{name} ({sku})") — a real bug, found live: a user
+# copying one of those labels back verbatim got zero matches, since the
+# literal "(SKU-00175)" text is never part of the stored product name.
+_TRAILING_PAREN_RE = re.compile(r"^(.*?)\s*\(([^()]+)\)\s*$")
 
 
 class ProductRepository:
@@ -56,18 +65,32 @@ class ProductRepository:
         up the chat context — the caller (app/ai/service.py) treats
         "more results than fit" the same as any other multi-match case,
         asking the user to narrow down rather than silently picking one.
+
+        Also tries a trailing "(SKU)" annotation split from the rest of
+        the query (see _TRAILING_PAREN_RE) — a query like "WorkshopPro
+        Lubricant Plus (SKU-00175)" is neither a substring of the stored
+        name nor an exact match on the sku as one whole string, so
+        without this it silently returns zero matches for exactly the
+        label format this repository's own caller hands back to a user.
         """
-        normalized_sku = query.strip().upper()
+        query = query.strip()
+        normalized_sku = query.upper()
+        conditions = [
+            func.lower(Product.name).like(f"%{query.lower()}%"),
+            func.upper(Product.sku) == normalized_sku,
+        ]
+        paren_match = _TRAILING_PAREN_RE.match(query)
+        if paren_match:
+            name_part, sku_part = paren_match.group(1).strip(), paren_match.group(2).strip()
+            if name_part:
+                conditions.append(func.lower(Product.name).like(f"%{name_part.lower()}%"))
+            if sku_part:
+                conditions.append(func.upper(Product.sku) == sku_part.upper())
+
         return list(
             self.session.scalars(
                 select(Product)
-                .where(
-                    Product.business_id == business_id,
-                    or_(
-                        func.lower(Product.name).like(f"%{query.strip().lower()}%"),
-                        func.upper(Product.sku) == normalized_sku,
-                    ),
-                )
+                .where(Product.business_id == business_id, or_(*conditions))
                 .limit(limit)
             )
         )

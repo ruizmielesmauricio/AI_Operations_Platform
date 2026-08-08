@@ -40,6 +40,14 @@ class FinancialPerformanceSummary:
     bottom_margin_products: list[ProductMarginRow]
     products_excluded_from_ranking: int
     returns: ReturnsSummary
+    # Every ranked product (not just the top/bottom-by-gross-profit
+    # slices above) — internal only, deliberately not mirrored onto
+    # FinancialPerformanceOut/the API payload (an unbounded per-product
+    # list has no place on the wire). Feeds
+    # app/analytics/findings.py::evaluate_thin_margin_high_revenue via
+    # app/application/findings.py, which needs to re-rank by revenue
+    # rather than gross profit.
+    all_margin_products: list[ProductMarginRow]
 
 
 def get_financial_performance(
@@ -98,7 +106,7 @@ def get_financial_performance(
     revenue_trend = compute_revenue_change(current_revenue, previous_revenue)
     gross_margin = compute_gross_margin(aggregates)
 
-    top, bottom, excluded_count = rank_products_by_margin(
+    top, bottom, excluded_count, all_margin_products = rank_products_by_margin(
         aggregates, products_by_id, top_n=_TOP_N, category_name_by_product=category_name_by_product
     )
 
@@ -126,4 +134,5 @@ def get_financial_performance(
         bottom_margin_products=bottom,
         products_excluded_from_ranking=excluded_count,
         returns=returns_summary,
+        all_margin_products=all_margin_products,
     )

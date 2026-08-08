@@ -52,6 +52,32 @@ def test_search_by_name_or_sku_returns_no_matches_for_an_unknown_query(db_sessio
     assert results == []
 
 
+def test_search_by_name_or_sku_matches_its_own_disambiguation_label_format(db_session, business_id):
+    # Real bug, found live: app/application/lookups.py's many-match
+    # message formats each option as "name (sku)" — a user naturally
+    # copies one of those labels back verbatim, which previously matched
+    # neither the plain name substring nor the exact sku (the combined
+    # string is neither), returning zero results.
+    product = _make_product(db_session, business_id, name="WorkshopPro Lubricant Plus", sku="SKU-00175")
+    db_session.commit()
+
+    results = ProductRepository(db_session).search_by_name_or_sku(
+        business_id, "WorkshopPro Lubricant Plus (SKU-00175)"
+    )
+    assert [p.id for p in results] == [product.id]
+
+
+def test_search_by_name_or_sku_with_trailing_paren_still_matches_on_name_alone(db_session, business_id):
+    # The parenthetical doesn't have to be a real sku for the name half
+    # to still resolve — e.g. a size/variant annotation a user added
+    # themselves that happens to not match anything.
+    product = _make_product(db_session, business_id, name="Chain Lube", sku="CL-100")
+    db_session.commit()
+
+    results = ProductRepository(db_session).search_by_name_or_sku(business_id, "Chain Lube (100ml)")
+    assert [p.id for p in results] == [product.id]
+
+
 def test_search_by_name_or_sku_returns_every_match_when_several_share_a_word(db_session, business_id):
     a = _make_product(db_session, business_id, name="Chain Lube 100ml")
     b = _make_product(db_session, business_id, name="Chain Lube 250ml")

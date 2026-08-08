@@ -106,6 +106,15 @@ def test_looks_like_a_reorder_question_matches_expected_phrasings():
     assert _looks_like_a_reorder_question("How is my revenue doing?") is False
 
 
+def test_looks_like_a_reorder_question_matches_run_out_of_stock_phrasings():
+    # Added after a live fire-test run found "run out of stock"-shaped
+    # questions occasionally misclassified as out_of_scope — these
+    # keywords back answer_question's out_of_scope -> forecast recovery.
+    assert _looks_like_a_reorder_question("What is likely to run out of stock during the next two weeks?") is True
+    assert _looks_like_a_reorder_question("Which products are at risk of a stock out?") is True
+    assert _looks_like_a_reorder_question("Is anything close to a stockout?") is True
+
+
 def test_build_priority_order_list_orders_by_the_input_order_and_skips_zero_quantity():
     # Urgency ordering is the caller's responsibility (get_forecast
     # already sorts soonest-out-of-stock-first) — this just must not

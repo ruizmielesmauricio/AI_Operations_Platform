@@ -105,3 +105,72 @@ def test_validate_grounded_skips_non_numeric_text():
     result = validate_grounded(answer, context)
     assert result.grounded is True
     assert result.unsupported_claims == []
+
+
+def test_validate_grounded_accepts_a_number_the_user_supplied_in_their_own_question():
+    # Live-verified real bug: "If I had €2,000 to invest back into
+    # inventory, what would you recommend buying?" — a correct answer
+    # naturally echoes the user's own €2,000 budget back, but that
+    # figure never appears anywhere in the fetched business-data
+    # context (it's a premise the user supplied, not a business fact),
+    # so it was being wrongly rejected as "unsupported."
+    context = {"products": [{"name": "TrailCore Road 200", "suggested_reorder_quantity": 5}]}
+    question = "If I had €2,000 to invest back into inventory, what would you recommend buying?"
+    answer = "With your €2,000 budget, prioritise TrailCore Road 200 — reorder 5 units."
+    result = validate_grounded(answer, context, question=question)
+    assert result.grounded is True
+    assert result.unsupported_claims == []
+
+
+def test_validate_grounded_still_rejects_a_genuinely_invented_number_even_with_a_question_supplied():
+    # The question parameter is additive only — it must not blanket-
+    # allow every number in the answer, only ones actually traceable to
+    # either the context or the question itself.
+    context = {"products": [{"name": "TrailCore Road 200"}]}
+    question = "If I had €2,000 to invest, what would you recommend?"
+    answer = "You should expect a return of €9,999.99."
+    result = validate_grounded(answer, context, question=question)
+    assert result.grounded is False
+    assert "9,999.99" in result.unsupported_claims
+
+
+def test_validate_grounded_ignores_numbered_list_markers_in_a_multi_item_answer():
+    # Live-verified real bug: "give me the five actions..." makes the
+    # explain prompt's own multi-item instruction kick in, and the model
+    # naturally writes "1. ... 2. ... 3. ..." inline (no bullet/markdown
+    # allowed) — every marker parsed as an unsupported Decimal claim,
+    # rejecting an otherwise fully-grounded answer.
+    context = {"recommendations": [{"title": "Reorder Widget"}, {"title": "Review pricing"}]}
+    answer = "Here are the top actions: 1. Reorder Widget — it's low on stock. 2. Review pricing on slow movers."
+    result = validate_grounded(answer, context)
+    assert result.grounded is True
+    assert result.unsupported_claims == []
+
+
+def test_validate_grounded_still_catches_a_real_number_inside_a_list_item():
+    # The list-marker strip must not swallow a genuine claim that
+    # happens to sit right after a marker.
+    context = {"products": [{"name": "Widget"}]}
+    answer = "1. Reorder Widget — you'll need 9,999 units."
+    result = validate_grounded(answer, context)
+    assert result.grounded is False
+    assert "9,999" in result.unsupported_claims
+
+
+def test_validate_grounded_does_not_strip_a_genuine_decimal_that_merely_starts_with_a_digit_dot():
+    # A real decimal like "3.5%" must not be mistaken for a "3." list
+    # marker — the lookahead requires whitespace right after the dot,
+    # which a decimal's fractional digits never have.
+    context = {"gross_margin_pct": "3.5"}
+    answer = "Gross margin was 3.5% this period."
+    result = validate_grounded(answer, context)
+    assert result.grounded is True
+
+
+def test_validate_grounded_without_a_question_behaves_exactly_as_before():
+    # question is optional — every existing call site (and every
+    # pre-existing test above) must keep working unchanged.
+    context = {"revenue": {"current": "100.00"}}
+    answer = "Revenue was €100.00."
+    result = validate_grounded(answer, context)
+    assert result.grounded is True
