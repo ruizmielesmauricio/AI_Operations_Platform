@@ -55,6 +55,13 @@ export default function OnboardingPage() {
   const [billingError, setBillingError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Which business's inline "are you sure?" prompt is showing, if any —
+  // replaces a prior window.confirm() (reported as doing nothing on at
+  // least one real click; native confirm dialogs are also unreliable
+  // inside some embedded/webview browser contexts, silently resolving
+  // without ever showing anything) with a plain in-page Yes/No, the same
+  // expand-in-place pattern already used for the branch and profile forms.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   // Which standalone business's "Add a branch" form is expanded, if any —
   // only one open at a time, matching the create-business form's own
   // single-form-on-screen feel.
@@ -110,16 +117,16 @@ export default function OnboardingPage() {
     }
   }
 
-  async function handleDelete(business: Business) {
-    // Deletion cancels real billing and is not something to fire on a
-    // stray click — a native confirm rather than a new modal component
-    // for one button, matching this frontend's existing lack of one.
-    const confirmed = window.confirm(
-      `Delete "${business.name}"? This cancels its subscription and archives the shop — your sales, ` +
-        "products, and reports stay on record, but you'll lose access to them here."
-    );
-    if (!confirmed) return;
+  function handleRequestDelete(businessId: string) {
+    setDeleteError(null);
+    setConfirmingDeleteId(businessId);
+  }
 
+  function handleCancelDelete() {
+    setConfirmingDeleteId(null);
+  }
+
+  async function handleConfirmDelete(business: Business) {
     setDeleteError(null);
     setDeletingId(business.id);
     try {
@@ -129,6 +136,7 @@ export default function OnboardingPage() {
       setDeleteError(err instanceof ApiError ? err.message : "Could not delete the shop. Try again shortly.");
     } finally {
       setDeletingId(null);
+      setConfirmingDeleteId(null);
     }
   }
 
@@ -301,9 +309,23 @@ export default function OnboardingPage() {
                   </>
                 )}
                 {" — "}
-                <button type="button" disabled={deleting} onClick={() => handleDelete(b)}>
-                  {deleting ? "Deleting…" : "Delete this shop"}
-                </button>
+                {confirmingDeleteId === b.id ? (
+                  <span>
+                    Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
+                    your sales, products, and reports stay on record, but you&apos;ll lose access to them
+                    here.{" "}
+                    <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
+                      {deleting ? "Deleting…" : "Yes, delete"}
+                    </button>{" "}
+                    <button type="button" disabled={deleting} onClick={handleCancelDelete}>
+                      No
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" onClick={() => handleRequestDelete(b.id)}>
+                    Delete this shop
+                  </button>
+                )}
                 {" — "}
                 <button type="button" onClick={() => handleOpenProfile(b)}>
                   {profileFormOpenFor === b.id ? "Cancel" : "Edit profile"}

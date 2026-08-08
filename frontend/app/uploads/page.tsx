@@ -12,6 +12,7 @@ import type {
   ImportRunResponse,
   ImportUndoResponse,
   RejectionSummary,
+  SubscriptionStatus,
   Upload,
   UploadFreshnessEntry,
 } from "@/types";
@@ -126,6 +127,17 @@ const NOT_PRESENT = "";
 export default function UploadsPage() {
   const { session, checkingSession } = useRequireSession();
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
+  // Uploads/imports 402 without an active subscription (require_active_
+  // subscription) — a business pending payment (unsubscribed, or a branch
+  // that never finished Checkout) used to still appear as a normal,
+  // selectable option in the dropdown below, which looked like a real
+  // choice even though nothing there could ever succeed. Fetched here
+  // rather than in useBusinessSelector itself, since dashboard/reports
+  // deliberately keep showing every business, subscribed or not — only
+  // this page's "which business can I actually upload into" question
+  // needs filtering.
+  const [subscriptions, setSubscriptions] = useState<Record<string, SubscriptionStatus>>({});
+  const [subscriptionsLoaded, setSubscriptionsLoaded] = useState(false);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [freshness, setFreshness] = useState<UploadFreshnessEntry[]>([]);
   const [entityType, setEntityType] = useState(ENTITY_TYPES[0].value);
@@ -182,6 +194,41 @@ export default function UploadsPage() {
       loadFreshness(businessId);
     }
   }, [businessId, loadUploads, loadFreshness]);
+
+  // Fetched together (Promise.all, not the per-business fire-and-forget
+  // pattern used elsewhere) specifically so `subscriptionsLoaded` flips
+  // once, not once per business — filtering the dropdown before every
+  // response is back would otherwise flash "no subscribed shop" for
+  // businesses that are actually fine.
+  useEffect(() => {
+    if (businesses.length === 0) return;
+    setSubscriptionsLoaded(false);
+    Promise.all(
+      businesses.map((b) =>
+        apiGet<SubscriptionStatus>(`/businesses/${b.id}/billing/subscription`)
+          .then((s) => [b.id, s] as const)
+          .catch(() => [b.id, { status: null, current_period_end: null }] as const)
+      )
+    ).then((entries) => {
+      setSubscriptions(Object.fromEntries(entries));
+      setSubscriptionsLoaded(true);
+    });
+  }, [businesses]);
+
+  const subscribedBusinesses = businesses.filter((b) => subscriptions[b.id]?.status === "active");
+
+  // Once subscriptions are known, a selection that isn't actually
+  // subscribed — the default-to-first-business pick from
+  // useBusinessSelector landed on an unsubscribed shop, or a stale
+  // ?business= link points at one pending payment — is corrected to the
+  // first subscribed business instead of silently staying on a dead end.
+  useEffect(() => {
+    if (!subscriptionsLoaded || subscribedBusinesses.length === 0) return;
+    if (!subscribedBusinesses.some((b) => b.id === businessId)) {
+      setBusinessId(subscribedBusinesses[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriptionsLoaded, subscribedBusinesses, businessId]);
 
   function sampleValuesFor(column: string): string[] {
     if (!detection) return [];
@@ -384,6 +431,23 @@ export default function UploadsPage() {
     );
   }
 
+  if (subscriptionsLoaded && subscribedBusinesses.length === 0) {
+    // Every business on the account exists but none has an active
+    // subscription — the dropdown below only ever offers subscribed
+    // shops, so rather than render it empty, name the real reason
+    // directly and point at the one place to fix it.
+    return (
+      <main>
+        <AppNav businessId={businessId} />
+        <h1>Upload data</h1>
+        <p>
+          None of your shops has an active subscription yet, so there&apos;s nothing to upload into —{" "}
+          <a href="/onboarding">subscribe from Onboarding</a> to start uploading.
+        </p>
+      </main>
+    );
+  }
+
   return (
     <main>
       <AppNav businessId={businessId} />
@@ -411,12 +475,17 @@ export default function UploadsPage() {
         </ul>
       )}
 
-      {businesses.length > 1 && (
+      {subscribedBusinesses.length > 1 && (
         <div>
           <label htmlFor="business">Business</label>
           <br />
+          {/* Only subscribed shops are offered here — a shop pending
+              payment (unsubscribed, or a branch that never finished
+              Checkout) would 402 on every upload attempt regardless, so
+              listing it as a normal, selectable option only invited
+              picking a dead end. */}
           <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
-            {businesses.map((b) => (
+            {subscribedBusinesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
