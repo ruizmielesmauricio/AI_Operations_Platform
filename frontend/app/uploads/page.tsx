@@ -36,7 +36,16 @@ const ENTITY_TYPES = [
 ];
 
 // Keyed by entity_type — order matters within each: it's the order fields
-// are asked about on the confirmation screen (PR-2.4).
+// are asked about on the confirmation screen (PR-2.4). Must list exactly
+// the same fields as backend/app/imports/aliases.py::CANONICAL_FIELDS for
+// each entity type — confirm-mapping rejects anything else outright
+// (app/imports/service.py::confirm_mapping requires an exact key-set
+// match). "category" was missing here entirely (added to CANONICAL_FIELDS
+// for sales/inventory/purchases as part of the product-categories feature,
+// never mirrored to this list) — every sales/inventory/purchases mapping
+// confirmation was silently guaranteed to fail with "must include exactly
+// the canonical fields," regardless of how correct the visible mapping
+// looked, until this was caught and fixed.
 const FIELD_ORDER: Record<string, string[]> = {
   sales: [
     "sale_date",
@@ -48,9 +57,18 @@ const FIELD_ORDER: Record<string, string[]> = {
     "cost_price_at_sale",
     "tax_amount",
     "order_reference",
+    "category",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "as_of_date"],
-  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost", "purchase_reference"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "category", "as_of_date"],
+  purchases: [
+    "purchase_date",
+    "product_name",
+    "sku",
+    "quantity_received",
+    "unit_cost",
+    "purchase_reference",
+    "category",
+  ],
   repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
 };
 
@@ -65,12 +83,14 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     cost_price_at_sale: "Which column is your cost for this item? (optional)",
     tax_amount: "Which column is the tax/VAT amount? (optional)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
+    category: "Which column is the product category or department? (optional)",
   },
   inventory: {
     product_name: "Which column is the product name? (optional if SKU is set)",
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
     unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
+    category: "Which column is the product category or department? (optional)",
     as_of_date: "Which column is the date this count was taken? (optional)",
   },
   purchases: {
@@ -80,6 +100,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     quantity_received: "Which column is the quantity received?",
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
     purchase_reference: "Which column is the PO or invoice number? (optional)",
+    category: "Which column is the product category or department? (optional)",
   },
   repairs: {
     repair_date: "Which column is the repair date?",
@@ -105,15 +126,24 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
     order_reference:
       "Prevents accidentally importing the same order twice if you re-upload a file that overlaps an earlier one.",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
   },
   inventory: {
     as_of_date:
       "Most stock-count exports don't have this — leave it blank and we'll use today's date. Only map it if " +
       "your file states the date the count was actually taken (e.g. an overnight export dated for the day before).",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
   },
   purchases: {
     purchase_reference:
       "Prevents accidentally importing the same purchase twice if you re-upload a file that overlaps an earlier one.",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
   },
   repairs: {
     labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
@@ -282,8 +312,10 @@ export default function UploadsPage() {
           FIELD_ORDER[uploadEntityType].map((field) => [field, result.suggested_mapping[field] ?? NOT_PRESENT])
         )
       );
-    } catch {
-      setMappingError("Could not read this file's columns. Is the backend running?");
+    } catch (err) {
+      setMappingError(
+        err instanceof ApiError ? err.message : "Could not read this file's columns. Is the backend running?"
+      );
     }
   }
 
@@ -310,8 +342,19 @@ export default function UploadsPage() {
       setPreviewRows(null);
       setChosenHeaderRowIndex(null);
       loadUploads(businessId);
-    } catch {
-      setMappingError("Could not save this mapping — check that the required fields are mapped.");
+    } catch (err) {
+      // Previously always this one guessed string regardless of the real
+      // cause — the backend already returns a specific, accurate detail
+      // per failure (missing required fields, a stale/renamed column, the
+      // upload already imported, ...); swallowing it here made every
+      // failure look like the same "check your mapping" issue even when
+      // it wasn't, which is exactly what made a genuinely-correct mapping
+      // impossible to debug from this message alone.
+      setMappingError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not save this mapping — check that the required fields are mapped."
+      );
     } finally {
       setConfirming(false);
     }
@@ -348,8 +391,11 @@ export default function UploadsPage() {
       );
       loadUploads(businessId);
       loadFreshness(businessId);
-    } catch {
-      setActionErrors((prev) => ({ ...prev, [importRecordId]: "Could not undo this import." }));
+    } catch (err) {
+      setActionErrors((prev) => ({
+        ...prev,
+        [importRecordId]: err instanceof ApiError ? err.message : "Could not undo this import.",
+      }));
     } finally {
       setUndoingRecordId(null);
     }
