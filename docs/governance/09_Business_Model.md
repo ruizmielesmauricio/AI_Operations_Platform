@@ -70,11 +70,11 @@ What is **not yet validated** is customer demand: no interviews have been comple
 ## The Model, Restated
 
 * **Customer:** Independent bike shop in Ireland (initial segment), paying a monthly subscription.
-* **Price:** €80/month per business — the accepted current subscription price under BD-005.
+* **Price:** €80/month per business — the accepted current subscription price under BD-005 — plus an optional €30/month per additional branch/location under BD-007 (a separate, additive subscription, not a discount tier on the primary price).
 * **Value delivered:** Deterministic profitability, inventory, repair, and returns analytics, explained in plain language, layered on top of the shop's existing POS/accounting data.
 * **Cost structure:** Low fixed infrastructure cost, small variable AI/processing cost per customer (`08_Cost_Analysis.md`).
 
-**Pricing status:** €80/month per business is the accepted current subscription price (BD-005). The former €79 planning assumption is superseded and must not be used in financial modelling or customer-facing material.
+**Pricing status:** €80/month per business is the accepted current subscription price (BD-005). The former €79 planning assumption is superseded and must not be used in financial modelling or customer-facing material. A multi-location owner pays €80/month for their primary shop plus €30/month for each additional branch (BD-007) — e.g. one primary shop and one branch is €110/month total, billed as two independent subscriptions. Implemented and live in Stripe test mode; not yet validated by any real paying branch customer, so branch revenue is not yet included in the scenario tables below.
 
 ## Validation Against Market Evidence
 
@@ -245,3 +245,4 @@ The most commercially important output of this document is not the revenue numbe
 |---------|------|---------|
 | 0.1 | TBD | Initial draft; business model and pricing validated against `08_Cost_Analysis.md`; 6- and 12-month scenario-based revenue forecast added. |
 | 0.2 | 30/07/2026 | Confirmed €80/month as the accepted current price; removed the superseded €79 discrepancy and retained €80 across all revenue scenarios. Fixed a self-referential citation in the Purpose section (now correctly points to `01_Project_Vision.md`); removed the self-referential "(detailed set)" Related Document; synced version header with revision history. |
+| 0.3 | 08/08/2026 | Recorded BD-007: €30/month per additional branch/location, a separate additive subscription (not a discount tier on the €80/month primary price) — implemented and live in Stripe test mode. Not yet included in the revenue scenario tables, which stay primary-shop-only until a real paying branch exists. |

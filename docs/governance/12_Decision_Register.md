@@ -88,6 +88,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | BD-004 | Validate the product with real customers before completing the full commercial launch process | Accepted | tech BD-002 |
 | BD-005 | **Set the current subscription price at €80 per month per business** | **Accepted** | supersedes tech BD-001 (€79, Proposed) |
 | BD-006 | Position the product as a complement to the customer's existing POS, not a replacement | Accepted | new |
+| BD-007 | **Set the additional-branch/location add-on subscription price at €30 per month per branch** — a branch is billed as its own separate subscription (not a quantity line item on the primary shop's), reusing the exact same Stripe Checkout/webhook/cancel path as the primary €80/month subscription (BD-005) | Accepted | new |
 
 ---
 
@@ -170,6 +171,12 @@ Customer discovery and pilot evidence may inform a future pricing decision, but 
 
 ---
 
+# BD-007 Consistency Status (€30 Branch Add-on)
+
+€30 per month per additional branch/location is the accepted add-on price (BD-007), separate from and additive to BD-005's €80/month primary-shop price — an account with one primary shop and one branch pays €80 + €30 = €110/month total, as two independent Stripe subscriptions, not one combined line item. Implemented and live in Stripe test mode as of `11_Development_Roadmap.md` v1.37; not yet validated by any real paying branch customer.
+
+---
+
 # ADR Template
 
 ```markdown
@@ -209,3 +216,4 @@ What evidence would cause this decision to be revisited?
 | 1.6 | 30/07/2026 | Added PD-008 (three-lane conversational agent: business Q&A, report explanation, product/support help), PD-009 (standalone low-stock alerting), and ADR-020 (intent-classifier routing to approved deterministic queries or an approved help-content knowledge base — no free-form AI calculation or invention). Recorded during Phase 2 prototype service scoping. |
 | 1.7 | 30/07/2026 | Clarified ADR-011 to explicitly cover Stripe Tax (automatic EU VAT on Checkout), recorded during initial `backend/app/billing/` implementation. Added ADR-021 (Rejected): Stripe Connect is not in scope — this platform charges tenants a subscription fee, it does not pay out to them. |
 | 1.8 | 04/08/2026 | Accepted ADR-016 (Production Events, implemented as `production_events`/`production_event_inputs`/`production_event_outputs`, replacing the bicycle-specific `repairs`/`repair_parts_used` tables) — the gate was met once a second and third vertical (cafe, pharmacy) began active scoping. Added ADR-022 (`inventory_lots` canonical lot/batch + expiry-date tracking) and ADR-023 (pharmacy `prescription_details` extension, deliberately excluding patient identity/clinical fields). Added PD-010 (supporting pharmacy as a third vertical; data-minimisation decision, not a full GDPR compliance sign-off — see Q-053). Removed the ADR-016 row from "Decisions Requiring Action" now that it's Accepted. |
+| 1.9 | 08/08/2026 | Added BD-007: the additional-branch/location add-on subscription price, €30/month per branch, billed as its own fully separate Stripe subscription (not a quantity line item on the primary €80/month subscription) — implemented and live in Stripe test mode (`11_Development_Roadmap.md` v1.37). Added a BD-007 Consistency Status note mirroring BD-005's, stating the two prices are additive, not a combined tier. |
