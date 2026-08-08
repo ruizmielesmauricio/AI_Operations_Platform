@@ -101,3 +101,69 @@ def test_business_limit_rejects_a_second_standalone_business_for_the_same_owner(
     response = client.get("/businesses", headers=headers)
     names = {row["name"] for row in response.json()}
     assert names == {"Shop A"}
+
+
+# --- PATCH /businesses/{id} (profile fields) --------------------------------
+
+
+def test_owner_can_update_their_business_profile(client):
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    response = client.patch(
+        f"/businesses/{business['id']}",
+        json={
+            "manager_name": "Aoife Byrne",
+            "contact_email": "aoife@shopa.example",
+            "contact_phone": "+353 1 234 5678",
+            "location_label": "Dublin - Rathmines",
+            "address_line1": "12 Main Street",
+            "city": "Dublin",
+            "postal_code": "D06",
+            "country": "Ireland",
+            "timezone": "Europe/Dublin",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manager_name"] == "Aoife Byrne"
+    assert body["contact_email"] == "aoife@shopa.example"
+    assert body["location_label"] == "Dublin - Rathmines"
+    assert body["country"] == "Ireland"
+
+    # Persisted, not just echoed back.
+    refetched = client.get(f"/businesses/{business['id']}", headers=headers).json()
+    assert refetched["manager_name"] == "Aoife Byrne"
+
+
+def test_patch_only_touches_fields_actually_sent(client):
+    # exclude_unset semantics: a field left out of the request body is
+    # left untouched, not silently cleared.
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Aoife Byrne"}, headers=headers)
+
+    response = client.patch(
+        f"/businesses/{business['id']}", json={"contact_email": "aoife@shopa.example"}, headers=headers
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # manager_name survives the second PATCH, which never mentioned it.
+    assert body["manager_name"] == "Aoife Byrne"
+    assert body["contact_email"] == "aoife@shopa.example"
+
+
+def test_a_non_member_cannot_update_another_business_s_profile(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
+
+    response = client.patch(
+        f"/businesses/{business_a['id']}", json={"manager_name": "Not Owner"}, headers=headers_b
+    )
+    assert response.status_code == 403
+
+    # Confirmed untouched.
+    refetched = client.get(f"/businesses/{business_a['id']}", headers=headers_a).json()
+    assert refetched["manager_name"] is None

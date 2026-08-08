@@ -19,9 +19,9 @@ class Business(Base, PKMixin, TimestampMixin):
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Europe/Dublin")
     # NULL = a standalone/primary shop — the one-shop-per-account limit
     # (app/repositories/business.py::count_owned_standalone_businesses)
-    # counts exactly these. Non-null marks a branch of that parent.
-    # Schema groundwork only for now — no route can set this yet; the
-    # paid branch checkout flow is a deliberately deferred follow-up.
+    # counts exactly these. Non-null marks a branch of that parent, set via
+    # POST /businesses/{id}/branches (app/repositories/business.py::
+    # create_branch_business).
     parent_business_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("businesses.id"), nullable=True
     )
@@ -33,3 +33,21 @@ class Business(Base, PKMixin, TimestampMixin):
     # confirmed with the user: no cascading hard delete exists or is
     # wanted, consistent with this codebase's audit-log-conscious posture.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- Profile fields (all optional) ---------------------------------
+    # Descriptive contact/location record-keeping only — confirmed with
+    # the user this is NOT a second login/account (that would need an
+    # invite + permissions system that doesn't exist anywhere in this
+    # codebase yet), just richer, human-readable identification per
+    # business, most useful once an account has multiple locations.
+    manager_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # A short label distinct from `name`, e.g. "Dublin - Rathmines" — the
+    # formal shop name is often identical across a primary shop and its
+    # branches, so it alone doesn't distinguish them in a list.
+    location_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address_line1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(128), nullable=True)

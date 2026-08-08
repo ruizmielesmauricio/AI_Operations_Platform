@@ -8,6 +8,30 @@ export interface Business {
   // business, billed separately (see app/api/businesses.py's
   // POST /businesses/{id}/branches).
   parent_business_id: string | null;
+  // Profile fields — descriptive contact/location record-keeping only,
+  // editable via PATCH /businesses/{id}. All optional.
+  manager_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  location_label: string | null;
+  address_line1: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
+}
+
+// PATCH /businesses/{id} body — every field optional, only what actually
+// changed needs sending (frontend/app/onboarding/page.tsx's edit form).
+export interface BusinessProfileUpdate {
+  manager_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  location_label?: string | null;
+  address_line1?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+  timezone?: string | null;
 }
 
 export interface SubscriptionStatus {

@@ -143,3 +143,48 @@ def soft_delete_business(db: Session, *, business: Business) -> Business:
     db.commit()
     db.refresh(business)
     return business
+
+
+# Every field a PATCH /businesses/{id} call is allowed to touch — never
+# name/template/parent_business_id/deleted_at, which have their own,
+# more carefully-gated mutation paths elsewhere (creation, the branch
+# route, soft-delete). Kept as an explicit whitelist here as a second,
+# defensive check independent of app/schemas/business.py::
+# BusinessProfileUpdate's own field list, in case a future caller ever
+# passes something wider than that schema intends.
+_PROFILE_FIELDS = frozenset(
+    {
+        "manager_name",
+        "contact_email",
+        "contact_phone",
+        "location_label",
+        "address_line1",
+        "city",
+        "postal_code",
+        "country",
+        "timezone",
+    }
+)
+
+
+def update_business_profile(db: Session, *, business: Business, updates: dict) -> Business:
+    """Applies a partial update to a business's descriptive profile —
+    manager name, contact details, address, timezone. Deliberately not a
+    second login/account (confirmed with the user): these are
+    record-keeping fields only, most useful once an account has more
+    than one location and the shop `name` alone doesn't distinguish them.
+
+    `updates` is expected to already be the caller's
+    `model_dump(exclude_unset=True)` — a key that's present with value
+    None clears that field; a key left out entirely is left untouched.
+    Any key outside `_PROFILE_FIELDS` is silently ignored rather than
+    raising, since the schema itself already constrains what can arrive
+    here; this is a second line of defence, not the primary gate.
+    """
+    for field, value in updates.items():
+        if field not in _PROFILE_FIELDS:
+            continue
+        setattr(business, field, value)
+    db.commit()
+    db.refresh(business)
+    return business

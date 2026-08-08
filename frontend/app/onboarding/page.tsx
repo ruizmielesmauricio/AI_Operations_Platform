@@ -2,15 +2,45 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiDelete, apiGet, apiPost } from "@/lib/api/client";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { Business, SubscriptionStatus } from "@/types";
+import type { Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
 
 // Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
 // models this as a template choice, not a hardcoded assumption, so adding
 // cafe/garage later is a new option here, not new UI.
 const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
+
+// Descriptive contact/location record-keeping only — not a second login
+// (confirmed with the user, see app/models/business.py). Most useful once
+// an account has more than one location and the shop name alone doesn't
+// distinguish them.
+const PROFILE_FIELDS: { key: keyof BusinessProfileUpdate; label: string }[] = [
+  { key: "manager_name", label: "Manager / owner name" },
+  { key: "contact_email", label: "Contact email" },
+  { key: "contact_phone", label: "Contact phone" },
+  { key: "location_label", label: "Location label (e.g. \"Dublin - Rathmines\")" },
+  { key: "address_line1", label: "Address" },
+  { key: "city", label: "City" },
+  { key: "postal_code", label: "Postal code" },
+  { key: "country", label: "Country" },
+  { key: "timezone", label: "Timezone" },
+];
+
+function emptyProfileForm(business: Business): BusinessProfileUpdate {
+  return {
+    manager_name: business.manager_name ?? "",
+    contact_email: business.contact_email ?? "",
+    contact_phone: business.contact_phone ?? "",
+    location_label: business.location_label ?? "",
+    address_line1: business.address_line1 ?? "",
+    city: business.city ?? "",
+    postal_code: business.postal_code ?? "",
+    country: business.country ?? "",
+    timezone: business.timezone ?? "",
+  };
+}
 
 export default function OnboardingPage() {
   const { session, checkingSession } = useRequireSession();
@@ -33,6 +63,12 @@ export default function OnboardingPage() {
   const [branchTimezone, setBranchTimezone] = useState("Europe/Dublin");
   const [branchSubmitting, setBranchSubmitting] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
+  // Which business's profile-edit form is expanded, if any — same
+  // single-form-open-at-a-time pattern as the branch form above.
+  const [profileFormOpenFor, setProfileFormOpenFor] = useState<string | null>(null);
+  const [profileForm, setProfileForm] = useState<BusinessProfileUpdate>({});
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (session) {
@@ -140,6 +176,34 @@ export default function OnboardingPage() {
     }
   }
 
+  function handleOpenProfile(business: Business) {
+    if (profileFormOpenFor === business.id) {
+      setProfileFormOpenFor(null);
+      return;
+    }
+    setProfileError(null);
+    setProfileForm(emptyProfileForm(business));
+    setProfileFormOpenFor(business.id);
+  }
+
+  async function handleSaveProfile(e: React.FormEvent, businessId: string) {
+    e.preventDefault();
+    setProfileError(null);
+    setProfileSubmitting(true);
+    try {
+      // Blank strings mean "clear this field" as much as "never set it" —
+      // sent through as-is (empty string, not omitted) so an owner can
+      // deliberately clear a field they'd previously filled in.
+      const updated = await apiPatch<Business>(`/businesses/${businessId}`, profileForm);
+      setBusinesses((prev) => prev.map((b) => (b.id === businessId ? updated : b)));
+      setProfileFormOpenFor(null);
+    } catch (err) {
+      setProfileError(err instanceof ApiError ? err.message : "Could not save. Is the backend running?");
+    } finally {
+      setProfileSubmitting(false);
+    }
+  }
+
   if (checkingSession) {
     return (
       <main>
@@ -240,6 +304,31 @@ export default function OnboardingPage() {
                 <button type="button" disabled={deleting} onClick={() => handleDelete(b)}>
                   {deleting ? "Deleting…" : "Delete this shop"}
                 </button>
+                {" — "}
+                <button type="button" onClick={() => handleOpenProfile(b)}>
+                  {profileFormOpenFor === b.id ? "Cancel" : "Edit profile"}
+                </button>
+                {profileFormOpenFor === b.id && (
+                  <form onSubmit={(e) => handleSaveProfile(e, b.id)}>
+                    {PROFILE_FIELDS.map(({ key, label }) => (
+                      <div key={key}>
+                        <label htmlFor={`profile-${key}-${b.id}`}>{label}</label>
+                        <br />
+                        <input
+                          id={`profile-${key}-${b.id}`}
+                          value={profileForm[key] ?? ""}
+                          onChange={(e) =>
+                            setProfileForm((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                        />
+                      </div>
+                    ))}
+                    {profileError && <p className="status-error">{profileError}</p>}
+                    <button type="submit" disabled={profileSubmitting}>
+                      {profileSubmitting ? "Saving…" : "Save profile"}
+                    </button>
+                  </form>
+                )}
                 {isStandalone && (
                   <>
                     {" — "}

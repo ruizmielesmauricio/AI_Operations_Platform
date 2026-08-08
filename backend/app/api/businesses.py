@@ -14,12 +14,38 @@ from app.repositories.business import (
     create_business_with_owner,
     list_businesses_for_user,
     soft_delete_business,
+    update_business_profile,
 )
-from app.schemas.business import BusinessCreate, BusinessOut
+from app.schemas.business import BusinessCreate, BusinessOut, BusinessProfileUpdate
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
+
+
+def _to_business_out(business: Business, *, role: str) -> BusinessOut:
+    # One place listing every Business field BusinessOut needs — every
+    # route below calls this instead of constructing BusinessOut inline,
+    # specifically because that pattern already caused a real bug once
+    # (parent_business_id silently defaulting to None in two routes that
+    # forgot to pass it through). A field added to the model only needs
+    # updating here, not at every call site.
+    return BusinessOut(
+        id=business.id,
+        name=business.name,
+        template=business.template,
+        timezone=business.timezone,
+        role=role,
+        parent_business_id=business.parent_business_id,
+        manager_name=business.manager_name,
+        contact_email=business.contact_email,
+        contact_phone=business.contact_phone,
+        location_label=business.location_label,
+        address_line1=business.address_line1,
+        city=business.city,
+        postal_code=business.postal_code,
+        country=business.country,
+    )
 
 
 @router.post("", response_model=BusinessOut, status_code=status.HTTP_201_CREATED)
@@ -46,14 +72,7 @@ def create_business(
             detail="You already have a shop on this account. Delete your existing shop to create a "
             "different one, or contact us about adding a branch.",
         ) from exc
-    return BusinessOut(
-        id=business.id,
-        name=business.name,
-        template=business.template,
-        timezone=business.timezone,
-        role="owner",
-        parent_business_id=business.parent_business_id,
-    )
+    return _to_business_out(business, role="owner")
 
 
 @router.get("", response_model=list[BusinessOut])
@@ -62,17 +81,7 @@ def list_my_businesses(
     db: Session = Depends(get_db),
 ) -> list[BusinessOut]:
     rows = list_businesses_for_user(db, user_id=current_user.id)
-    return [
-        BusinessOut(
-            id=business.id,
-            name=business.name,
-            template=business.template,
-            timezone=business.timezone,
-            role=membership.role,
-            parent_business_id=business.parent_business_id,
-        )
-        for business, membership in rows
-    ]
+    return [_to_business_out(business, role=membership.role) for business, membership in rows]
 
 
 @router.get("/{business_id}", response_model=BusinessOut)
@@ -88,14 +97,32 @@ def get_business(
     # silently keep showing an archived business as if nothing happened.
     if business is None or business.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
-    return BusinessOut(
-        id=business.id,
-        name=business.name,
-        template=business.template,
-        timezone=business.timezone,
-        role=membership.role,
-        parent_business_id=business.parent_business_id,
-    )
+    return _to_business_out(business, role=membership.role)
+
+
+@router.patch("/{business_id}", response_model=BusinessOut)
+def update_business(
+    business_id: uuid.UUID,
+    payload: BusinessProfileUpdate,
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> BusinessOut:
+    # Deliberately get_current_membership, not an owner-only check — this
+    # is descriptive contact/location record-keeping (manager name,
+    # address, phone, timezone...), not a financial or destructive action
+    # like delete or add-a-branch, so any member of the business may edit
+    # it.
+    business = db.get(Business, business_id)
+    if business is None or business.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+    # exclude_unset, not exclude_none — a field explicitly sent as null
+    # clears it; a field left out of the request body entirely is left
+    # untouched. Matters here specifically because every field is
+    # optional, so "not sent" and "sent as empty" need to mean different
+    # things.
+    updates = payload.model_dump(exclude_unset=True)
+    business = update_business_profile(db, business=business, updates=updates)
+    return _to_business_out(business, role=membership.role)
 
 
 @router.post("/{business_id}/branches", response_model=BusinessOut, status_code=status.HTTP_201_CREATED)
@@ -127,14 +154,7 @@ def create_branch(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can add a branch"
         ) from exc
-    return BusinessOut(
-        id=branch.id,
-        name=branch.name,
-        template=branch.template,
-        timezone=branch.timezone,
-        role="owner",
-        parent_business_id=branch.parent_business_id,
-    )
+    return _to_business_out(branch, role="owner")
 
 
 @router.delete("/{business_id}", status_code=status.HTTP_204_NO_CONTENT)

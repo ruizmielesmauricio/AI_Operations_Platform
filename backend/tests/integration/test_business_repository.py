@@ -16,6 +16,7 @@ from app.repositories.business import (
     create_business_with_owner,
     list_businesses_for_user,
     soft_delete_business,
+    update_business_profile,
 )
 
 
@@ -159,3 +160,39 @@ def test_create_branch_business_rejects_a_manager_of_the_parent_not_just_strange
             db_session, name="Test Shop", template="bicycle_shop", timezone="Europe/Dublin",
             owner_user_id="user-b", parent_business_id=primary.id,
         )
+
+
+# --- update_business_profile -------------------------------------------
+
+
+def test_update_business_profile_writes_only_whitelisted_fields(db_session):
+    business = create_business_with_owner(
+        db_session, name="Shop A", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="user-a"
+    )
+    updated = update_business_profile(
+        db_session,
+        business=business,
+        updates={
+            "manager_name": "Aoife Byrne",
+            "contact_email": "aoife@shopa.example",
+            "city": "Dublin",
+            # Not a real profile field — deliberately included to prove
+            # the defensive whitelist actually ignores it rather than
+            # raising or silently writing a bogus attribute.
+            "name": "Renamed via the back door",
+        },
+    )
+    assert updated.manager_name == "Aoife Byrne"
+    assert updated.contact_email == "aoife@shopa.example"
+    assert updated.city == "Dublin"
+    assert updated.name == "Shop A"
+
+
+def test_update_business_profile_can_explicitly_clear_a_field(db_session):
+    business = create_business_with_owner(
+        db_session, name="Shop A", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="user-a"
+    )
+    update_business_profile(db_session, business=business, updates={"manager_name": "Aoife Byrne"})
+
+    cleared = update_business_profile(db_session, business=business, updates={"manager_name": None})
+    assert cleared.manager_name is None
