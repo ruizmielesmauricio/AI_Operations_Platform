@@ -2,44 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { ApiError, apiDelete, apiGet, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
+import type { Business, SubscriptionStatus } from "@/types";
 
 // Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
 // models this as a template choice, not a hardcoded assumption, so adding
 // cafe/garage later is a new option here, not new UI.
 const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
 
-// Descriptive contact/location record-keeping only — not a second login
-// (confirmed with the user, see app/models/business.py). Most useful once
-// an account has more than one location and the shop name alone doesn't
-// distinguish them.
-const PROFILE_FIELDS: { key: keyof BusinessProfileUpdate; label: string }[] = [
-  { key: "manager_name", label: "Manager / owner name" },
-  { key: "contact_email", label: "Contact email" },
-  { key: "contact_phone", label: "Contact phone" },
-  { key: "location_label", label: "Location label (e.g. \"Dublin - Rathmines\")" },
-  { key: "address_line1", label: "Address" },
-  { key: "city", label: "City" },
-  { key: "postal_code", label: "Postal code" },
-  { key: "country", label: "Country" },
-  { key: "timezone", label: "Timezone" },
-];
-
-function emptyProfileForm(business: Business): BusinessProfileUpdate {
-  return {
-    manager_name: business.manager_name ?? "",
-    contact_email: business.contact_email ?? "",
-    contact_phone: business.contact_phone ?? "",
-    location_label: business.location_label ?? "",
-    address_line1: business.address_line1 ?? "",
-    city: business.city ?? "",
-    postal_code: business.postal_code ?? "",
-    country: business.country ?? "",
-    timezone: business.timezone ?? "",
-  };
+// The four states a business can actually be in, collapsed from the raw
+// Stripe subscription status (active/past_due/incomplete/.../null) plus
+// this app's own soft-delete flag — direct request: exactly these four
+// labels, not the raw Stripe vocabulary.
+function statusLabel(business: Business, subscriptionStatus: string | null): string {
+  if (business.deleted_at) return "Deleted";
+  if (subscriptionStatus === "active") return "Subscribed";
+  if (subscriptionStatus === "canceled") return "Cancelled";
+  return "Pending Payment";
 }
 
 export default function OnboardingPage() {
@@ -60,7 +41,7 @@ export default function OnboardingPage() {
   // least one real click; native confirm dialogs are also unreliable
   // inside some embedded/webview browser contexts, silently resolving
   // without ever showing anything) with a plain in-page Yes/No, the same
-  // expand-in-place pattern already used for the branch and profile forms.
+  // expand-in-place pattern already used for the branch form.
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   // Which standalone business's "Add a branch" form is expanded, if any —
   // only one open at a time, matching the create-business form's own
@@ -70,21 +51,21 @@ export default function OnboardingPage() {
   const [branchTimezone, setBranchTimezone] = useState("Europe/Dublin");
   const [branchSubmitting, setBranchSubmitting] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
-  // Which business's profile-edit form is expanded, if any — same
-  // single-form-open-at-a-time pattern as the branch form above.
-  const [profileFormOpenFor, setProfileFormOpenFor] = useState<string | null>(null);
-  const [profileForm, setProfileForm] = useState<BusinessProfileUpdate>({});
-  const [profileSubmitting, setProfileSubmitting] = useState(false);
-  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (session) {
-      apiGet<Business[]>("/businesses").then(setBusinesses).catch(() => undefined);
+      // include_deleted=true — this list is now the "Company Profile"
+      // view (linked from the top nav), which shows every business
+      // including archived ones (status "Deleted") for visibility/
+      // history. Every other page's business selector still calls plain
+      // GET /businesses and never sees a deleted one.
+      apiGet<Business[]>("/businesses?include_deleted=true").then(setBusinesses).catch(() => undefined);
     }
   }, [session]);
 
   useEffect(() => {
     businesses.forEach((b) => {
+      if (b.deleted_at) return;
       apiGet<SubscriptionStatus>(`/businesses/${b.id}/billing/subscription`)
         .then((s) => setSubscriptions((prev) => ({ ...prev, [b.id]: s })))
         .catch(() => undefined);
@@ -131,7 +112,11 @@ export default function OnboardingPage() {
     setDeletingId(business.id);
     try {
       await apiDelete(`/businesses/${business.id}`);
-      setBusinesses((prev) => prev.filter((b) => b.id !== business.id));
+      // Marked Deleted in place rather than removed from the list — this
+      // page shows archived businesses now, not just active ones.
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === business.id ? { ...b, deleted_at: new Date().toISOString() } : b))
+      );
     } catch (err) {
       setDeleteError(err instanceof ApiError ? err.message : "Could not delete the shop. Try again shortly.");
     } finally {
@@ -160,6 +145,12 @@ export default function OnboardingPage() {
     }
   }
 
+  function handleCancelAddBranch() {
+    setBranchFormOpenFor(null);
+    setBranchError(null);
+    setBranchName("");
+  }
+
   async function handleAddBranch(e: React.FormEvent, parentId: string) {
     e.preventDefault();
     setBranchError(null);
@@ -174,41 +165,13 @@ export default function OnboardingPage() {
       // intermediate "sits here unpaid" step for the user to stall on.
       // If they abandon Checkout, the branch row still exists (the same
       // create-before-pay shape every standalone shop already uses) and
-      // stays clearly marked "payment incomplete" with a resumable
+      // stays clearly marked "Pending Payment" with a resumable
       // "Complete payment" button below, rather than disappearing.
       await redirectToCheckout(branch.id);
     } catch (err) {
       setBranchError(err instanceof ApiError ? err.message : "Could not add the branch. Is the backend running?");
     } finally {
       setBranchSubmitting(false);
-    }
-  }
-
-  function handleOpenProfile(business: Business) {
-    if (profileFormOpenFor === business.id) {
-      setProfileFormOpenFor(null);
-      return;
-    }
-    setProfileError(null);
-    setProfileForm(emptyProfileForm(business));
-    setProfileFormOpenFor(business.id);
-  }
-
-  async function handleSaveProfile(e: React.FormEvent, businessId: string) {
-    e.preventDefault();
-    setProfileError(null);
-    setProfileSubmitting(true);
-    try {
-      // Blank strings mean "clear this field" as much as "never set it" —
-      // sent through as-is (empty string, not omitted) so an owner can
-      // deliberately clear a field they'd previously filled in.
-      const updated = await apiPatch<Business>(`/businesses/${businessId}`, profileForm);
-      setBusinesses((prev) => prev.map((b) => (b.id === businessId ? updated : b)));
-      setProfileFormOpenFor(null);
-    } catch (err) {
-      setProfileError(err instanceof ApiError ? err.message : "Could not save. Is the backend running?");
-    } finally {
-      setProfileSubmitting(false);
     }
   }
 
@@ -229,10 +192,11 @@ export default function OnboardingPage() {
   }
 
   // One standalone shop per account — a branch (parent_business_id set)
-  // doesn't count, so someone whose only business is a branch (shouldn't
-  // normally happen, but not impossible after a parent's deleted) still
-  // sees the create form rather than being wrongly locked out of it.
-  const hasStandaloneShop = businesses.some((b) => !b.parent_business_id);
+  // doesn't count, and neither does an already-deleted one (the real
+  // limit check on the backend excludes both the same way; this list
+  // now shows deleted businesses too, so this must filter them out
+  // itself or a deleted shop would wrongly keep the create form hidden).
+  const hasStandaloneShop = businesses.some((b) => !b.parent_business_id && !b.deleted_at);
 
   return (
     <main>
@@ -245,7 +209,26 @@ export default function OnboardingPage() {
       ) : (
         <ul>
           {businesses.map((b) => {
+            if (b.deleted_at) {
+              // Archived — shown for visibility/history only. No actions:
+              // nothing here is editable or resumable once deleted (the
+              // backend itself 404s a PATCH/DELETE against it).
+              const parent = b.parent_business_id
+                ? businesses.find((p) => p.id === b.parent_business_id)
+                : null;
+              return (
+                <li key={b.id} style={{ marginBottom: "1em" }}>
+                  <div className="hint">
+                    {parent ? <>↳ Branch of {parent.name} — </> : null}
+                    {b.name} — {b.template} ({b.role})
+                  </div>
+                  <div className="hint">Deleted</div>
+                </li>
+              );
+            }
+
             const status = subscriptions[b.id]?.status ?? null;
+            const label = statusLabel(b, status);
             // A recoverable subscription (past_due, incomplete…) sends the
             // owner to the Customer Portal to fix it — new payment method,
             // retry, etc. A canceled subscription is a dead end there (no
@@ -269,7 +252,7 @@ export default function OnboardingPage() {
             // Matching the link's visibility to the real gate closes that
             // false impression rather than just leaving it to a 402 the
             // user only discovers after clicking through.
-            const canUpload = status === "active";
+            const canUpload = label === "Subscribed";
             return (
               <li key={b.id} style={{ marginBottom: "1em" }}>
                 <div>
@@ -277,7 +260,8 @@ export default function OnboardingPage() {
                     {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
                     {b.name}
                   </strong>{" "}
-                  — {b.template} ({b.role})
+                  — {b.template} ({b.role}) —{" "}
+                  <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
                 </div>
                 <div>
                   {canUpload ? (
@@ -285,48 +269,36 @@ export default function OnboardingPage() {
                   ) : (
                     <span className="hint">Upload data (subscribe first)</span>
                   )}
+                  {" — "}
+                  <a href={`/onboarding/${b.id}`}>View profile</a>
                 </div>
                 <div>
                   {isRecoverableInPortal ? (
-                    <>
-                      <span className={status === "active" ? "status-ok" : "status-error"}>
-                        {status === "active" ? "subscribed" : `subscription ${status}`}
-                      </span>{" "}
-                      <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
-                        {busy ? "Opening…" : "Manage billing"}
-                      </button>
-                    </>
+                    <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
+                      {busy ? "Opening…" : "Manage billing"}
+                    </button>
                   ) : (
-                    <>
-                      <span>
-                        {status === "canceled"
-                          ? "subscription canceled"
-                          : b.parent_business_id
-                            ? "payment incomplete"
-                            : "not subscribed"}
-                      </span>{" "}
-                      <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
-                        {busy
-                          ? "Starting…"
-                          : b.parent_business_id
-                            ? "Complete payment (€30/mo)"
-                            : "Subscribe"}
-                      </button>
-                    </>
+                    <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
+                      {busy
+                        ? "Starting…"
+                        : b.parent_business_id
+                          ? "Complete payment (€30/mo)"
+                          : "Subscribe"}
+                    </button>
                   )}
                 </div>
                 {/* Its own line, ahead of the more incidental actions below
-                    (delete/edit profile) — "we are missing the button to
-                    add more branches" was reported directly after it was
-                    buried at the end of one long run-on line of buttons;
-                    only shown for a standalone shop, since a branch can't
-                    itself have branches. */}
+                    (delete) — "we are missing the button to add more
+                    branches" was reported directly after it was buried at
+                    the end of one long run-on line of buttons; only shown
+                    for a standalone shop, since a branch can't itself have
+                    branches. */}
                 {isStandalone && (
                   <div>
                     <button
                       type="button"
                       onClick={() =>
-                        setBranchFormOpenFor(branchFormOpenFor === b.id ? null : b.id)
+                        branchFormOpenFor === b.id ? handleCancelAddBranch() : setBranchFormOpenFor(b.id)
                       }
                     >
                       {branchFormOpenFor === b.id ? "Cancel" : "+ Add a branch (€30/mo)"}
@@ -357,6 +329,9 @@ export default function OnboardingPage() {
                     {branchError && <p className="status-error">{branchError}</p>}
                     <button type="submit" disabled={branchSubmitting}>
                       {branchSubmitting ? "Adding…" : "Add branch"}
+                    </button>{" "}
+                    <button type="button" disabled={branchSubmitting} onClick={handleCancelAddBranch}>
+                      Cancel
                     </button>
                   </form>
                 )}
@@ -377,32 +352,8 @@ export default function OnboardingPage() {
                     <button type="button" onClick={() => handleRequestDelete(b.id)}>
                       Delete this shop
                     </button>
-                  )}{" "}
-                  <button type="button" onClick={() => handleOpenProfile(b)}>
-                    {profileFormOpenFor === b.id ? "Cancel" : "Edit profile"}
-                  </button>
+                  )}
                 </div>
-                {profileFormOpenFor === b.id && (
-                  <form onSubmit={(e) => handleSaveProfile(e, b.id)}>
-                    {PROFILE_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <label htmlFor={`profile-${key}-${b.id}`}>{label}</label>
-                        <br />
-                        <input
-                          id={`profile-${key}-${b.id}`}
-                          value={profileForm[key] ?? ""}
-                          onChange={(e) =>
-                            setProfileForm((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                        />
-                      </div>
-                    ))}
-                    {profileError && <p className="status-error">{profileError}</p>}
-                    <button type="submit" disabled={profileSubmitting}>
-                      {profileSubmitting ? "Saving…" : "Save profile"}
-                    </button>
-                  </form>
-                )}
               </li>
             );
           })}

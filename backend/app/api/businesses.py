@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -45,6 +45,7 @@ def _to_business_out(business: Business, *, role: str) -> BusinessOut:
         city=business.city,
         postal_code=business.postal_code,
         country=business.country,
+        deleted_at=business.deleted_at,
     )
 
 
@@ -77,10 +78,16 @@ def create_business(
 
 @router.get("", response_model=list[BusinessOut])
 def list_my_businesses(
+    # Opt-in, defaults False — every existing caller (dashboard/uploads/
+    # reports business selectors) gets exactly today's behavior unchanged.
+    # Only the "Company Profile" list (frontend/app/onboarding/page.tsx)
+    # passes true, to show archived businesses (status "Deleted") for
+    # visibility/history rather than hiding them entirely.
+    include_deleted: bool = Query(default=False),
     current_user: AuthenticatedUser = Depends(get_current_user_synced),
     db: Session = Depends(get_db),
 ) -> list[BusinessOut]:
-    rows = list_businesses_for_user(db, user_id=current_user.id)
+    rows = list_businesses_for_user(db, user_id=current_user.id, include_deleted=include_deleted)
     return [_to_business_out(business, role=membership.role) for business, membership in rows]
 
 

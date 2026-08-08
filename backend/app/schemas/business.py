@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,13 @@ class BusinessOut(BaseModel):
     city: str | None = None
     postal_code: str | None = None
     country: str | None = None
+    # Only ever non-null when the caller opted into GET /businesses?
+    # include_deleted=true (frontend/app/onboarding/page.tsx's "Company
+    # Profile" list, which shows every business including archived ones
+    # for visibility) — every other caller (dashboard/uploads/reports
+    # business selectors) never sees a deleted business at all, so this
+    # is always None there.
+    deleted_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

@@ -69,13 +69,14 @@ export function AppNav({ businessId }: { businessId?: string }) {
       {" · "}
       <a href={`/chat${suffix}`}>Ask ORLA</a>
       {" · "}
-      {/* No businessId suffix — onboarding lists every business the user
-          owns, not one specific business. Previously unreachable from
-          here at all once a user had ≥1 business (only linked from each
-          page's empty "no business yet" state) — this is also now where
-          billing management and shop deletion live, not just first-run
-          creation. */}
-      <a href="/onboarding">Onboarding</a>
+      {/* No businessId suffix — this links to the full list (every
+          business the user owns, active or not), not one specific
+          business. Still the same /onboarding route/page (first-run
+          creation, billing, shop deletion) — "Company Profile" is a
+          clearer label for what it's grown into: also where each
+          business's full descriptive profile lives now (per-business
+          "View profile" from the list, PATCH /businesses/{id}). */}
+      <a href="/onboarding">Company Profile</a>
       {" · "}
       <button type="button" onClick={handleLogout}>
         Log out

@@ -112,13 +112,22 @@ def create_branch_business(
     return branch
 
 
-def list_businesses_for_user(db: Session, *, user_id: str) -> list[tuple[Business, Membership]]:
-    return (
-        db.query(Business, Membership)
-        .join(Membership, Membership.business_id == Business.id)
-        .filter(Membership.user_id == user_id, Business.deleted_at.is_(None))
-        .all()
+def list_businesses_for_user(
+    db: Session, *, user_id: str, include_deleted: bool = False
+) -> list[tuple[Business, Membership]]:
+    # include_deleted is opt-in and defaults False specifically so every
+    # existing caller (dashboard/uploads/reports business selectors, the
+    # onboarding page's own create/delete flow) keeps its current
+    # behavior unchanged — archived businesses stay invisible everywhere
+    # except the one place that explicitly asks to see them (the "Company
+    # Profile" list, which shows a Deleted status for visibility/history
+    # rather than actionable management).
+    query = db.query(Business, Membership).join(Membership, Membership.business_id == Business.id).filter(
+        Membership.user_id == user_id
     )
+    if not include_deleted:
+        query = query.filter(Business.deleted_at.is_(None))
+    return query.all()
 
 
 def soft_delete_business(db: Session, *, business: Business) -> Business:

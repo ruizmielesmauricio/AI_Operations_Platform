@@ -88,6 +88,23 @@ def test_list_businesses_for_user_excludes_soft_deleted_businesses(db_session):
     )
 
 
+def test_list_businesses_for_user_with_include_deleted_shows_archived_ones_too(db_session):
+    business = create_business_with_owner(
+        db_session, name="Shop A", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="user-a"
+    )
+    soft_delete_business(db_session, business=business)
+
+    # Default behavior (every other caller) is unchanged — still excluded.
+    assert list_businesses_for_user(db_session, user_id="user-a") == []
+
+    # Opt-in surfaces it again, deleted_at intact, for the one caller that
+    # explicitly wants to show archived businesses (status "Deleted").
+    rows = list_businesses_for_user(db_session, user_id="user-a", include_deleted=True)
+    assert len(rows) == 1
+    assert rows[0][0].name == "Shop A"
+    assert rows[0][0].deleted_at is not None
+
+
 def test_soft_delete_business_does_not_touch_any_child_rows(db_session):
     # The real guarantee this whole soft-delete design exists for:
     # archiving a business must never destroy its financial/audit data.

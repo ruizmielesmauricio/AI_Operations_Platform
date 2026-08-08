@@ -167,3 +167,21 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     # Confirmed untouched.
     refetched = client.get(f"/businesses/{business_a['id']}", headers=headers_a).json()
     assert refetched["manager_name"] is None
+
+
+def test_include_deleted_only_ever_shows_the_caller_s_own_archived_businesses(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
+    client.delete(f"/businesses/{business_a['id']}", headers=headers_a)
+
+    # Default: archived business stays hidden even for its own owner.
+    assert client.get("/businesses", headers=headers_a).json() == []
+
+    # Opt-in shows it back to its own owner...
+    own_list = client.get("/businesses?include_deleted=true", headers=headers_a).json()
+    assert {row["name"] for row in own_list} == {"Shop A"}
+
+    # ...but never to a different user, opted in or not.
+    other_list = client.get("/businesses?include_deleted=true", headers=headers_b).json()
+    assert other_list == []
