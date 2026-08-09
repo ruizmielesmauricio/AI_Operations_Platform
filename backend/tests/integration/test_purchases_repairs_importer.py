@@ -529,6 +529,36 @@ def test_purchase_import_without_a_supplier_column_leaves_supplier_unset(db_sess
     assert db_session.scalar(select(Supplier).where(Supplier.business_id == business_id)) is None
 
 
+def test_purchase_import_recalculates_thresholds_for_products_with_a_known_supplier_lead_time(
+    db_session, business_id, _fake_r2
+):
+    # A prior purchase already linked this product to a supplier with a
+    # known lead time (e.g. recorded manually on the Suppliers page) —
+    # this new upload's own recalculation pass should now apply a fresh,
+    # product-specific threshold instead of leaving it on the generic
+    # default, with no separate manual "Accept recommendation" click.
+    upload1, record1 = _make_purchase_upload(db_session, business_id, _fake_r2, filename="first.csv")
+    run_import(db_session, upload1, record1)
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    assert product.low_stock_threshold_days is None  # nothing to recalculate yet — no supplier lead time known
+
+    supplier = Supplier(business_id=business_id, name="Fast Co", normalized_name="fast co", status="active")
+    db_session.add(supplier)
+    db_session.flush()
+    db_session.add(
+        ProductSupplier(business_id=business_id, product_id=product.id, supplier_id=supplier.id, lead_time_days=Decimal("4"))
+    )
+    db_session.commit()
+
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost"]
+    content = "Date,Product,SKU,Qty Received,Unit Cost\n2026-01-06,Chain Lube,CL-100,10,4.75\n".encode()
+    upload2, record2 = _make_purchase_upload(db_session, business_id, _fake_r2, filename="second.csv", content=content)
+    run_import(db_session, upload2, record2)
+
+    refreshed = db_session.scalar(select(Product).where(Product.id == product.id))
+    assert refreshed.low_stock_threshold_days == Decimal("7.0")  # 4-day lead time + 3-day buffer
+
+
 # --- repairs ------------------------------------------------------------
 
 

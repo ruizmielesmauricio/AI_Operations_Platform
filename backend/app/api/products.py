@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.application.products import ProductNotFound, list_product_thresholds, update_product_threshold
 from app.models.membership import Membership
-from app.schemas.product import ProductThresholdOut, ProductThresholdUpdate
+from app.schemas.product import ProductThresholdOut, ProductThresholdSaveOut, ProductThresholdUpdate
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -25,20 +25,20 @@ def list_product_thresholds_route(
     return [ProductThresholdOut.model_validate(r) for r in rows]
 
 
-@router.patch("/{product_id}/threshold", status_code=status.HTTP_204_NO_CONTENT)
+@router.patch("/{product_id}/threshold", response_model=ProductThresholdSaveOut)
 def update_product_threshold_route(
     product_id: uuid.UUID,
     payload: ProductThresholdUpdate,
     membership: Membership = Depends(get_current_membership),
     current_user: AuthenticatedUser = Depends(get_current_user_synced),
     db: Session = Depends(get_db),
-) -> None:
+) -> ProductThresholdSaveOut:
     if membership.role not in ("owner", "manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner or manager can change thresholds"
         )
     try:
-        update_product_threshold(
+        product = update_product_threshold(
             db,
             business_id=membership.business_id,
             product_id=product_id,
@@ -48,3 +48,4 @@ def update_product_threshold_route(
         )
     except ProductNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found") from exc
+    return ProductThresholdSaveOut(product_id=product.id, low_stock_threshold_days=product.low_stock_threshold_days)

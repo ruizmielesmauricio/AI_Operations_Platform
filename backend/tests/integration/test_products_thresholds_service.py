@@ -9,7 +9,12 @@ from decimal import Decimal
 
 import pytest
 
-from app.application.products import ProductNotFound, list_product_thresholds, update_product_threshold
+from app.application.products import (
+    ProductNotFound,
+    list_product_thresholds,
+    recalculate_thresholds_after_upload,
+    update_product_threshold,
+)
 from app.models.audit_log import AuditLog
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
@@ -153,3 +158,105 @@ def test_list_product_thresholds_reflects_actual_stock_and_recent_sales(db_sessi
 
     rows = list_product_thresholds(db_session, business_id=business_id)
     assert rows[0].stock_on_hand == 47
+
+
+# --- Upload-triggered recalculation ---------------------------------------
+
+
+def _link_supplier_with_lead_time(db_session, business_id, product_id, lead_time_days):
+    supplier_repo = SupplierRepository(db_session)
+    supplier = supplier_repo.create(business_id=business_id, name="Fast Co", contact_info=None)
+    supplier_repo.upsert_product_supplier(business_id=business_id, product_id=product_id, supplier_id=supplier.id)
+    link = supplier_repo.get_product_supplier(business_id, product_id=product_id, supplier_id=supplier.id)
+    link.lead_time_days = lead_time_days
+    db_session.commit()
+    return supplier
+
+
+def test_recalculation_applies_the_recommendation_when_lead_time_is_known(db_session, business_id):
+    product = _make_product(db_session, business_id)
+    _link_supplier_with_lead_time(db_session, business_id, product.id, Decimal("4"))
+
+    updated_count = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={product.id}, triggered_by_user_id="uploader-1"
+    )
+    assert updated_count == 1
+
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed.low_stock_threshold_days == Decimal("7.0")  # 4 + 3 buffer
+
+    log = db_session.query(AuditLog).filter_by(business_id=business_id, action="threshold_recalculation_completed").one()
+    assert log.event_metadata["products_updated"] == 1
+
+
+def test_recalculation_never_overwrites_a_manual_override(db_session, business_id):
+    product = _make_product(db_session, business_id, threshold_days=Decimal("99"))
+    _link_supplier_with_lead_time(db_session, business_id, product.id, Decimal("4"))
+
+    updated_count = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={product.id}, triggered_by_user_id="uploader-1"
+    )
+    assert updated_count == 0
+
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed.low_stock_threshold_days == Decimal("99")  # untouched
+
+
+def test_recalculation_is_a_no_op_without_known_supplier_lead_time(db_session, business_id):
+    # Unknown/missing supplier data must never break recalculation — it's
+    # just nothing new to apply, same as any product with no supplier
+    # link at all.
+    product = _make_product(db_session, business_id)
+
+    updated_count = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={product.id}, triggered_by_user_id="uploader-1"
+    )
+    assert updated_count == 0
+    assert db_session.get(Product, product.id).low_stock_threshold_days is None
+
+
+def test_recalculation_with_no_touched_products_is_a_cheap_no_op(db_session, business_id):
+    updated_count = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids=set(), triggered_by_user_id="uploader-1"
+    )
+    assert updated_count == 0
+    assert db_session.query(AuditLog).filter_by(business_id=business_id).count() == 0
+
+
+def test_recalculation_is_idempotent(db_session, business_id):
+    product = _make_product(db_session, business_id)
+    _link_supplier_with_lead_time(db_session, business_id, product.id, Decimal("4"))
+
+    first = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={product.id}, triggered_by_user_id="uploader-1"
+    )
+    second = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={product.id}, triggered_by_user_id="uploader-1"
+    )
+    assert first == 1
+    # Once applied, the written value is indistinguishable from a manual
+    # override — the second run correctly finds nothing left to do
+    # (products_updated == 0) rather than reapplying the same value
+    # again. The persisted state is what must stay stable across runs,
+    # which it does.
+    assert second == 0
+    assert db_session.get(Product, product.id).low_stock_threshold_days == Decimal("7.0")
+
+
+def test_recalculation_is_tenant_scoped(db_session, business_id):
+    from app.models.business import Business
+
+    other = Business(name="Other Biz")
+    db_session.add(other)
+    db_session.commit()
+    other_product = _make_product(db_session, other.id, name="Not Yours")
+    _link_supplier_with_lead_time(db_session, other.id, other_product.id, Decimal("4"))
+
+    # Passing the wrong business_id for this product's real owner must
+    # not touch it — get_for_business's own business_id filter is what
+    # protects this, exercised here end-to-end through the recalc path.
+    updated_count = recalculate_thresholds_after_upload(
+        db_session, business_id=business_id, product_ids={other_product.id}, triggered_by_user_id="u"
+    )
+    assert updated_count == 0
+    assert db_session.get(Product, other_product.id).low_stock_threshold_days is None

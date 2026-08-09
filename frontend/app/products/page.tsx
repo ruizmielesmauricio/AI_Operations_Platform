@@ -21,6 +21,7 @@ export default function ProductThresholdsPage() {
   const [rows, setRows] = useState<ProductThreshold[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -38,18 +39,20 @@ export default function ProductThresholdsPage() {
     if (businessId) load(businessId);
   }, [businessId]);
 
-  async function handleSave(productId: string, value: string, acceptedRecommendation: boolean) {
+  async function handleSave(productId: string, productName: string, value: string, acceptedRecommendation: boolean) {
     setSavingId(productId);
     setError(null);
+    setNotice(null);
     try {
       await apiPatch(`/businesses/${businessId}/products/${productId}/threshold`, {
         threshold_days: value === "" ? null : value,
         accepted_recommendation: acceptedRecommendation,
       });
       setEditingId(null);
+      setNotice(`Saved threshold for "${productName}".`);
       load(businessId);
     } catch {
-      setError("Could not save this threshold.");
+      setError(`Could not save the threshold for "${productName}". Try again.`);
     } finally {
       setSavingId(null);
     }
@@ -78,6 +81,7 @@ export default function ProductThresholdsPage() {
       </select>
 
       {error && <p className="status-error">{error}</p>}
+      {notice && <p className="status-ok">{notice}</p>}
       {loading && <p>Loading…</p>}
 
       {!loading && businessId && (
@@ -140,7 +144,7 @@ export default function ProductThresholdsPage() {
                         <button
                           type="button"
                           disabled={savingId === row.product_id}
-                          onClick={() => handleSave(row.product_id, editValue, false)}
+                          onClick={() => handleSave(row.product_id, row.name, editValue, false)}
                         >
                           Save
                         </button>{" "}
@@ -163,7 +167,7 @@ export default function ProductThresholdsPage() {
                           <button
                             type="button"
                             disabled={savingId === row.product_id}
-                            onClick={() => handleSave(row.product_id, row.recommendation.recommended_threshold_days, true)}
+                            onClick={() => handleSave(row.product_id, row.name, row.recommendation.recommended_threshold_days, true)}
                           >
                             Accept recommendation
                           </button>

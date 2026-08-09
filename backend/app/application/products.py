@@ -141,7 +141,15 @@ def update_product_threshold(
     threshold_days: Decimal | None,
     editing_user_id: str,
     accepted_recommendation: bool = False,
-) -> None:
+):
+    # Returns the updated Product (not None) — every other PATCH route in
+    # this codebase returns 200 + the updated resource (businesses.py,
+    # employee_seats.py, suppliers.py, product_categories.py's own
+    # threshold route); this one originally returned bare 204, which the
+    # shared apiPatch() frontend helper can't handle (it unconditionally
+    # calls response.json(), which throws on an empty 204 body) — a real
+    # bug, not a frontend issue. Matching the established convention here
+    # instead of special-casing apiPatch for one route.
     product = ProductRepository(db).update_low_stock_threshold_days(
         business_id=business_id, product_id=product_id, threshold_days=threshold_days
     )
@@ -154,6 +162,8 @@ def update_product_threshold(
         metadata={"threshold_days": str(threshold_days) if threshold_days is not None else None},
     )
     db.commit()
+    db.refresh(product)
+    return product
 
 
 def update_category_threshold(
@@ -170,3 +180,76 @@ def update_category_threshold(
         metadata={"threshold_days": str(threshold_days) if threshold_days is not None else None},
     )
     db.commit()
+
+
+def recalculate_thresholds_after_upload(
+    db: Session, *, business_id: uuid.UUID, product_ids: set[uuid.UUID], triggered_by_user_id: str
+) -> int:
+    """Applies a fresh supplier-lead-time-based recommendation to every
+    product touched by an upload/import, right after it commits — the
+    "every upload recalculates thresholds" requirement, done without a
+    scheduler (deliberately deferred — see 18_Product_Gaps_Roadmap.md's
+    v1.56 update).
+
+    Deterministic (recommend_low_stock_threshold, no AI involved) and
+    conservative in what it writes:
+    - A product with an existing manual `low_stock_threshold_days`
+      override is never touched — an automatic recompute must not
+      silently clobber a human's explicit choice, same rule a future
+      scheduled job would also need.
+    - A product with no known supplier lead time is left alone too —
+      nothing new to apply; `resolve_low_stock_threshold`'s existing
+      default-fallback already covers it, and writing the same default
+      explicitly would just be noise. Unknown/missing supplier data is
+      therefore never an error here, only a no-op.
+    - Only a product whose *supplier lead time is now known* gets its
+      threshold set, straight to the freshly computed recommendation.
+
+    Idempotent: re-running against the same inputs recomputes the same
+    recommendation and writes the same value again — no observable
+    difference on a second run, and any product that already picked up
+    an override in the meantime is skipped exactly as above.
+
+    Raises on failure after rolling back this function's own partial
+    writes (never the caller's already-committed import) and recording a
+    `threshold_recalculation_failed` audit event before re-raising, so
+    the caller's own log-and-continue wrapper (matching
+    refresh_low_stock_alerts's exact posture in app/imports/importer.py)
+    still sees and logs the full failure.
+    """
+    if not product_ids:
+        return 0
+
+    product_repo = ProductRepository(db)
+    supplier_repo = SupplierRepository(db)
+    updated = 0
+    try:
+        for product_id in product_ids:
+            product = product_repo.get_for_business(business_id, product_id)
+            if product is None or product.low_stock_threshold_days is not None:
+                continue  # gone, or a manual override already set — never overwrite it
+            lead_time_days = supplier_repo.preferred_lead_time_days(business_id, product_id)
+            if lead_time_days is None:
+                continue  # nothing new to apply — the existing default fallback already covers this
+            recommendation = recommend_low_stock_threshold(lead_time_days=lead_time_days, current_threshold_days=None)
+            product_repo.update_low_stock_threshold_days(
+                business_id=business_id, product_id=product_id,
+                threshold_days=recommendation.recommended_threshold_days,
+            )
+            updated += 1
+    except Exception:
+        db.rollback()
+        record_audit_event(
+            db, business_id=business_id, user_id=triggered_by_user_id, action="threshold_recalculation_failed",
+            target_type="business", target_id=str(business_id), metadata={"products_considered": len(product_ids)},
+        )
+        db.commit()
+        raise
+
+    record_audit_event(
+        db, business_id=business_id, user_id=triggered_by_user_id, action="threshold_recalculation_completed",
+        target_type="business", target_id=str(business_id),
+        metadata={"products_updated": updated, "products_considered": len(product_ids)},
+    )
+    db.commit()
+    return updated

@@ -31,6 +31,21 @@ class ProductThresholdOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProductThresholdSaveOut(BaseModel):
+    """The minimal, real body PATCH .../products/{id}/threshold now
+    returns — 200, not 204 (see app/application/products.py::
+    update_product_threshold's docstring for why 204 was the actual
+    save-failure bug). Deliberately not the full ProductThresholdOut
+    shape: recomputing stock/sales/recommendation context on every save
+    is unnecessary work the frontend doesn't use — it just reloads the
+    whole list after a successful save."""
+
+    product_id: uuid.UUID
+    low_stock_threshold_days: Decimal | None
+
+    model_config = {"from_attributes": True}
+
+
 class ProductThresholdUpdate(BaseModel):
     threshold_days: Decimal | None = None
     # True when this PATCH is applying the shown recommendation verbatim

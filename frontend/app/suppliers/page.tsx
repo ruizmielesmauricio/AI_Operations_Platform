@@ -132,6 +132,13 @@ export default function SuppliersPage() {
     <main>
       <AppNav businessId={businessId} />
       <h1>Suppliers</h1>
+      <p className="hint">
+        Track where your stock comes from. This powers the spend breakdown below, and — once you record a
+        supplier&apos;s typical lead time — sharpens the{" "}
+        <a href={`/products${businessId ? `?business=${businessId}` : ""}`}>low-stock threshold recommendations</a>.
+        Unknown supplier is fine; purchases without one just show up as &quot;Unknown&quot; and you can correct or
+        merge suppliers here at any time.
+      </p>
 
       <label htmlFor="business-select">Shop</label>
       <br />

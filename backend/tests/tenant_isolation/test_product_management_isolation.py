@@ -209,7 +209,14 @@ def test_owner_can_view_and_update_a_product_threshold(client):
         json={"threshold_days": "10"},
         headers=headers,
     )
-    assert update_response.status_code == 204
+    # Regression test for a real save-failure bug: this route used to
+    # return bare 204, which the frontend's shared apiPatch() helper
+    # can't parse (it always calls response.json(), which throws on an
+    # empty body) — every PATCH route in this codebase returns 200 + the
+    # updated resource, and this one now does too. A 204 here would mean
+    # the bug is back.
+    assert update_response.status_code == 200
+    assert update_response.json() == {"product_id": product_id, "low_stock_threshold_days": "10.00"}
 
 
 def test_staff_cannot_update_a_product_threshold(client):
@@ -239,7 +246,7 @@ def test_manager_can_update_a_product_threshold(client):
         json={"threshold_days": "10"},
         headers=headers_manager,
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
 
 
 def test_product_threshold_update_cannot_cross_tenant(client):

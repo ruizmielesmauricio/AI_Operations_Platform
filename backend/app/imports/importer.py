@@ -28,6 +28,7 @@ from app.imports.file_parser import normalize_cell
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
 from app.application.alerts import refresh_low_stock_alerts
+from app.application.products import recalculate_thresholds_after_upload
 from app.models.business import Business
 from app.models.import_record import ImportRecord
 from app.models.upload import Upload
@@ -1314,6 +1315,19 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         refresh_low_stock_alerts(db, business_id=upload.business_id, product_ids=touched_product_ids)
     except Exception:
         logger.exception("Failed to refresh low-stock alerts after import for business: %s", upload.business_id)
+
+    # Gap 1 follow-up (18_Product_Gaps_Roadmap.md v1.56 update): every
+    # upload recalculates low-stock thresholds for whatever it touched,
+    # instead of only ever recomputing on a manual page view — same
+    # "only after the main commit succeeds, never let a failure here
+    # undo or block a successful import" posture as the alerts refresh
+    # right above.
+    try:
+        recalculate_thresholds_after_upload(
+            db, business_id=upload.business_id, product_ids=touched_product_ids, triggered_by_user_id=upload.uploaded_by
+        )
+    except Exception:
+        logger.exception("Failed to recalculate low-stock thresholds after import for business: %s", upload.business_id)
 
     return ImportResult(
         import_record_id=import_record.id,
