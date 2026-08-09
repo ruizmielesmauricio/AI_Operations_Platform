@@ -338,3 +338,145 @@ def test_list_shows_role_for_each_attached_employee(client):
     listed = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()
     roles_by_name = {row["first_name"]: row["role"] for row in listed}
     assert roles_by_name == {"Bea": "manager", "Cian": "staff"}
+
+
+# --- GET /businesses/{id}/members --------------------------------------------
+
+
+def test_members_list_shows_the_owner_and_every_employee_with_role(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    client.patch(
+        f"/businesses/{business['id']}",
+        json={"manager_first_name": "Mauricio", "manager_surname": "Ruiz"},
+        headers=headers_owner,
+    )
+    client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Antonio", "surname": "Ruiz", "email": "antonio@example.com", "role": "manager"},
+        headers=headers_owner,
+    )
+
+    members = client.get(f"/businesses/{business['id']}/members", headers=headers_owner).json()
+    by_role = {m["role"]: (m["first_name"], m["surname"]) for m in members}
+    assert by_role["owner"] == ("Mauricio", "Ruiz")
+    assert by_role["manager"] == ("Antonio", "Ruiz")
+    owner_row = next(m for m in members if m["role"] == "owner")
+    assert owner_row["employee_seat_id"] is None
+    assert owner_row["account_linked"] is True
+    manager_row = next(m for m in members if m["role"] == "manager")
+    assert manager_row["employee_seat_id"] is not None
+    # No email on this display-only route — that stays on the owner-only
+    # .../employee-seats management route.
+    assert "email" not in manager_row
+
+
+def test_members_list_is_visible_to_a_non_owner_member(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_manager = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="manager"))
+    session.commit()
+    session.close()
+
+    response = client.get(f"/businesses/{business['id']}/members", headers=headers_manager)
+    assert response.status_code == 200
+    assert len(response.json()) >= 1
+
+
+def test_members_list_cannot_be_read_cross_tenant(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_b = client.post("/businesses", json={"name": "Shop B"}, headers=headers_b).json()
+
+    response = client.get(f"/businesses/{business_b['id']}/members", headers=headers_a)
+    assert response.status_code == 403
+
+
+# --- DELETE /businesses/{id}/employee-seats/{seat_id} ------------------------
+
+
+def test_owner_can_delete_an_employee(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    seat_id = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]["id"]
+
+    response = client.delete(f"/businesses/{business['id']}/employee-seats/{seat_id}", headers=headers_owner)
+    assert response.status_code == 204
+
+    listed = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()
+    assert listed[0]["status"] == "canceled"
+
+
+def test_a_non_owner_cannot_delete_an_employee(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_manager = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    seat_id = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b-target@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]["id"]
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="manager"))
+    session.commit()
+    session.close()
+
+    response = client.delete(
+        f"/businesses/{business['id']}/employee-seats/{seat_id}", headers=headers_manager
+    )
+    assert response.status_code == 403
+
+
+def test_deleting_an_active_employee_revokes_their_access(client, monkeypatch):
+    monkeypatch.setattr(ai_client, "chat_completion", _fake_chat_completion)
+    monkeypatch.setattr(billing_client, "cancel_subscription", lambda stripe_subscription_id: None)
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_employee = bearer_header("user-b", "b@example.com")
+    client.get("/businesses", headers=headers_employee)
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    seat_id = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]["id"]
+    _fire_active_webhook(client, monkeypatch, business["id"], seat_id, event_id="evt_delete_active")
+
+    # Confirmed access before deletion.
+    statuses = _protected_route_statuses(client, business["id"], headers_employee)
+    assert all(status_code != 403 for status_code in statuses.values()), statuses
+
+    delete_response = client.delete(
+        f"/businesses/{business['id']}/employee-seats/{seat_id}", headers=headers_owner
+    )
+    assert delete_response.status_code == 204
+
+    statuses = _protected_route_statuses(client, business["id"], headers_employee)
+    assert all(status_code == 403 for status_code in statuses.values()), statuses
+
+
+def test_deleting_an_employee_cannot_cross_businesses(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b_owner = bearer_header("user-b-owner", "b-owner@example.com")
+    business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
+    business_b = client.post("/businesses", json={"name": "Shop B"}, headers=headers_b_owner).json()
+    seat_id = client.post(
+        f"/businesses/{business_b['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        headers=headers_b_owner,
+    ).json()["employee_seat"]["id"]
+
+    # Business A's owner has no membership on B, so can't even attempt it.
+    response = client.delete(f"/businesses/{business_b['id']}/employee-seats/{seat_id}", headers=headers_a)
+    assert response.status_code == 403
+
+    # B's own seat is untouched.
+    still_there = client.get(f"/businesses/{business_b['id']}/employee-seats", headers=headers_b_owner).json()
+    assert still_there[0]["status"] == "pending_payment"

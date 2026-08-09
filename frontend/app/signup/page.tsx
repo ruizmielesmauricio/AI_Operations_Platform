@@ -1,12 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { requireSupabase } from "@/lib/supabase/client";
 
 export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+
+  // Prefills from an employee invite link (?email=...) — window.location
+  // directly, not next/navigation's useSearchParams, matching this
+  // codebase's existing pattern (frontend/lib/hooks/useBusinessSelector.ts)
+  // for reading a query param without needing a Suspense boundary just
+  // for a static page. Still fully editable — the email address they
+  // sign up with is what actually matters, this only saves retyping it.
+  useEffect(() => {
+    const invited = new URLSearchParams(window.location.search).get("email");
+    if (invited) setEmail(invited);
+  }, []);
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);

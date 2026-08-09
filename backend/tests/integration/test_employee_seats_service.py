@@ -9,10 +9,14 @@ from app.application.employee_seats import (
     InvalidEmployeeRole,
     MAX_EMPLOYEE_SEATS_PER_BUSINESS,
     add_employee,
+    delete_employee,
+    reconcile_pending_employee_seats,
     try_activate_employee_seat,
     update_employee_profile,
 )
 from app.billing import client
+from app.email import client as email_client
+from app.models.audit_log import AuditLog
 from app.models.membership import Membership
 from app.models.user import User
 from app.repositories.employee_seat import EmployeeSeatRepository
@@ -331,3 +335,232 @@ def test_editing_a_nonexistent_seat_raises(db_session, business_id):
             postal_code=None,
             country=None,
         )
+
+
+# --- Invite email -----------------------------------------------------------
+
+
+def test_invite_email_is_sent_when_no_account_exists_yet(db_session, business_id, monkeypatch):
+    sent = {}
+
+    def fake_send_email(*, to, subject, html):
+        sent["to"] = to
+        sent["html"] = html
+        return {"id": "email_1"}
+
+    monkeypatch.setattr(email_client, "send_email", fake_send_email)
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+
+    add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="never-signed-up@shopa.example",
+        role="staff",
+    )
+
+    assert sent["to"] == "never-signed-up@shopa.example"
+    assert "never-signed-up@shopa.example" in sent["html"]
+    sent_logs = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_invite_email_sent")
+        .all()
+    )
+    assert len(sent_logs) == 1
+
+
+def test_invite_email_is_not_sent_when_the_account_already_exists(db_session, business_id, monkeypatch):
+    called = []
+    monkeypatch.setattr(email_client, "send_email", lambda **kwargs: called.append(kwargs))
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    _seed_user(db_session, "employee-1", "employee@shopa.example")
+
+    add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="employee@shopa.example",
+        role="staff",
+    )
+
+    assert called == []
+    assert (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_invite_email_sent")
+        .first()
+        is None
+    )
+
+
+def test_a_failed_invite_email_does_not_block_creating_the_seat(db_session, business_id, monkeypatch):
+    # send_employee_invite_email (app/email/service.py) already catches a
+    # provider failure itself and returns False — this proves that
+    # contract holds all the way through add_employee, not just in
+    # isolation (i.e. add_employee must never assume a True return).
+    # Patched on app.application.employee_seats itself, not
+    # app.email.service — `from X import Y` binds a new local name,
+    # independent of the original module attribute.
+    import app.application.employee_seats as employee_seats_module
+
+    monkeypatch.setattr(employee_seats_module, "send_employee_invite_email", lambda **kwargs: False)
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+
+    seat, checkout_url = add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="never-signed-up@shopa.example",
+        role="staff",
+    )
+
+    assert seat.status == "pending_payment"
+    assert "checkout.stripe.com" in checkout_url
+
+
+# --- Registration-completed audit --------------------------------------------
+
+
+def test_reconciliation_logs_registration_completed_even_without_payment(db_session, business_id):
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="employee@shopa.example",
+        role="staff",
+    )
+
+    new_user = User(id="employee-1", email="employee@shopa.example")
+    db_session.add(new_user)
+    db_session.commit()
+    reconcile_pending_employee_seats(db_session, new_user)
+
+    registered = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_registration_completed")
+        .all()
+    )
+    assert len(registered) == 1
+    # Not paid yet — registration completed, but membership must not have.
+    activated = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_membership_activated")
+        .all()
+    )
+    assert activated == []
+
+
+# --- Delete/deactivate --------------------------------------------------------
+
+
+def test_delete_employee_revokes_membership_and_cancels_stripe_subscription(db_session, business_id, monkeypatch):
+    canceled_subscription_ids = []
+    monkeypatch.setattr(
+        client, "cancel_subscription", lambda stripe_subscription_id: canceled_subscription_ids.append(stripe_subscription_id)
+    )
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    _seed_user(db_session, "employee-1", "employee@shopa.example")
+    seat, _ = add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="employee@shopa.example",
+        role="staff",
+    )
+    seat.status = "active"
+    seat.stripe_subscription_id = "sub_delete_1"
+    db_session.commit()
+    try_activate_employee_seat(db_session, seat)
+    db_session.commit()
+    membership_before = (
+        db_session.query(Membership)
+        .filter(Membership.business_id == business_id, Membership.user_id == "employee-1")
+        .first()
+    )
+    assert membership_before is not None
+
+    deleted = delete_employee(db_session, business_id=business_id, seat_id=seat.id, deleting_user_id="owner-1")
+
+    assert deleted.status == "canceled"
+    assert canceled_subscription_ids == ["sub_delete_1"]
+    membership_after = (
+        db_session.query(Membership)
+        .filter(Membership.business_id == business_id, Membership.user_id == "employee-1")
+        .first()
+    )
+    assert membership_after is None
+    assert (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_deleted")
+        .count()
+        == 1
+    )
+
+
+def test_deleting_an_already_deleted_seat_is_idempotent(db_session, business_id, monkeypatch):
+    monkeypatch.setattr(client, "cancel_subscription", lambda stripe_subscription_id: None)
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    seat, _ = add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="employee@shopa.example",
+        role="staff",
+    )
+
+    delete_employee(db_session, business_id=business_id, seat_id=seat.id, deleting_user_id="owner-1")
+    delete_employee(db_session, business_id=business_id, seat_id=seat.id, deleting_user_id="owner-1")
+
+    assert (
+        db_session.query(AuditLog)
+        .filter(AuditLog.business_id == business_id, AuditLog.action == "employee_deleted")
+        .count()
+        == 1
+    )
+
+
+def test_deleting_a_pending_seat_with_no_subscription_never_calls_stripe(db_session, business_id, monkeypatch):
+    called = []
+    monkeypatch.setattr(client, "cancel_subscription", lambda stripe_subscription_id: called.append(stripe_subscription_id))
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    seat, _ = add_employee(
+        db_session,
+        business_id=business_id,
+        business_email="owner@shopa.example",
+        invited_by_user_id="owner-1",
+        first_name="Aoife",
+        surname="Byrne",
+        email="employee@shopa.example",
+        role="staff",
+    )
+
+    deleted = delete_employee(db_session, business_id=business_id, seat_id=seat.id, deleting_user_id="owner-1")
+
+    assert deleted.status == "canceled"
+    assert called == []
+
+
+def test_deleting_a_nonexistent_seat_raises(db_session, business_id):
+    import uuid
+
+    _seed_user(db_session, "owner-1", "owner@shopa.example")
+    with pytest.raises(EmployeeSeatNotFound):
+        delete_employee(db_session, business_id=business_id, seat_id=uuid.uuid4(), deleting_user_id="owner-1")

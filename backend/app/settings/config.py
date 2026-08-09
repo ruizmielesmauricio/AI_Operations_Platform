@@ -108,6 +108,13 @@ class Settings(BaseSettings):
     stripe_employee_seat_price_id: str = ""
 
     resend_api_key: str = ""
+    # The "from" address Resend sends as — Resend requires either a
+    # verified sending domain or its own no-setup test address
+    # (onboarding@resend.dev, real-mailbox-deliverable but rate-limited/
+    # only for testing). Left blank by default rather than defaulting to
+    # that test address, so a real deployment is never silently sending
+    # from an address nobody configured on purpose.
+    resend_from_email: str = ""
 
     # Address validation + geocoding for app/geocoding/client.py — empty by
     # default (never committed), matching every other optional provider key

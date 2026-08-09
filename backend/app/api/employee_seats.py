@@ -11,6 +11,7 @@ from app.application.employee_seats import (
     InvalidEmployeeRole,
     MAX_EMPLOYEE_SEATS_PER_BUSINESS,
     add_employee,
+    delete_employee,
     update_employee_profile,
 )
 from app.billing.exceptions import EmployeeSeatPriceNotConfigured
@@ -121,3 +122,27 @@ def update_employee_seat(
     except EmployeeSeatNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found") from exc
     return EmployeeSeatOut.from_seat(seat)
+
+
+@router.delete("/{seat_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_employee_seat(
+    seat_id: uuid.UUID,
+    membership: Membership = Depends(get_current_membership),
+    current_user: AuthenticatedUser = Depends(get_current_user_synced),
+    db: Session = Depends(get_db),
+) -> None:
+    # 204, matching every other delete route in this app
+    # (app/api/businesses.py's own DELETE) — the row still exists
+    # server-side (status -> "canceled", never a hard delete), but this
+    # endpoint's own contract is "remove," not "return the updated row."
+    # The frontend updates its local copy in place to "Removed" rather
+    # than re-fetching, since the resulting status is always
+    # deterministic (delete always means status == "canceled").
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can remove an employee"
+        )
+    try:
+        delete_employee(db, business_id=membership.business_id, seat_id=seat_id, deleting_user_id=current_user.id)
+    except EmployeeSeatNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found") from exc

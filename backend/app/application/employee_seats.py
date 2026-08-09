@@ -18,14 +18,19 @@ shared with the webhook in app/billing/service.py).
 """
 
 import uuid
+from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
+from app.billing import client as billing_client
+from app.email.service import send_employee_invite_email
+from app.models.business import Business
 from app.models.employee_seat import EmployeeSeat
 from app.models.membership import Membership
 from app.models.user import User
 from app.repositories.audit_log import record_audit_event
 from app.repositories.employee_seat import EmployeeSeatRepository
+from app.settings.config import get_settings
 
 MAX_EMPLOYEE_SEATS_PER_BUSINESS = 2
 # Membership.ROLES minus "owner" — the account's existing owner is
@@ -132,6 +137,25 @@ def add_employee(
         target_id=str(seat.id),
         metadata={"role": role, "linked_immediately": existing_user is not None},
     )
+    # Only a real invite when nobody with this email exists yet — an
+    # already-existing, already-linked account doesn't need a "come
+    # register" email, since reconciliation already happened at creation
+    # time above.
+    if existing_user is None:
+        business = db.get(Business, business_id)
+        business_name = business.name if business is not None else "your team"
+        registration_url = f"{get_settings().app_base_url}/signup?{urlencode({'email': email})}"
+        if send_employee_invite_email(
+            to_email=email, business_name=business_name, registration_url=registration_url
+        ):
+            record_audit_event(
+                db,
+                business_id=business_id,
+                user_id=invited_by_user_id,
+                action="employee_invite_email_sent",
+                target_type="employee_seat",
+                target_id=str(seat.id),
+            )
     checkout_url = start_employee_seat_checkout(
         db=db, business_id=business_id, employee_seat_id=seat.id, business_email=business_email
     )
@@ -205,6 +229,44 @@ def update_employee_profile(
     return seat
 
 
+def delete_employee(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, deleting_user_id: str) -> EmployeeSeat:
+    """Owner-only deletion/deactivation (enforced by the caller — the API
+    route — not here, same split as every other route in this module).
+    Never a hard delete: the seat row stays (this codebase's usual
+    audit-log-conscious posture, e.g. app/repositories/business.py::
+    soft_delete_business) with status "canceled", the same terminal
+    status a failed/cancelled payment already uses — reusing that
+    vocabulary rather than inventing a distinct "deleted" state, since
+    the practical effect (no access, no active billing) is identical.
+
+    Idempotent: calling this on an already-canceled seat is a no-op that
+    still returns the seat, never a second Stripe cancel call or a
+    second audit entry.
+    """
+    seats = EmployeeSeatRepository(db)
+    seat = seats.get_for_business(seat_id, business_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(str(seat_id))
+    if seat.status == "canceled":
+        return seat
+
+    if seat.stripe_subscription_id:
+        billing_client.cancel_subscription(seat.stripe_subscription_id)
+    revoke_employee_membership(db, seat)
+    seats.set_status(seat, "canceled")
+    record_audit_event(
+        db,
+        business_id=business_id,
+        user_id=deleting_user_id,
+        action="employee_deleted",
+        target_type="employee_seat",
+        target_id=str(seat.id),
+    )
+    db.commit()
+    db.refresh(seat)
+    return seat
+
+
 def try_activate_employee_seat(db: Session, seat: EmployeeSeat) -> bool:
     """The one place a seat's Membership actually gets created — called
     from both directions that can complete activation: the payment
@@ -254,6 +316,18 @@ def reconcile_pending_employee_seats(db: Session, user: User) -> None:
         return
     for seat in pending:
         seats.link_user(seat, user.id)
+        # Distinct from "membership_activated" below — registering is
+        # its own milestone regardless of whether payment has also
+        # succeeded yet (it may not have: the owner could still be
+        # completing Checkout, or it could have failed).
+        record_audit_event(
+            db,
+            business_id=seat.business_id,
+            user_id=seat.invited_by_user_id,
+            action="employee_registration_completed",
+            target_type="employee_seat",
+            target_id=str(seat.id),
+        )
         if try_activate_employee_seat(db, seat):
             record_audit_event(
                 db,

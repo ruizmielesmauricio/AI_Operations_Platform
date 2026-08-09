@@ -54,6 +54,22 @@ export interface EmployeeSeatCreateResponse {
   checkout_url: string;
 }
 
+// GET /businesses/{id}/members — the owner (from the business's own
+// profile fields) plus every employee seat, merged into one display
+// list, e.g. "Mauricio Ruiz - Owner" / "Antonio Ruiz - Manager". Visible
+// to any member, not owner-only — deliberately carries no email (that
+// stays on the owner-only EmployeeSeat management list above).
+export interface Member {
+  user_id: string | null;
+  // null for the owner's own row — they have no EmployeeSeat.
+  employee_seat_id: string | null;
+  first_name: string;
+  surname: string;
+  role: string; // "owner" | "manager" | "staff"
+  status: string; // "active" (owner, always) | EmployeeSeat.status otherwise
+  account_linked: boolean;
+}
+
 // One row of GET /businesses/{id}/address-suggestions?text=... — a live,
 // as-you-type suggestion, never saved automatically
 // (frontend/app/onboarding/[id]/page.tsx's own dropdown applies whichever

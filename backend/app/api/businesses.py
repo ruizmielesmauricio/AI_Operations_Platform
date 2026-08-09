@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.application.members import list_business_members
 from app.billing.service import cancel_subscription
 from app.geocoding.service import suggest_addresses
 from app.models.business import Business
@@ -24,6 +25,7 @@ from app.schemas.business import (
     BusinessOut,
     BusinessProfileUpdate,
 )
+from app.schemas.member import MemberOut
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -113,6 +115,18 @@ def get_business(
     if business is None or business.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
     return _to_business_out(business, role=membership.role)
+
+
+@router.get("/{business_id}/members", response_model=list[MemberOut])
+def list_members(
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> list[MemberOut]:
+    # Any member can view — display-only (name + role), not the more
+    # sensitive employee-seat detail (email, Stripe ids) the owner-only
+    # GET .../employee-seats route returns for actual management.
+    members = list_business_members(db, membership.business_id)
+    return [MemberOut.model_validate(m) for m in members]
 
 
 @router.patch("/{business_id}", response_model=BusinessOut)

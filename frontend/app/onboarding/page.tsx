@@ -7,7 +7,14 @@ import { redirectToCheckout } from "@/lib/billing";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { AddressSuggestion, Business, EmployeeSeat, EmployeeSeatCreateResponse, SubscriptionStatus } from "@/types";
+import type {
+  AddressSuggestion,
+  Business,
+  EmployeeSeat,
+  EmployeeSeatCreateResponse,
+  Member,
+  SubscriptionStatus,
+} from "@/types";
 
 // Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
 // models this as a template choice, not a hardcoded assumption, so adding
@@ -85,9 +92,9 @@ const EMPTY_EMPLOYEE_DRAFT: EmployeeDraft = {
 // Real access needs BOTH payment (status "active") AND a linked account
 // (account_linked) — whichever is still missing is what the label says,
 // rather than a bare "Pending Payment" that would hide the other reason.
-function seatStatusLabel(seat: EmployeeSeat): string {
+function seatStatusLabel(seat: { status: string; account_linked: boolean }): string {
   if (seat.status === "payment_failed") return "Payment failed";
-  if (seat.status === "canceled") return "Cancelled";
+  if (seat.status === "canceled") return "Removed";
   if (seat.status === "active" && seat.account_linked) return "Active";
   if (seat.status === "active") return "Paid — waiting for them to sign in";
   if (seat.account_linked) return "Pending payment";
@@ -147,6 +154,12 @@ export default function OnboardingPage() {
   // business id; only ever fetched/shown for a business the caller owns
   // (the list route itself is owner-only, see app/api/employee_seats.py).
   const [employeeSeatsByBusiness, setEmployeeSeatsByBusiness] = useState<Record<string, EmployeeSeat[]>>({});
+  // The owner + every employee, merged — GET .../members is visible to
+  // any member (unlike the owner-only list above), so this is what
+  // actually renders the "who's attached to this business" display;
+  // employeeSeatsByBusiness above stays purely a lookup for the Edit
+  // form (it has the email, which the display list deliberately omits).
+  const [membersByBusiness, setMembersByBusiness] = useState<Record<string, Member[]>>({});
   // The business id the add/edit employee form is open for, if any — the
   // employee already exists as a real business here (unlike branchAddress
   // above), so address suggestions are scoped directly against it.
@@ -188,6 +201,19 @@ export default function OnboardingPage() {
       if (b.deleted_at || b.role !== "owner") return;
       apiGet<EmployeeSeat[]>(`/businesses/${b.id}/employee-seats`)
         .then((seats) => setEmployeeSeatsByBusiness((prev) => ({ ...prev, [b.id]: seats })))
+        .catch(() => undefined);
+    });
+  }, [businesses]);
+
+  useEffect(() => {
+    // Unlike the owner-only fetch above, GET .../members is visible to
+    // any member — fetched for every non-deleted business regardless of
+    // role, since this is what actually renders "who's attached here"
+    // for a manager/staff viewer too, not just the owner.
+    businesses.forEach((b) => {
+      if (b.deleted_at) return;
+      apiGet<Member[]>(`/businesses/${b.id}/members`)
+        .then((members) => setMembersByBusiness((prev) => ({ ...prev, [b.id]: members })))
         .catch(() => undefined);
     });
   }, [businesses]);
@@ -388,6 +414,29 @@ export default function OnboardingPage() {
     setEditingEmployeeSeatId(null);
     setEmployeeDraft(EMPTY_EMPLOYEE_DRAFT);
     setEmployeeError(null);
+  }
+
+  async function handleDeleteEmployee(businessId: string, seatId: string) {
+    setEmployeeError(null);
+    try {
+      await apiDelete(`/businesses/${businessId}/employee-seats/${seatId}`);
+      // Deletion always results in status "canceled" — updated in place
+      // (not removed from either list) rather than re-fetched, matching
+      // this app's soft-delete-and-show pattern elsewhere (a deleted
+      // business still lists as "Deleted" rather than vanishing).
+      setEmployeeSeatsByBusiness((prev) => ({
+        ...prev,
+        [businessId]: (prev[businessId] ?? []).map((s) => (s.id === seatId ? { ...s, status: "canceled" } : s)),
+      }));
+      setMembersByBusiness((prev) => ({
+        ...prev,
+        [businessId]: (prev[businessId] ?? []).map((m) =>
+          m.employee_seat_id === seatId ? { ...m, status: "canceled" } : m
+        ),
+      }));
+    } catch (err) {
+      setEmployeeError(err instanceof ApiError ? err.message : "Could not remove this employee.");
+    }
   }
 
   function updateEmployeeDraft(key: keyof EmployeeDraft, value: string) {
@@ -851,20 +900,65 @@ export default function OnboardingPage() {
                     </button>
                   </form>
                 )}
-                {b.role === "owner" && (employeeSeatsByBusiness[b.id]?.length ?? 0) > 0 && (
-                  <ul>
-                    {employeeSeatsByBusiness[b.id].map((seat) => (
-                      <li key={seat.id} className="hint">
-                        {seat.first_name} {seat.surname} ({seat.role}) —{" "}
-                        <span className={seat.status === "active" && seat.account_linked ? "status-ok" : "status-error"}>
-                          {seatStatusLabel(seat)}
-                        </span>{" "}
-                        <button type="button" onClick={() => handleOpenEditEmployee(b.id, seat)}>
-                          Edit
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                {/* The owner + every employee, in one list — visible to
+                    any member (GET .../members), not owner-only, per
+                    direct request: "Mauricio Ruiz - Owner" / "Antonio
+                    Ruiz - Manager". Edit/Delete only render for the
+                    caller's own owner view, and only on employee rows —
+                    there's no "delete the owner" action here (that's
+                    "Delete this shop" below, which already cancels
+                    billing and archives the whole business). */}
+                {(membersByBusiness[b.id]?.length ?? 0) > 0 && (
+                  <div>
+                    <h3>Team</h3>
+                    <ul>
+                      {membersByBusiness[b.id].map((member) => {
+                        const displayName =
+                          member.first_name || member.surname
+                            ? `${member.first_name} ${member.surname}`.trim()
+                            : member.role === "owner"
+                              ? "(add your name in Company Profile)"
+                              : "(unnamed)";
+                        const roleLabel = member.role.charAt(0).toUpperCase() + member.role.slice(1);
+                        const seatId = member.employee_seat_id;
+                        const fullSeat = seatId
+                          ? employeeSeatsByBusiness[b.id]?.find((s) => s.id === seatId)
+                          : undefined;
+                        return (
+                          <li key={member.employee_seat_id ?? member.user_id ?? member.role} className="hint">
+                            {displayName} - {roleLabel}
+                            {seatId && (
+                              <>
+                                {" — "}
+                                <span
+                                  className={
+                                    member.status === "active" && member.account_linked
+                                      ? "status-ok"
+                                      : "status-error"
+                                  }
+                                >
+                                  {seatStatusLabel(member)}
+                                </span>
+                              </>
+                            )}
+                            {b.role === "owner" && seatId && fullSeat && (
+                              <>
+                                {" "}
+                                <button type="button" onClick={() => handleOpenEditEmployee(b.id, fullSeat)}>
+                                  Edit
+                                </button>{" "}
+                                {member.status !== "canceled" && (
+                                  <button type="button" onClick={() => handleDeleteEmployee(b.id, seatId)}>
+                                    Delete
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 )}
                 <div>
                   {confirmingDeleteId === b.id ? (
