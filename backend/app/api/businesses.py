@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.billing.service import cancel_subscription
-from app.geocoding.service import validate_address
+from app.geocoding.service import suggest_addresses
 from app.models.business import Business
 from app.models.membership import Membership
 from app.repositories.business import (
@@ -18,8 +18,7 @@ from app.repositories.business import (
     update_business_profile,
 )
 from app.schemas.business import (
-    AddressValidationRequest,
-    AddressValidationResponse,
+    AddressSuggestionOut,
     BusinessCreate,
     BusinessOut,
     BusinessProfileUpdate,
@@ -139,26 +138,23 @@ def update_business(
     return _to_business_out(business, role=membership.role)
 
 
-@router.post("/{business_id}/validate-address", response_model=AddressValidationResponse)
-def validate_business_address(
+@router.get("/{business_id}/address-suggestions", response_model=list[AddressSuggestionOut])
+def get_address_suggestions(
     business_id: uuid.UUID,
-    payload: AddressValidationRequest,
+    text: str = Query(default="", max_length=255),
     membership: Membership = Depends(get_current_membership),
-) -> AddressValidationResponse:
-    # Deliberately does not save anything itself — a discrete "Validate
-    # address" action (frontend/app/onboarding/[id]/page.tsx) that returns
-    # a suggestion for the owner to accept (which then goes through the
-    # normal PATCH above, same as any other profile edit). business_id in
-    # the URL exists only for the tenant-scoping gate (get_current_
-    # membership) and audit-trail consistency with every other route here
-    # — the validation itself has nothing business-specific about it.
-    result = validate_address(
-        address_line1=payload.address_line1,
-        city=payload.city,
-        postal_code=payload.postal_code,
-        country=payload.country,
-    )
-    return AddressValidationResponse.model_validate(result)
+) -> list[AddressSuggestionOut]:
+    # Live, as-you-type suggestions — deliberately does not save anything
+    # itself (frontend/app/onboarding/[id]/page.tsx applies whichever one
+    # the owner clicks directly into the profile form, which still needs
+    # the normal PATCH above to actually save, same as any other edit).
+    # business_id in the URL exists only for the tenant-scoping gate
+    # (get_current_membership) and consistency with every other route
+    # here — the suggestions themselves have nothing business-specific
+    # about them. GET + a query param, not POST + a body: this is an
+    # idempotent lookup, matching every other read-only route's shape.
+    results = suggest_addresses(text)
+    return [AddressSuggestionOut.model_validate(r) for r in results]
 
 
 @router.post("/{business_id}/branches", response_model=BusinessOut, status_code=status.HTTP_201_CREATED)

@@ -1,81 +1,73 @@
-"""Orchestrates address validation for a route: combines the free-text
-address fields into one query, calls Geoapify (app/geocoding/client.py),
-and resolves the matched coordinate to an IANA timezone
-(app/geocoding/timezone_lookup.py). No calculation logic of its own —
-same "thin orchestration over pure/boundary pieces" shape as every
+"""Orchestrates address validation for a route: turns the free-text
+address the owner is typing into live suggestions (Geoapify's
+autocomplete endpoint via app/geocoding/client.py), each resolved to an
+IANA timezone (app/geocoding/timezone_lookup.py) up front so picking one
+needs no second round trip. No calculation logic of its own — same "thin
+orchestration over pure/boundary pieces" shape as every
 app/application/*.py module, per CLAUDE.md.
 
-Deliberately explicit-action, not autocomplete-as-you-type: this is
-called once, when an owner clicks "Validate address" while editing a
-business's profile — not on every keystroke. Geoapify's free tier is
-capped at 3,000 requests/day, and editing a business profile is an
-infrequent action; there's no case here for the request volume an
-autocomplete widget would generate.
+Direct request: live suggestions as the owner types (like any modern
+address field), not a single click-to-validate action. A short client-
+side debounce (frontend/app/onboarding/[id]/page.tsx) keeps request
+volume bounded against Geoapify's free-tier cap — this module itself
+makes exactly one HTTP call per invocation regardless.
 """
 
 from dataclasses import dataclass
 
-from app.geocoding.client import geocode
+from app.geocoding.client import autocomplete
 from app.geocoding.exceptions import GeocodingNotConfigured, GeocodingProviderError
 from app.geocoding.timezone_lookup import resolve_timezone
 
 
 @dataclass(frozen=True)
-class AddressValidationResult:
-    matched: bool
-    # Human-readable reason when matched is False — "not configured" /
-    # "no match found" / "the provider request failed" — so the frontend
-    # can show something honest instead of a bare "invalid address."
-    reason: str | None
-    # Geoapify's own normalized fields, only present when matched.
-    formatted_address: str | None = None
+class AddressSuggestion:
+    formatted_address: str
     address_line1: str | None = None
     city: str | None = None
     postal_code: str | None = None
     country: str | None = None
-    # 0-1, Geoapify's own confidence score for the match, when it supplies
-    # one — surfaced so a low-confidence match can be shown as "please
-    # double-check this" rather than presented with the same certainty as
-    # an exact match.
-    confidence: float | None = None
-    # Derived locally via timezonefinder. timezonefinder's own data covers
-    # the whole globe including ocean (via "Etc/GMT+N" nautical zones), so
-    # in practice this is only ever None when lat/lon themselves weren't
-    # available on the geocoded result at all.
+    # Derived locally via timezonefinder from this specific suggestion's
+    # own coordinate — resolved for every suggestion up front (cheap,
+    # offline) so clicking one needs no further request.
     timezone: str | None = None
 
 
-def validate_address(
-    *, address_line1: str | None, city: str | None, postal_code: str | None, country: str | None
-) -> AddressValidationResult:
-    query = ", ".join(part for part in [address_line1, city, postal_code, country] if part and part.strip())
+def suggest_addresses(text: str) -> list[AddressSuggestion]:
+    """Empty list for a blank/too-short query, when address validation
+    isn't configured, when the provider request itself fails, or when
+    nothing matches yet — deliberately never an error to the caller for
+    any of these: a live-suggestion field failing quietly (no dropdown)
+    is the normal, expected behavior of this kind of UI while someone is
+    still typing, not something to interrupt them about. Provider
+    failures are logged by app/geocoding/client.py's own caller
+    (app/api/businesses.py) if ever needed for diagnosis; this function
+    itself stays silent on purpose.
+    """
+    query = (text or "").strip()
     if not query:
-        return AddressValidationResult(matched=False, reason="No address entered")
+        return []
 
     try:
-        result = geocode(query)
-    except GeocodingNotConfigured:
-        return AddressValidationResult(matched=False, reason="Address validation isn't configured yet")
-    except GeocodingProviderError:
-        return AddressValidationResult(
-            matched=False, reason="Could not reach the address validation service — try again shortly"
+        results = autocomplete(query)
+    except (GeocodingNotConfigured, GeocodingProviderError):
+        return []
+
+    suggestions = []
+    for result in results:
+        formatted = result.get("formatted")
+        if not formatted:
+            continue
+        lat, lon = result.get("lat"), result.get("lon")
+        timezone = resolve_timezone(lat=lat, lon=lon) if lat is not None and lon is not None else None
+        suggestions.append(
+            AddressSuggestion(
+                formatted_address=formatted,
+                address_line1=result.get("address_line1") or result.get("street"),
+                city=result.get("city"),
+                postal_code=result.get("postcode"),
+                country=result.get("country"),
+                timezone=timezone,
+            )
         )
-
-    if result is None:
-        return AddressValidationResult(matched=False, reason="No matching address found")
-
-    lat, lon = result.get("lat"), result.get("lon")
-    timezone = resolve_timezone(lat=lat, lon=lon) if lat is not None and lon is not None else None
-    rank = result.get("rank") or {}
-
-    return AddressValidationResult(
-        matched=True,
-        reason=None,
-        formatted_address=result.get("formatted"),
-        address_line1=result.get("address_line1") or result.get("street"),
-        city=result.get("city"),
-        postal_code=result.get("postcode"),
-        country=result.get("country"),
-        confidence=rank.get("confidence"),
-        timezone=timezone,
-    )
+    return suggestions

@@ -4,86 +4,83 @@ from app.geocoding import service
 from app.geocoding.exceptions import GeocodingNotConfigured, GeocodingProviderError
 
 
-def test_validate_address_with_no_input_at_all_is_not_matched_and_makes_no_call(monkeypatch):
-    def _fail_if_called(query):
-        raise AssertionError("geocode should not be called for a blank query")
+def test_suggest_addresses_with_a_blank_query_makes_no_call(monkeypatch):
+    def _fail_if_called(text):
+        raise AssertionError("autocomplete should not be called for a blank query")
 
-    monkeypatch.setattr(service, "geocode", _fail_if_called)
+    monkeypatch.setattr(service, "autocomplete", _fail_if_called)
 
-    result = service.validate_address(address_line1=None, city=None, postal_code=None, country=None)
-    assert result.matched is False
-    assert result.reason == "No address entered"
+    assert service.suggest_addresses("") == []
+    assert service.suggest_addresses("   ") == []
 
 
-def test_validate_address_when_not_configured(monkeypatch):
-    def _raise_not_configured(query):
+def test_suggest_addresses_when_not_configured_returns_an_empty_list(monkeypatch):
+    def _raise_not_configured(text):
         raise GeocodingNotConfigured("no key")
 
-    monkeypatch.setattr(service, "geocode", _raise_not_configured)
+    monkeypatch.setattr(service, "autocomplete", _raise_not_configured)
 
-    result = service.validate_address(address_line1="12 Main Street", city="Dublin", postal_code=None, country=None)
-    assert result.matched is False
-    assert result.reason == "Address validation isn't configured yet"
+    # Deliberately quiet, not an error surfaced to the caller — a live-
+    # suggestion field failing silently (no dropdown) is normal UX while
+    # someone is still typing, not something to interrupt them about.
+    assert service.suggest_addresses("12 Main Street") == []
 
 
-def test_validate_address_when_the_provider_request_fails(monkeypatch):
-    def _raise_provider_error(query):
+def test_suggest_addresses_when_the_provider_request_fails_returns_an_empty_list(monkeypatch):
+    def _raise_provider_error(text):
         raise GeocodingProviderError("timeout")
 
-    monkeypatch.setattr(service, "geocode", _raise_provider_error)
+    monkeypatch.setattr(service, "autocomplete", _raise_provider_error)
 
-    result = service.validate_address(address_line1="12 Main Street", city="Dublin", postal_code=None, country=None)
-    assert result.matched is False
-    assert "try again" in result.reason.lower()
+    assert service.suggest_addresses("12 Main Street") == []
 
 
-def test_validate_address_with_no_match_found(monkeypatch):
-    monkeypatch.setattr(service, "geocode", lambda query: None)
-
-    result = service.validate_address(address_line1="Nonexistent Street", city=None, postal_code=None, country=None)
-    assert result.matched is False
-    assert result.reason == "No matching address found"
+def test_suggest_addresses_with_no_matches_returns_an_empty_list(monkeypatch):
+    monkeypatch.setattr(service, "autocomplete", lambda text: [])
+    assert service.suggest_addresses("asdkfjasldkfj") == []
 
 
-def test_validate_address_with_a_real_match_resolves_timezone_from_coordinates(monkeypatch):
-    fake_result = {
-        "formatted": "12 Main Street, Dublin, D02, Ireland",
-        "address_line1": "12 Main Street",
-        "city": "Dublin",
-        "postcode": "D02",
-        "country": "Ireland",
-        "lat": 53.3498,
-        "lon": -6.2603,
-        "rank": {"confidence": 1.0},
-    }
-    monkeypatch.setattr(service, "geocode", lambda query: fake_result)
+def test_suggest_addresses_resolves_timezone_per_suggestion_from_its_own_coordinates(monkeypatch):
+    fake_results = [
+        {
+            "formatted": "12 Main Street, Dublin, D02, Ireland",
+            "address_line1": "12 Main Street",
+            "city": "Dublin",
+            "postcode": "D02",
+            "country": "Ireland",
+            "lat": 53.3498,
+            "lon": -6.2603,
+        },
+        {
+            "formatted": "12 Main Street, Galway, Ireland",
+            "address_line1": "12 Main Street",
+            "city": "Galway",
+            "postcode": None,
+            "country": "Ireland",
+            "lat": 53.2707,
+            "lon": -9.0568,
+        },
+    ]
+    monkeypatch.setattr(service, "autocomplete", lambda text: fake_results)
 
-    result = service.validate_address(
-        address_line1="12 Main Street", city="Dublin", postal_code="D02", country="Ireland"
-    )
-    assert result.matched is True
-    assert result.formatted_address == "12 Main Street, Dublin, D02, Ireland"
-    assert result.city == "Dublin"
-    assert result.confidence == 1.0
-    # The one real cross-module integration this test proves: a matched
-    # result's lat/lon actually gets run through timezonefinder, not just
-    # echoed back — Dublin's real coordinates resolve to its real zone.
-    assert result.timezone == "Europe/Dublin"
+    suggestions = service.suggest_addresses("12 Main Street")
+    assert len(suggestions) == 2
+    assert suggestions[0].formatted_address == "12 Main Street, Dublin, D02, Ireland"
+    assert suggestions[0].city == "Dublin"
+    # The one real cross-module integration this test proves: each
+    # suggestion's own lat/lon actually gets run through timezonefinder,
+    # not just echoed back or shared across suggestions — both resolve to
+    # the same real Irish zone here, but from two genuinely different
+    # coordinates.
+    assert suggestions[0].timezone == "Europe/Dublin"
+    assert suggestions[1].city == "Galway"
+    assert suggestions[1].timezone == "Europe/Dublin"
 
 
-def test_validate_address_builds_one_combined_query_string_from_every_field(monkeypatch):
-    captured = {}
-
-    def _capture(query):
-        captured["query"] = query
-        return None
-
-    monkeypatch.setattr(service, "geocode", _capture)
-
-    service.validate_address(address_line1="12 Main Street", city="Dublin", postal_code="D02", country="Ireland")
-    assert captured["query"] == "12 Main Street, Dublin, D02, Ireland"
-
-    # Blank/missing fields are skipped, not turned into empty segments.
-    captured.clear()
-    service.validate_address(address_line1="12 Main Street", city=None, postal_code=None, country="Ireland")
-    assert captured["query"] == "12 Main Street, Ireland"
+def test_suggest_addresses_skips_a_result_with_no_formatted_address(monkeypatch):
+    # Defensive: Geoapify's own contract always includes `formatted`, but
+    # a result missing it isn't something worth surfacing as a suggestion
+    # with a blank label — skipped rather than shown broken.
+    fake_results = [{"formatted": None, "lat": 53.35, "lon": -6.26}]
+    monkeypatch.setattr(service, "autocomplete", lambda text: fake_results)
+    assert service.suggest_addresses("something") == []

@@ -169,21 +169,21 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     assert refetched["manager_name"] is None
 
 
-# --- POST /businesses/{id}/validate-address ---------------------------------
+# --- GET /businesses/{id}/address-suggestions -------------------------------
 
 
-def test_validate_address_requires_membership(client):
+def test_address_suggestions_requires_membership(client):
     headers_a = bearer_header("user-a", "a@example.com")
     headers_b = bearer_header("user-b", "b@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
 
-    response = client.post(
-        f"/businesses/{business['id']}/validate-address", json={"address_line1": "1 Main St"}, headers=headers_b
+    response = client.get(
+        f"/businesses/{business['id']}/address-suggestions", params={"text": "1 Main St"}, headers=headers_b
     )
     assert response.status_code == 403
 
 
-def test_validate_address_returns_not_matched_when_geocoding_is_unavailable(client, monkeypatch):
+def test_address_suggestions_returns_an_empty_list_when_geocoding_is_unavailable(client, monkeypatch):
     # Explicitly mocked at the service boundary, not relying on
     # GEOAPIFY_API_KEY being absent from the real .env — a real key now
     # exists there (this app's own dev setup), so relying on absence
@@ -191,31 +191,49 @@ def test_validate_address_returns_not_matched_when_geocoding_is_unavailable(clie
     # every test run instead of actually testing this path, a real gap
     # caught live once a key was actually added. app/geocoding/service.py
     # itself already catches GeocodingNotConfigured/GeocodingProviderError
-    # internally and returns a normal AddressValidationResult(matched=
-    # False, ...) rather than raising — this proves the route surfaces
-    # that contract correctly, without depending on what's really
-    # configured or ever calling out over the network.
+    # internally and returns an empty list rather than raising — this
+    # proves the route surfaces that contract correctly, without
+    # depending on what's really configured or ever calling out over the
+    # network.
     from app.api import businesses as businesses_api
-    from app.geocoding.service import AddressValidationResult
+
+    monkeypatch.setattr(businesses_api, "suggest_addresses", lambda text: [])
+
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    response = client.get(
+        f"/businesses/{business['id']}/address-suggestions", params={"text": "1 Main St"}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_address_suggestions_returns_real_suggestions(client, monkeypatch):
+    from app.api import businesses as businesses_api
+    from app.geocoding.service import AddressSuggestion
 
     monkeypatch.setattr(
         businesses_api,
-        "validate_address",
-        lambda **kwargs: AddressValidationResult(matched=False, reason="Address validation isn't configured yet"),
+        "suggest_addresses",
+        lambda text: [
+            AddressSuggestion(
+                formatted_address="12 Main Street, Dublin, Ireland", city="Dublin", timezone="Europe/Dublin"
+            )
+        ],
     )
 
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
 
-    response = client.post(
-        f"/businesses/{business['id']}/validate-address",
-        json={"address_line1": "1 Main St", "city": "Dublin"},
-        headers=headers,
+    response = client.get(
+        f"/businesses/{business['id']}/address-suggestions", params={"text": "12 Main"}, headers=headers
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["matched"] is False
-    assert body["reason"]
+    assert len(body) == 1
+    assert body[0]["formatted_address"] == "12 Main Street, Dublin, Ireland"
+    assert body[0]["timezone"] == "Europe/Dublin"
 
 
 def test_include_deleted_only_ever_shows_the_caller_s_own_archived_businesses(client):

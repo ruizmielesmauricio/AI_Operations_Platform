@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { ApiError, apiGet, apiPatch } from "@/lib/api/client";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { AddressValidationResponse, Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
+import type { AddressSuggestion, Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
 
 // Descriptive contact/location record-keeping only — not a second login
 // (confirmed with the user, see backend/app/models/business.py). Most
@@ -13,17 +13,36 @@ import type { AddressValidationResponse, Business, BusinessProfileUpdate, Subscr
 // alone doesn't distinguish them. name/template are deliberately not
 // editable here — renaming a business has wider display implications
 // this page doesn't take on.
-const PROFILE_FIELDS: { key: keyof BusinessProfileUpdate; label: string }[] = [
+//
+// address_line1 is deliberately not in this generic list — it gets its
+// own live-suggestion input below (direct request: suggestions as you
+// type, like any modern address field, not a separate click-to-validate
+// step). city/postal_code/country/timezone stay in this list too, still
+// directly editable, since picking a suggestion only fills them in as a
+// starting point — an owner can still correct any of them by hand
+// afterward, same as before.
+// Split around the custom Address input below so the field order on
+// screen stays exactly what it was before (manager/contact/location,
+// then address, then city/postal/country/timezone) without a map() that
+// has to special-case one key in the middle of the list.
+const PROFILE_FIELDS_BEFORE_ADDRESS: { key: keyof BusinessProfileUpdate; label: string }[] = [
   { key: "manager_name", label: "Manager / owner name" },
   { key: "contact_email", label: "Contact email" },
   { key: "contact_phone", label: "Contact phone" },
   { key: "location_label", label: "Location label (e.g. \"Dublin - Rathmines\")" },
-  { key: "address_line1", label: "Address" },
+];
+const PROFILE_FIELDS_AFTER_ADDRESS: { key: keyof BusinessProfileUpdate; label: string }[] = [
   { key: "city", label: "City" },
   { key: "postal_code", label: "Postal code" },
   { key: "country", label: "Country" },
   { key: "timezone", label: "Timezone" },
 ];
+
+// Debounced after typing stops, and only once there's enough text to
+// plausibly match something — keeps request volume reasonable against
+// Geoapify's free-tier cap without needing a manual trigger.
+const ADDRESS_SUGGEST_DEBOUNCE_MS = 350;
+const ADDRESS_SUGGEST_MIN_CHARS = 3;
 
 function formFromBusiness(business: Business): BusinessProfileUpdate {
   return {
@@ -63,15 +82,15 @@ export default function BusinessProfilePage() {
   const [form, setForm] = useState<BusinessProfileUpdate>({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  // A discrete "Validate address" action, not autocomplete-as-you-type —
-  // one call per click (backend/app/geocoding/service.py's own scope
-  // decision, to keep Geoapify request volume bounded and predictable).
-  // The result is only a suggestion until "Use this address" is clicked,
-  // which fills the form fields (including the suggested timezone) —
-  // still needs the normal Save click below like any other edit, never
-  // saved on its own.
-  const [validating, setValidating] = useState(false);
-  const [validation, setValidation] = useState<AddressValidationResponse | null>(null);
+  // Live address suggestions — a dropdown under the Address input, not a
+  // separate click-to-validate step. suggestOpen tracks whether the
+  // dropdown should render at all (closed on blur-via-selection, on a
+  // too-short query, and once a suggestion is applied) independent of
+  // whether `suggestions` still holds stale results from a moment ago.
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!session || !businessId) return;
@@ -100,6 +119,12 @@ export default function BusinessProfilePage() {
       .catch(() => undefined);
   }, [businessId]);
 
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaveError(null);
@@ -120,47 +145,47 @@ export default function BusinessProfilePage() {
     router.push("/onboarding");
   }
 
-  async function handleValidateAddress() {
-    setValidating(true);
-    setValidation(null);
-    try {
-      const result = await apiPost<AddressValidationResponse>(`/businesses/${businessId}/validate-address`, {
-        address_line1: form.address_line1 || null,
-        city: form.city || null,
-        postal_code: form.postal_code || null,
-        country: form.country || null,
-      });
-      setValidation(result);
-    } catch {
-      setValidation({
-        matched: false,
-        reason: "Could not reach the address validation service — try again shortly.",
-        formatted_address: null,
-        address_line1: null,
-        city: null,
-        postal_code: null,
-        country: null,
-        confidence: null,
-        timezone: null,
-      });
-    } finally {
-      setValidating(false);
+  function handleAddressChange(value: string) {
+    setForm((prev) => ({ ...prev, address_line1: value }));
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (value.trim().length < ADDRESS_SUGGEST_MIN_CHARS) {
+      setSuggestions([]);
+      setSuggestOpen(false);
+      return;
     }
+    debounceRef.current = setTimeout(() => {
+      setSuggestLoading(true);
+      apiGet<AddressSuggestion[]>(`/businesses/${businessId}/address-suggestions?text=${encodeURIComponent(value)}`)
+        .then((results) => {
+          setSuggestions(results);
+          setSuggestOpen(results.length > 0);
+        })
+        .catch(() => {
+          // Quiet failure, matching backend/app/geocoding/service.py's own
+          // posture — a live-suggestion field just showing no dropdown is
+          // normal UX while typing, not something to interrupt with an
+          // error banner.
+          setSuggestions([]);
+          setSuggestOpen(false);
+        })
+        .finally(() => setSuggestLoading(false));
+    }, ADDRESS_SUGGEST_DEBOUNCE_MS);
   }
 
-  function handleUseValidatedAddress() {
-    if (!validation || !validation.matched) return;
+  function handlePickSuggestion(suggestion: AddressSuggestion) {
     setForm((prev) => ({
       ...prev,
-      address_line1: validation.address_line1 ?? prev.address_line1,
-      city: validation.city ?? prev.city,
-      postal_code: validation.postal_code ?? prev.postal_code,
-      country: validation.country ?? prev.country,
-      // Still a suggestion, not forced — an owner who knows better can
-      // still overwrite this field manually afterward like any other.
-      timezone: validation.timezone ?? prev.timezone,
+      address_line1: suggestion.address_line1 ?? prev.address_line1,
+      city: suggestion.city ?? prev.city,
+      postal_code: suggestion.postal_code ?? prev.postal_code,
+      country: suggestion.country ?? prev.country,
+      // Still just a starting point, not forced — an owner who knows
+      // better can still overwrite any of these fields by hand afterward.
+      timezone: suggestion.timezone ?? prev.timezone,
     }));
-    setValidation(null);
+    setSuggestOpen(false);
+    setSuggestions([]);
   }
 
   if (checkingSession) {
@@ -214,7 +239,7 @@ export default function BusinessProfilePage() {
       </p>
 
       <form onSubmit={handleSave}>
-        {PROFILE_FIELDS.map(({ key, label: fieldLabel }) => (
+        {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel }) => (
           <div key={key}>
             <label htmlFor={`profile-${key}`}>{fieldLabel}</label>
             <br />
@@ -226,33 +251,74 @@ export default function BusinessProfilePage() {
           </div>
         ))}
 
-        <div>
-          <button type="button" disabled={validating} onClick={handleValidateAddress}>
-            {validating ? "Validating…" : "Validate address"}
-          </button>
-          <span className="hint"> Checks the address fields above and suggests the correct timezone.</span>
+        {/* Live suggestions as you type, direct request — not a separate
+            click-to-validate step. Picking one fills address_line1/city/
+            postal_code/country/timezone below directly; every field stays
+            editable by hand afterward regardless. */}
+        <div style={{ position: "relative" }}>
+          <label htmlFor="profile-address_line1">Address</label>
+          <br />
+          <input
+            id="profile-address_line1"
+            autoComplete="off"
+            value={form.address_line1 ?? ""}
+            onChange={(e) => handleAddressChange(e.target.value)}
+            onFocus={() => {
+              if (suggestions.length > 0) setSuggestOpen(true);
+            }}
+            onBlur={() => {
+              // A short delay, not an immediate close — a direct blur-then-
+              // click on a suggestion would otherwise close the dropdown
+              // before the click's own handler ever fires.
+              setTimeout(() => setSuggestOpen(false), 150);
+            }}
+          />
+          {suggestLoading && <span className="hint"> Searching…</span>}
+          {suggestOpen && suggestions.length > 0 && (
+            <ul
+              style={{
+                position: "absolute",
+                zIndex: 1,
+                margin: 0,
+                padding: 0,
+                listStyle: "none",
+                // CSS system colors, not a hardcoded white — this app relies
+                // on `color-scheme: light dark` (frontend/app/globals.css)
+                // for automatic native dark-mode adaptation everywhere else,
+                // no CSS variables of its own defined to hook into instead.
+                background: "Canvas",
+                color: "CanvasText",
+                border: "1px solid #ccc",
+                width: "100%",
+                maxWidth: "32em",
+              }}
+            >
+              {suggestions.map((suggestion, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => handlePickSuggestion(suggestion)}
+                    style={{ display: "block", width: "100%", textAlign: "left" }}
+                  >
+                    {suggestion.formatted_address}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {validation && (
-          <div className={validation.matched ? "status-ok" : "status-error"}>
-            {validation.matched ? (
-              <>
-                <p>
-                  Found: {validation.formatted_address}
-                  {validation.timezone && ` — timezone ${validation.timezone}`}
-                  {validation.confidence !== null && ` (confidence ${Math.round(validation.confidence * 100)}%)`}
-                </p>
-                <button type="button" onClick={handleUseValidatedAddress}>
-                  Use this address
-                </button>{" "}
-                <button type="button" onClick={() => setValidation(null)}>
-                  Dismiss
-                </button>
-              </>
-            ) : (
-              <p>{validation.reason}</p>
-            )}
+
+        {PROFILE_FIELDS_AFTER_ADDRESS.map(({ key, label: fieldLabel }) => (
+          <div key={key}>
+            <label htmlFor={`profile-${key}`}>{fieldLabel}</label>
+            <br />
+            <input
+              id={`profile-${key}`}
+              value={form[key] ?? ""}
+              onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
+            />
           </div>
-        )}
+        ))}
 
         {saveError && <p className="status-error">{saveError}</p>}
         <button type="submit" disabled={saving}>

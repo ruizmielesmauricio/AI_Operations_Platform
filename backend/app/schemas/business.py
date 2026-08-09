@@ -45,22 +45,12 @@ class BusinessOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class AddressValidationRequest(BaseModel):
-    address_line1: str | None = Field(default=None, max_length=255)
-    city: str | None = Field(default=None, max_length=128)
-    postal_code: str | None = Field(default=None, max_length=32)
-    country: str | None = Field(default=None, max_length=128)
-
-
-class AddressValidationResponse(BaseModel):
-    matched: bool
-    reason: str | None = None
-    formatted_address: str | None = None
+class AddressSuggestionOut(BaseModel):
+    formatted_address: str
     address_line1: str | None = None
     city: str | None = None
     postal_code: str | None = None
     country: str | None = None
-    confidence: float | None = None
     timezone: str | None = None
 
     model_config = {"from_attributes": True}
