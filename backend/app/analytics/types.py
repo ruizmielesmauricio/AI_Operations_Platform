@@ -78,6 +78,14 @@ class RepairPeriodTotals:
     - labour_cost_known_revenue/labour_cost only count repairs where BOTH
       are known — margin is never computed against a price that has no
       matching labour cost to net against, or vice versa.
+
+    labour_cost_known_revenue_with_known_tax/tax_amount_known/
+    labour_cost_for_known_tax are a strict subset of the above — price
+    known AND labour cost known AND tax_amount known — the same role as
+    ProductPeriodAggregate's revenue_with_known_cost_and_tax/
+    tax_amount_known/cogs_for_known_tax, used to compute workshop margin
+    net of tax (app/analytics/workshop.py's net_gross_margin_pct) without
+    blending a tax-unknown repair into a "confirmed net" figure.
     """
 
     repair_count: int
@@ -86,3 +94,6 @@ class RepairPeriodTotals:
     repairs_with_known_price_and_labour: int
     labour_cost_known_revenue: Decimal
     labour_cost: Decimal
+    labour_cost_known_revenue_with_known_tax: Decimal = Decimal("0")
+    tax_amount_known: Decimal = Decimal("0")
+    labour_cost_for_known_tax: Decimal = Decimal("0")

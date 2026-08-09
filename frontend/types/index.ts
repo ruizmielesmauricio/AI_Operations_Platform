@@ -331,6 +331,14 @@ export interface WorkshopMargin {
   gross_margin_pct: string | null;
   labour_cost_coverage_pct: string | null;
   average_ticket: string | null;
+  // Margin computed net of tax, over only repairs with both a known
+  // labour cost and a known tax_amount — None until at least one repair
+  // has both. Prefer this over gross_margin_pct whenever it's set, same
+  // reasoning as GrossMargin.net_gross_margin_pct above: price_charged on
+  // a workshop invoice is very often tax-inclusive.
+  net_gross_profit: string | null;
+  net_gross_margin_pct: string | null;
+  tax_data_coverage_pct: string | null;
 }
 
 export interface WorkshopPerformance {

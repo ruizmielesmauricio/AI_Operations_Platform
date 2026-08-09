@@ -34,7 +34,17 @@ export default function LoginPage() {
     setError(null);
     const { error: oauthError } = await requireSupabase().auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/onboarding` },
+      options: {
+        redirectTo: `${window.location.origin}/onboarding`,
+        // Forces Google's account-chooser screen instead of silently
+        // re-authenticating through whatever Google session is already
+        // live in the browser. The app has no way to end that Google
+        // session itself (only Supabase's own session is ours to clear
+        // on sign-out) — this makes the re-auth an explicit, visible
+        // choice rather than something that looks like sign-out "didn't
+        // work" when someone signs out and immediately clicks this again.
+        queryParams: { prompt: "select_account" },
+      },
     });
     if (oauthError) setError(oauthError.message);
   }

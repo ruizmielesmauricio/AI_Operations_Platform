@@ -103,6 +103,7 @@ def test_clean_repairs_export_resolves_via_alias():
         "description": "Description",
         "price_charged": "Price Charged",
         "labour_cost": "Labour Cost",
+        "tax_amount": None,
         "repair_reference": None,
         "location": None,
     }

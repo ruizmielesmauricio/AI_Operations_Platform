@@ -16,7 +16,9 @@ _PERIOD_START = date(2026, 1, 1)
 _PERIOD_END = date(2026, 1, 7)  # inclusive, GMT (Dublin, no DST in January)
 
 
-def _make_repair(db_session, business_id, *, completed_at, price_charged, labour_cost, status="completed"):
+def _make_repair(
+    db_session, business_id, *, completed_at, price_charged, labour_cost, status="completed", tax_amount=None
+):
     db_session.add(
         ProductionEvent(
             business_id=business_id,
@@ -27,6 +29,7 @@ def _make_repair(db_session, business_id, *, completed_at, price_charged, labour
             completed_at=completed_at,
             price_charged=price_charged,
             labour_cost=labour_cost,
+            tax_amount=tax_amount,
         )
     )
     db_session.flush()
@@ -112,3 +115,48 @@ def test_aggregate_with_no_repairs_in_range_returns_zeroed_totals(db_session, bu
 
     assert totals.repair_count == 0
     assert totals.revenue == Decimal("0")
+
+
+def test_aggregate_and_end_to_end_compute_net_of_tax_from_a_real_repair_row(db_session, business_id):
+    # Real DB round-trip for the tax-inclusive margin fix — the unit tests
+    # in test_workshop_analytics.py exercise compute_workshop_margin with
+    # hand-built totals; this proves the SQL aggregate (known_both_and_tax
+    # in ProductionEventRepository.aggregate_completed_repairs_in_range)
+    # correctly derives those totals from actual rows, tax-known and
+    # tax-unknown side by side.
+    _make_repair(
+        db_session,
+        business_id,
+        completed_at=datetime(2026, 1, 3, 10, 0, tzinfo=timezone.utc),
+        price_charged=Decimal("80.00"),  # tax-inclusive: 10.00 of this is tax
+        labour_cost=Decimal("30.00"),
+        tax_amount=Decimal("10.00"),
+    )
+    _make_repair(
+        db_session,
+        business_id,
+        completed_at=datetime(2026, 1, 5, 10, 0, tzinfo=timezone.utc),
+        price_charged=Decimal("50.00"),  # known price/labour, tax not recorded
+        labour_cost=Decimal("20.00"),
+        tax_amount=None,
+    )
+    db_session.commit()
+
+    totals = ProductionEventRepository(db_session).aggregate_completed_repairs_in_range(
+        business_id,
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 8, tzinfo=timezone.utc),
+    )
+    assert totals.labour_cost_known_revenue_with_known_tax == Decimal("80.00")
+    assert totals.tax_amount_known == Decimal("10.00")
+    assert totals.labour_cost_for_known_tax == Decimal("30.00")
+
+    summary = get_workshop_performance(
+        db_session, business_id=business_id, start_date=_PERIOD_START, end_date=_PERIOD_END
+    )
+    # gross_margin_pct (tax-inclusive, both repairs): (130-50)/130 = 61.5%
+    assert summary.margin.gross_margin_pct == Decimal("61.5")
+    # net_gross_margin_pct (only the tax-known repair): (80-10-30)/(80-10) = 57.1%
+    assert summary.margin.net_gross_profit == Decimal("40.00")
+    assert summary.margin.net_gross_margin_pct == Decimal("57.1")
+    assert summary.margin.tax_data_coverage_pct == Decimal("61.5")  # 80 / 130

@@ -119,6 +119,9 @@ class ParsedRepairRow:
     price_charged: Decimal | None
     labour_cost: Decimal | None
     reference: str | None = None
+    # See ParsedSaleRow.tax_amount above — same optional, never-a-
+    # rejection-reason role, for workshop margin instead of sales margin.
+    tax_amount: Decimal | None = None
 
 
 @dataclass
@@ -339,6 +342,11 @@ def validate_and_parse_repair_row(
 
     reference = _normalize_reference(_blank_to_none(mapped_values.get("repair_reference")))
 
+    # Optional — when present, lets margin be computed net of tax
+    # (app/analytics/workshop.py's net_gross_margin_pct). Never a
+    # rejection reason, same as sales' tax_amount.
+    tax_amount = parse_money(mapped_values.get("tax_amount"))
+
     return ParsedRepairRow(
         row_number=row_number,
         repair_date=repair_date,
@@ -346,6 +354,7 @@ def validate_and_parse_repair_row(
         price_charged=price_charged,
         labour_cost=labour_cost,
         reference=reference,
+        tax_amount=tax_amount,
     )
 
 
@@ -1144,6 +1153,7 @@ def _write_repairs(
             performed_by_id=None,
             import_record_id=import_record.id,
             repair_reference=row.reference,
+            tax_amount=row.tax_amount,
         )
         rows_imported += 1
     # No InventoryMovement written (v1 has no parts-consumed detail), so

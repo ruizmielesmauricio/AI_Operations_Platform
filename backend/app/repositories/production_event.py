@@ -28,6 +28,7 @@ class ProductionEventRepository:
         performed_by_id: uuid.UUID | None,
         import_record_id: uuid.UUID | None,
         repair_reference: str | None = None,
+        tax_amount: Decimal | None = None,
     ) -> ProductionEvent:
         # Flush only — app/imports/importer.py owns the single commit.
         event = ProductionEvent(
@@ -43,6 +44,7 @@ class ProductionEventRepository:
             performed_by_id=performed_by_id,
             import_record_id=import_record_id,
             repair_reference=repair_reference,
+            tax_amount=tax_amount,
         )
         self.session.add(event)
         self.session.flush()
@@ -145,6 +147,7 @@ class ProductionEventRepository:
         date on a completed repair, mirroring Sale.sold_at's role."""
         known_price = ProductionEvent.price_charged.isnot(None)
         known_both = known_price & ProductionEvent.labour_cost.isnot(None)
+        known_both_and_tax = known_both & ProductionEvent.tax_amount.isnot(None)
 
         row = self.session.execute(
             select(
@@ -154,6 +157,9 @@ class ProductionEventRepository:
                 func.sum(case((known_both, 1), else_=0)),
                 func.sum(case((known_both, ProductionEvent.price_charged), else_=0)),
                 func.sum(case((known_both, ProductionEvent.labour_cost), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.price_charged), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.tax_amount), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.labour_cost), else_=0)),
             ).where(
                 ProductionEvent.business_id == business_id,
                 ProductionEvent.event_type == "repair",
@@ -163,7 +169,17 @@ class ProductionEventRepository:
             )
         ).one()
 
-        repair_count, repairs_with_known_price, revenue, repairs_with_known_both, labour_known_revenue, labour_cost = row
+        (
+            repair_count,
+            repairs_with_known_price,
+            revenue,
+            repairs_with_known_both,
+            labour_known_revenue,
+            labour_cost,
+            labour_known_revenue_with_known_tax,
+            tax_amount_known,
+            labour_cost_for_known_tax,
+        ) = row
         return RepairPeriodTotals(
             repair_count=int(repair_count or 0),
             repairs_with_known_price=int(repairs_with_known_price or 0),
@@ -171,4 +187,7 @@ class ProductionEventRepository:
             repairs_with_known_price_and_labour=int(repairs_with_known_both or 0),
             labour_cost_known_revenue=Decimal(labour_known_revenue or 0),
             labour_cost=Decimal(labour_cost or 0),
+            labour_cost_known_revenue_with_known_tax=Decimal(labour_known_revenue_with_known_tax or 0),
+            tax_amount_known=Decimal(tax_amount_known or 0),
+            labour_cost_for_known_tax=Decimal(labour_cost_for_known_tax or 0),
         )

@@ -71,7 +71,7 @@ const FIELD_ORDER: Record<string, string[]> = {
     "category",
     "location",
   ],
-  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference", "location"],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost", "tax_amount", "repair_reference", "location"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -112,6 +112,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
     labour_cost: "Which column is your labour cost for this job? (optional)",
+    tax_amount: "Which column is the tax/VAT amount? (optional)",
     repair_reference: "Which column is the job or invoice number? (optional)",
     location: "Which column is the store, branch, or location? (optional)",
   },
@@ -165,6 +166,7 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
   },
   repairs: {
     labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
+    tax_amount: "The tax/VAT charged to the customer, included in the price charged — lets margin be calculated net of tax.",
     repair_reference:
       "Prevents accidentally importing the same repair twice if you re-upload a file that overlaps an earlier one.",
     location: LOCATION_HINT,

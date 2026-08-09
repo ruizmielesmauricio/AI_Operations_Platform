@@ -6,7 +6,7 @@ import { apiGet } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
-import { formatMoney, formatPct, formatRate, grossMarginDisplay } from "@/lib/format";
+import { formatMoney, formatPct, formatRate, grossMarginDisplay, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
 import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -296,7 +296,11 @@ function ReportView({ report, payload }: { report: ReportDetail; payload: NonNul
             label="Average ticket"
             value={workshop.margin.average_ticket !== null ? formatMoney(workshop.margin.average_ticket) : "—"}
           />
-          <Stat label="Gross margin (labour only)" value={formatPct(workshop.margin.gross_margin_pct)} />
+          <Stat
+            label="Gross margin (labour only)"
+            value={workshopMarginDisplay(workshop.margin).value}
+            note={workshopMarginDisplay(workshop.margin).note}
+          />
         </Section>
       )}
 

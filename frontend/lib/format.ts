@@ -4,7 +4,7 @@
 // frontend/app/dashboard/page.tsx so frontend/app/reports/[id]/page.tsx can
 // render the same numbers identically, not via a second hand-rolled copy.
 
-import type { GrossMargin } from "@/types";
+import type { GrossMargin, WorkshopMargin } from "@/types";
 
 export function formatMoney(value: string): string {
   const n = Number(value);
@@ -46,5 +46,26 @@ export function grossMarginDisplay(gm: GrossMargin, revenueCurrent: string): { v
       gm.cost_data_coverage_pct !== null
         ? `${formatMoney(gm.gross_profit)} kept as gross profit after the cost of goods sold, out of ${formatMoney(revenueCurrent)} total revenue — based on ${formatPct(gm.cost_data_coverage_pct)} of revenue with known cost (may include tax if your prices/totals are tax-inclusive)`
         : "no cost data recorded yet",
+  };
+}
+
+// Same "prefer net-of-tax whenever it's known" precedent as
+// grossMarginDisplay above, applied to Workshop Performance's labour-only
+// margin — price_charged on a workshop invoice is very often a
+// tax-inclusive total, the exact same shape that made sales' margin
+// overstate itself before that fix (v1.13).
+export function workshopMarginDisplay(margin: WorkshopMargin): { value: string; note: string } {
+  if (margin.net_gross_margin_pct !== null && margin.net_gross_profit !== null) {
+    return {
+      value: formatPct(margin.net_gross_margin_pct),
+      note: `${formatMoney(margin.net_gross_profit)} kept as gross profit (net of tax, labour only — parts cost not tracked yet) — based on ${formatPct(margin.tax_data_coverage_pct)} of labour-cost-known revenue with confirmed tax figures`,
+    };
+  }
+  return {
+    value: formatPct(margin.gross_margin_pct),
+    note:
+      margin.labour_cost_coverage_pct !== null
+        ? `based on ${formatPct(margin.labour_cost_coverage_pct)} of revenue with known labour cost — parts cost not tracked yet (may include tax if your prices/totals are tax-inclusive)`
+        : "no labour cost recorded yet",
   };
 }

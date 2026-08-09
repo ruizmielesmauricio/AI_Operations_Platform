@@ -77,7 +77,13 @@ export default function SignupPage() {
     setError(null);
     const { error: oauthError } = await requireSupabase().auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/onboarding` },
+      options: {
+        redirectTo: `${window.location.origin}/onboarding`,
+        // See the matching comment in app/login/page.tsx — forces an
+        // explicit account choice rather than a silent re-auth off an
+        // existing Google browser session.
+        queryParams: { prompt: "select_account" },
+      },
     });
     if (oauthError) setError(oauthError.message);
   }

@@ -24,6 +24,7 @@ _REPAIR_FIELD_MAPPING = {
     "description": "Description",
     "price_charged": "Price Charged",
     "labour_cost": "Labour Cost",
+    "tax_amount": None,
     "repair_reference": None,
     "location": None,
 }

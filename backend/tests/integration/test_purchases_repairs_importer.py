@@ -458,6 +458,35 @@ def test_repair_import_creates_completed_production_events_with_no_stock_impact(
     assert db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)).all() == []
 
 
+def test_repair_import_writes_tax_amount_when_mapped(db_session, business_id, _fake_r2):
+    # See app/analytics/workshop.py's net_gross_margin_pct fix — this
+    # proves the value makes it all the way from a mapped column through
+    # to the stored ProductionEvent row, not just the parsing layer
+    # already covered by tests/unit/test_purchases_repairs_validation.py.
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Tax"]
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Tax\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,5.00\n"
+        "2026-01-06,Fixed a puncture,15.00,,\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "tax_amount": "Tax"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="repairs_tax.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    events = {
+        e.description: e
+        for e in db_session.scalars(select(ProductionEvent).where(ProductionEvent.business_id == business_id)).all()
+    }
+    assert events["Replaced brake pads"].tax_amount == Decimal("5.00")
+    assert events["Fixed a puncture"].tax_amount is None  # blank cell, never a rejection reason
+
+
 def test_repair_row_with_no_detail_is_rejected(db_session, business_id, _fake_r2):
     content = "Date,Description,Price Charged,Labour Cost\n2026-01-05,,,\n".encode()
     upload, record = _make_repair_upload(db_session, business_id, _fake_r2, content=content)

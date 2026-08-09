@@ -130,6 +130,9 @@ class WorkshopMarginOut(BaseModel):
     gross_margin_pct: Decimal | None
     labour_cost_coverage_pct: Decimal | None
     average_ticket: Decimal | None
+    net_gross_profit: Decimal | None
+    net_gross_margin_pct: Decimal | None
+    tax_data_coverage_pct: Decimal | None
 
     model_config = {"from_attributes": True}
 

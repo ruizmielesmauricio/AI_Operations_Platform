@@ -5,7 +5,7 @@ import { ApiError, apiGet } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
-import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass } from "@/lib/format";
+import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
 import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
@@ -497,6 +497,7 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
   if (!data) return <Section title="Workshop Performance"><p>Loading…</p></Section>;
 
   const { revenue, margin } = data;
+  const workshopMargin = workshopMarginDisplay(margin);
 
   return (
     <Section title="Workshop Performance">
@@ -506,12 +507,8 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
       <Stat
         label="Gross margin (labour only)"
         title={DEFINITIONS.workshopMargin}
-        value={formatPct(margin.gross_margin_pct)}
-        note={
-          margin.labour_cost_coverage_pct !== null
-            ? `based on ${formatPct(margin.labour_cost_coverage_pct)} of revenue with known labour cost — parts cost not tracked yet`
-            : "no labour cost recorded yet"
-        }
+        value={workshopMargin.value}
+        note={workshopMargin.note}
       />
       {margin.revenue_coverage_pct !== null && Number(margin.revenue_coverage_pct) < 100 && (
         <p className="status-warn">

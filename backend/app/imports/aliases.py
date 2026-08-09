@@ -107,6 +107,14 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "description",
         "price_charged",
         "labour_cost",
+        # Optional — same reasoning as sales' tax_amount above: when
+        # price_charged is tax-inclusive (a very common shape for a
+        # workshop invoice total), mapping this lets workshop margin be
+        # computed net of tax instead of silently overstating it. Never
+        # required (MINIMUM_MAPPING_RULES below doesn't reference it) —
+        # see app/imports/importer.py::validate_and_parse_repair_row and
+        # app/analytics/workshop.py's net_gross_margin_pct.
+        "tax_amount",
         # Optional — same reasoning as purchases' purchase_reference above,
         # for workshop revenue instead of stock.
         "repair_reference",
@@ -316,6 +324,10 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             # see detection.py's _MONEY_TIE_EPSILON comment for the full
             # mechanism) purely because it appeared first in the file.
             "labour amount", "labor amount",
+        ],
+        "tax_amount": [
+            "tax", "vat", "tax amount", "vat amount", "sales tax", "tax charged",
+            "total tax", "gst",
         ],
         "repair_reference": [
             "job number", "invoice number", "reference", "work order", "ticket number",
