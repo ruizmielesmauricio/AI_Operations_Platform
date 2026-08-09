@@ -1,4 +1,3 @@
-import json
 import uuid
 from types import SimpleNamespace
 
@@ -62,6 +61,8 @@ def client(tmp_path, monkeypatch):
 
 
 def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+    import json
+
     if response_format is not None:
         content = json.dumps({"intent": "financial_performance", "period": "default_recent", "metric": None})
     else:
@@ -84,28 +85,46 @@ def _protected_route_statuses(client, business_id, headers):
     }
 
 
-def test_owner_can_start_the_add_employee_flow(client):
+def _fire_active_webhook(client, monkeypatch, business_id, seat_id, event_id="evt_isolation_active"):
+    session = client._SessionLocal()
+    event = {
+        "id": event_id,
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": {
+                "id": f"sub_{event_id}",
+                "customer": f"cus_{event_id}",
+                "status": "active",
+                "items": {"data": []},
+                "metadata": {"business_id": business_id, "employee_seat_id": seat_id},
+            }
+        },
+    }
+    monkeypatch.setattr(billing_client, "construct_webhook_event", lambda payload, sig: event)
+    handle_webhook_event(session, b"{}", "sig")
+    session.close()
+
+
+def test_owner_can_add_an_employee_with_no_existing_account(client):
+    # Direct product-direction change: no "sign up first" requirement.
     headers_owner = bearer_header("user-a", "a@example.com")
-    headers_employee = bearer_header("user-b", "b@example.com")
-    client.get("/businesses", headers=headers_employee)  # seeds the employee's own User row
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
 
     response = client.post(
         f"/businesses/{business['id']}/employee-seats",
-        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "never-signed-up@example.com", "role": "staff"},
         headers=headers_owner,
     )
     assert response.status_code == 201
     body = response.json()
     assert body["employee_seat"]["status"] == "pending_payment"
+    assert body["employee_seat"]["account_linked"] is False
     assert "checkout.stripe.com" in body["checkout_url"]
 
 
-def test_a_non_owner_cannot_add_an_employee(client):
+def test_a_non_owner_cannot_add_or_edit_an_employee(client):
     headers_owner = bearer_header("user-a", "a@example.com")
     headers_staff = bearer_header("user-b", "b@example.com")
-    headers_new_hire = bearer_header("user-c", "c@example.com")
-    client.get("/businesses", headers=headers_new_hire)
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
 
     session = client._SessionLocal()
@@ -115,17 +134,29 @@ def test_a_non_owner_cannot_add_an_employee(client):
 
     response = client.post(
         f"/businesses/{business['id']}/employee-seats",
-        json={"first_name": "Cian", "surname": "Walsh", "email": "c@example.com", "role": "staff"},
+        json={"first_name": "Cian", "surname": "Walsh", "email": "cian@example.com", "role": "staff"},
         headers=headers_staff,
     )
     assert response.status_code == 403
+
+    seat_id = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Cian", "surname": "Walsh", "email": "cian@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]["id"]
+
+    edit_response = client.patch(
+        f"/businesses/{business['id']}/employee-seats/{seat_id}",
+        json={"first_name": "Changed", "surname": "Walsh", "role": "staff"},
+        headers=headers_staff,
+    )
+    assert edit_response.status_code == 403
 
 
 def test_a_third_employee_is_rejected_via_the_api(client):
     headers_owner = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
     for letter in ("b", "c"):
-        client.get("/businesses", headers=bearer_header(f"user-{letter}", f"{letter}@example.com"))
         response = client.post(
             f"/businesses/{business['id']}/employee-seats",
             json={"first_name": "E", "surname": letter, "email": f"{letter}@example.com", "role": "staff"},
@@ -133,7 +164,6 @@ def test_a_third_employee_is_rejected_via_the_api(client):
         )
         assert response.status_code == 201
 
-    client.get("/businesses", headers=bearer_header("user-d", "d@example.com"))
     third = client.post(
         f"/businesses/{business['id']}/employee-seats",
         json={"first_name": "E", "surname": "d", "email": "d@example.com", "role": "staff"},
@@ -164,13 +194,14 @@ def test_employee_actions_cannot_cross_businesses(client):
     assert client.get(f"/businesses/{business_b['id']}/employee-seats", headers=headers_b_owner).json() == []
 
 
-def test_pending_employee_cannot_access_protected_routes_until_payment_confirms(client, monkeypatch):
+def test_pending_employee_cannot_access_protected_routes_until_both_signup_and_payment(client, monkeypatch):
     monkeypatch.setattr(ai_client, "chat_completion", _fake_chat_completion)
     headers_owner = bearer_header("user-a", "a@example.com")
     headers_employee = bearer_header("user-b", "b@example.com")
-    client.get("/businesses", headers=headers_employee)
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
 
+    # Added with no existing account — the owner never needs to know
+    # whether "b@example.com" has signed up yet.
     create_response = client.post(
         f"/businesses/{business['id']}/employee-seats",
         json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
@@ -178,37 +209,59 @@ def test_pending_employee_cannot_access_protected_routes_until_payment_confirms(
     )
     seat_id = create_response.json()["employee_seat"]["id"]
 
-    # Not paid yet — every protected route must deny the employee.
+    # The employee hasn't even logged in yet — every protected route
+    # must deny them (no membership can exist: get_current_membership
+    # denies before any route body runs).
     statuses = _protected_route_statuses(client, business["id"], headers_employee)
     assert all(status_code == 403 for status_code in statuses.values()), statuses
 
-    # Confirm payment via the webhook (mirrors Stripe's real callback).
-    session = client._SessionLocal()
-    event = {
-        "id": "evt_isolation_active",
-        "type": "customer.subscription.updated",
-        "data": {
-            "object": {
-                "id": "sub_isolation_1",
-                "customer": "cus_isolation_1",
-                "status": "active",
-                "items": {"data": []},
-                "metadata": {"business_id": business["id"], "employee_seat_id": seat_id},
-            }
-        },
-    }
-    monkeypatch.setattr(billing_client, "construct_webhook_event", lambda payload, sig: event)
-    handle_webhook_event(session, b"{}", "sig")
-    session.close()
+    # Payment succeeds before the employee ever logs in — still no
+    # access, since nobody's linked to the seat yet.
+    _fire_active_webhook(client, monkeypatch, business["id"], seat_id)
+    statuses = _protected_route_statuses(client, business["id"], headers_employee)
+    assert all(status_code == 403 for status_code in statuses.values()), statuses
 
-    # Now paid — every protected route must allow the employee, per
-    # existing get_current_membership auth patterns (role isn't checked
-    # further on these particular routes today).
+    seat_after_payment = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()[0]
+    assert seat_after_payment["status"] == "active"
+    assert seat_after_payment["account_linked"] is False
+
+    # The employee finally logs in — any authenticated request reconciles
+    # them (app/security/auth.py::get_current_user_synced), and since
+    # payment already succeeded, access activates immediately.
+    client.get("/businesses", headers=headers_employee)
+
     statuses = _protected_route_statuses(client, business["id"], headers_employee)
     assert all(status_code != 403 for status_code in statuses.values()), statuses
 
-    seats = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()
-    assert seats[0]["status"] == "active"
+    seat_after_login = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()[0]
+    assert seat_after_login["account_linked"] is True
+
+
+def test_signup_before_payment_also_activates_once_payment_succeeds(client, monkeypatch):
+    # The other ordering: the employee signs up/logs in first (so the
+    # seat gets linked immediately at creation time), and access only
+    # activates once payment succeeds afterward.
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_employee = bearer_header("user-b", "b@example.com")
+    client.get("/businesses", headers=headers_employee)  # employee already has an account
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    create_response = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        headers=headers_owner,
+    )
+    seat = create_response.json()["employee_seat"]
+    assert seat["account_linked"] is True  # linked immediately — the account already existed
+
+    # Still no access — payment hasn't succeeded yet.
+    statuses = _protected_route_statuses(client, business["id"], headers_employee)
+    assert all(status_code == 403 for status_code in statuses.values()), statuses
+
+    _fire_active_webhook(client, monkeypatch, business["id"], seat["id"])
+
+    statuses = _protected_route_statuses(client, business["id"], headers_employee)
+    assert all(status_code != 403 for status_code in statuses.values()), statuses
 
 
 def test_activation_via_webhook_is_idempotent(client, monkeypatch):
@@ -222,27 +275,10 @@ def test_activation_via_webhook_is_idempotent(client, monkeypatch):
         headers=headers_owner,
     ).json()["employee_seat"]["id"]
 
-    def _event(event_id):
-        return {
-            "id": event_id,
-            "type": "customer.subscription.updated",
-            "data": {
-                "object": {
-                    "id": "sub_idem_1",
-                    "customer": "cus_idem_1",
-                    "status": "active",
-                    "items": {"data": []},
-                    "metadata": {"business_id": business["id"], "employee_seat_id": seat_id},
-                }
-            },
-        }
+    _fire_active_webhook(client, monkeypatch, business["id"], seat_id, event_id="evt_idem_a")
+    _fire_active_webhook(client, monkeypatch, business["id"], seat_id, event_id="evt_idem_b")
 
     session = client._SessionLocal()
-    monkeypatch.setattr(billing_client, "construct_webhook_event", lambda payload, sig: _event("evt_idem_a"))
-    handle_webhook_event(session, b"{}", "sig")
-    monkeypatch.setattr(billing_client, "construct_webhook_event", lambda payload, sig: _event("evt_idem_b"))
-    handle_webhook_event(session, b"{}", "sig")
-
     memberships = (
         session.query(Membership)
         .filter(Membership.business_id == uuid.UUID(business["id"]), Membership.user_id == "user-b")
@@ -250,3 +286,55 @@ def test_activation_via_webhook_is_idempotent(client, monkeypatch):
     )
     session.close()
     assert len(memberships) == 1
+
+
+def test_owner_can_edit_an_employee_profile(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    seat_id = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]["id"]
+
+    response = client.patch(
+        f"/businesses/{business['id']}/employee-seats/{seat_id}",
+        json={
+            "first_name": "Beatrice",
+            "surname": "O'Brien-Walsh",
+            "role": "manager",
+            "address_line1": "1 Grafton Street",
+            "city": "Dublin",
+            "postal_code": "D02",
+            "country": "Ireland",
+        },
+        headers=headers_owner,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["first_name"] == "Beatrice"
+    assert body["surname"] == "O'Brien-Walsh"
+    assert body["role"] == "manager"
+    assert body["address_line1"] == "1 Grafton Street"
+
+    listed = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()
+    assert listed[0]["first_name"] == "Beatrice"
+
+
+def test_list_shows_role_for_each_attached_employee(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "b@example.com", "role": "manager"},
+        headers=headers_owner,
+    )
+    client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Cian", "surname": "Walsh", "email": "c@example.com", "role": "staff"},
+        headers=headers_owner,
+    )
+
+    listed = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).json()
+    roles_by_name = {row["first_name"]: row["role"] for row in listed}
+    assert roles_by_name == {"Bea": "manager", "Cian": "staff"}

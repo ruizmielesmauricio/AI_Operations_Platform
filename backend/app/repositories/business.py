@@ -163,7 +163,8 @@ def soft_delete_business(db: Session, *, business: Business) -> Business:
 # passes something wider than that schema intends.
 _PROFILE_FIELDS = frozenset(
     {
-        "manager_name",
+        "manager_first_name",
+        "manager_surname",
         "contact_email",
         "contact_phone",
         "location_label",

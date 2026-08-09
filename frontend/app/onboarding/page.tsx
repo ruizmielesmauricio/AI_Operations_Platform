@@ -22,7 +22,8 @@ const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
 // route — see [id]/page.tsx's own comment on that).
 type BranchDraft = {
   name: string;
-  manager_name: string;
+  manager_first_name: string;
+  manager_surname: string;
   contact_email: string;
   contact_phone: string;
   location_label: string;
@@ -35,7 +36,8 @@ type BranchDraft = {
 
 const EMPTY_BRANCH_DRAFT: BranchDraft = {
   name: "",
-  manager_name: "",
+  manager_first_name: "",
+  manager_surname: "",
   contact_email: "",
   contact_phone: "",
   location_label: "",
@@ -55,18 +57,41 @@ const EMPLOYEE_ROLES = [
   { value: "manager", label: "Manager" },
 ];
 
-type EmployeeDraft = { first_name: string; surname: string; email: string; role: string };
-const EMPTY_EMPLOYEE_DRAFT: EmployeeDraft = { first_name: "", surname: "", email: "", role: "staff" };
+type EmployeeDraft = {
+  first_name: string;
+  surname: string;
+  email: string;
+  role: string;
+  address_line1: string;
+  city: string;
+  postal_code: string;
+  country: string;
+};
+const EMPTY_EMPLOYEE_DRAFT: EmployeeDraft = {
+  first_name: "",
+  surname: "",
+  email: "",
+  role: "staff",
+  address_line1: "",
+  city: "",
+  postal_code: "",
+  country: "",
+};
 
 // Mirrors statusLabel below, but for an employee seat rather than a
 // business's own subscription — deliberately not shown as "Subscribed"/
 // "Cancelled" (those already mean something specific for a business) so
 // the two concepts don't visually blur together in the same list.
-function seatStatusLabel(status: string): string {
-  if (status === "active") return "Active";
-  if (status === "payment_failed") return "Payment failed";
-  if (status === "canceled") return "Cancelled";
-  return "Pending Payment";
+// Real access needs BOTH payment (status "active") AND a linked account
+// (account_linked) — whichever is still missing is what the label says,
+// rather than a bare "Pending Payment" that would hide the other reason.
+function seatStatusLabel(seat: EmployeeSeat): string {
+  if (seat.status === "payment_failed") return "Payment failed";
+  if (seat.status === "canceled") return "Cancelled";
+  if (seat.status === "active" && seat.account_linked) return "Active";
+  if (seat.status === "active") return "Paid — waiting for them to sign in";
+  if (seat.account_linked) return "Pending payment";
+  return "Pending payment and signup";
 }
 
 // The four states a business can actually be in, collapsed from the raw
@@ -122,10 +147,18 @@ export default function OnboardingPage() {
   // business id; only ever fetched/shown for a business the caller owns
   // (the list route itself is owner-only, see app/api/employee_seats.py).
   const [employeeSeatsByBusiness, setEmployeeSeatsByBusiness] = useState<Record<string, EmployeeSeat[]>>({});
+  // The business id the add/edit employee form is open for, if any — the
+  // employee already exists as a real business here (unlike branchAddress
+  // above), so address suggestions are scoped directly against it.
   const [employeeFormOpenFor, setEmployeeFormOpenFor] = useState<string | null>(null);
+  // Set when the open form is editing an existing seat rather than
+  // creating a new one — null means "add" (email is collected and a POST
+  // is sent); set means "edit" (email stays fixed, a PATCH is sent).
+  const [editingEmployeeSeatId, setEditingEmployeeSeatId] = useState<string | null>(null);
   const [employeeDraft, setEmployeeDraft] = useState<EmployeeDraft>(EMPTY_EMPLOYEE_DRAFT);
   const [employeeSubmitting, setEmployeeSubmitting] = useState(false);
   const [employeeError, setEmployeeError] = useState<string | null>(null);
+  const employeeAddress = useAddressAutocomplete(employeeFormOpenFor);
 
   useEffect(() => {
     if (session) {
@@ -301,7 +334,8 @@ export default function OnboardingPage() {
         setBusinesses((prev) => [...prev, branch]);
       }
       await apiPatch<Business>(`/businesses/${id}`, {
-        manager_name: branchDraft.manager_name,
+        manager_first_name: branchDraft.manager_first_name,
+        manager_surname: branchDraft.manager_surname,
         contact_email: branchDraft.contact_email,
         contact_phone: branchDraft.contact_phone,
         location_label: branchDraft.location_label,
@@ -328,12 +362,30 @@ export default function OnboardingPage() {
 
   function handleOpenAddEmployee(businessId: string) {
     setEmployeeFormOpenFor(businessId);
+    setEditingEmployeeSeatId(null);
     setEmployeeDraft(EMPTY_EMPLOYEE_DRAFT);
     setEmployeeError(null);
   }
 
-  function handleCancelAddEmployee() {
+  function handleOpenEditEmployee(businessId: string, seat: EmployeeSeat) {
+    setEmployeeFormOpenFor(businessId);
+    setEditingEmployeeSeatId(seat.id);
+    setEmployeeDraft({
+      first_name: seat.first_name,
+      surname: seat.surname,
+      email: seat.email,
+      role: seat.role,
+      address_line1: seat.address_line1 ?? "",
+      city: seat.city ?? "",
+      postal_code: seat.postal_code ?? "",
+      country: seat.country ?? "",
+    });
+    setEmployeeError(null);
+  }
+
+  function handleCancelEmployeeForm() {
     setEmployeeFormOpenFor(null);
+    setEditingEmployeeSeatId(null);
     setEmployeeDraft(EMPTY_EMPLOYEE_DRAFT);
     setEmployeeError(null);
   }
@@ -342,28 +394,65 @@ export default function OnboardingPage() {
     setEmployeeDraft((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function handleAddEmployee(e: React.FormEvent, businessId: string) {
+  function handleEmployeeAddressChange(value: string) {
+    updateEmployeeDraft("address_line1", value);
+    employeeAddress.handleAddressChange(value);
+  }
+
+  function handleEmployeeAddressPickSuggestion(suggestion: AddressSuggestion) {
+    setEmployeeDraft((prev) => ({
+      ...prev,
+      address_line1: suggestion.address_line1 ?? prev.address_line1,
+      city: suggestion.city ?? prev.city,
+      postal_code: suggestion.postal_code ?? prev.postal_code,
+      country: suggestion.country ?? prev.country,
+    }));
+    employeeAddress.reset();
+  }
+
+  async function handleSaveEmployee(e: React.FormEvent, businessId: string) {
     e.preventDefault();
     setEmployeeError(null);
     setEmployeeSubmitting(true);
     try {
+      if (editingEmployeeSeatId) {
+        const updated = await apiPatch<EmployeeSeat>(
+          `/businesses/${businessId}/employee-seats/${editingEmployeeSeatId}`,
+          {
+            first_name: employeeDraft.first_name,
+            surname: employeeDraft.surname,
+            role: employeeDraft.role,
+            address_line1: employeeDraft.address_line1 || null,
+            city: employeeDraft.city || null,
+            postal_code: employeeDraft.postal_code || null,
+            country: employeeDraft.country || null,
+          }
+        );
+        setEmployeeSeatsByBusiness((prev) => ({
+          ...prev,
+          [businessId]: (prev[businessId] ?? []).map((s) => (s.id === updated.id ? updated : s)),
+        }));
+        handleCancelEmployeeForm();
+        return;
+      }
       const { employee_seat, checkout_url } = await apiPost<EmployeeSeatCreateResponse>(
         `/businesses/${businessId}/employee-seats`,
         employeeDraft
       );
-      // Shows up in the list right away as "Pending Payment", same
-      // resumable-if-abandoned shape as a branch's own Checkout handoff.
+      // Shows up in the list right away as "Pending payment and signup",
+      // same resumable-if-abandoned shape as a branch's own Checkout
+      // handoff.
       setEmployeeSeatsByBusiness((prev) => ({
         ...prev,
         [businessId]: [...(prev[businessId] ?? []), employee_seat],
       }));
       window.location.href = checkout_url;
     } catch (err) {
-      // The backend's own message is specific per failure (no account
-      // found for that email, already invited, seat limit reached, ...)
-      // — shown directly rather than a generic fallback.
+      // The backend's own message is specific per failure (already
+      // invited, seat limit reached, ...) — shown directly rather than a
+      // generic fallback.
       setEmployeeError(
-        err instanceof ApiError ? err.message : "Could not add this employee. Is the backend running?"
+        err instanceof ApiError ? err.message : "Could not save this employee. Is the backend running?"
       );
     } finally {
       setEmployeeSubmitting(false);
@@ -607,7 +696,7 @@ export default function OnboardingPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        employeeFormOpenFor === b.id ? handleCancelAddEmployee() : handleOpenAddEmployee(b.id)
+                        employeeFormOpenFor === b.id ? handleCancelEmployeeForm() : handleOpenAddEmployee(b.id)
                       }
                     >
                       {employeeFormOpenFor === b.id ? "Cancel" : "+ Add employee (€5/mo)"}
@@ -615,13 +704,16 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 {b.role === "owner" && employeeFormOpenFor === b.id && (
-                  <form onSubmit={(e) => handleAddEmployee(e, b.id)}>
-                    <h3>Employee profile</h3>
-                    <p className="hint">
-                      The employee must already have an account (ask them to sign up at{" "}
-                      <a href="/signup">/signup</a> first if they haven&apos;t) — access is granted only
-                      after payment succeeds.
-                    </p>
+                  <form onSubmit={(e) => handleSaveEmployee(e, b.id)}>
+                    <h3>{editingEmployeeSeatId ? "Edit employee" : "Employee profile"}</h3>
+                    {!editingEmployeeSeatId && (
+                      <p className="hint">
+                        They don&apos;t need an account yet — if this email hasn&apos;t signed up at{" "}
+                        <a href="/signup">/signup</a>, access activates automatically the first time they
+                        do, as long as payment has also gone through. Both need to happen before they can
+                        get in.
+                      </p>
+                    )}
                     <div>
                       <label htmlFor={`employee-first-name-${b.id}`}>First name</label>
                       <br />
@@ -643,15 +735,22 @@ export default function OnboardingPage() {
                       />
                     </div>
                     <div>
-                      <label htmlFor={`employee-email-${b.id}`}>Email (the account they signed up with)</label>
+                      <label htmlFor={`employee-email-${b.id}`}>Email</label>
                       <br />
                       <input
                         id={`employee-email-${b.id}`}
                         type="email"
                         required
+                        disabled={!!editingEmployeeSeatId}
                         value={employeeDraft.email}
                         onChange={(e) => updateEmployeeDraft("email", e.target.value)}
                       />
+                      {editingEmployeeSeatId && (
+                        <span className="hint">
+                          {" "}
+                          Not editable here — changing it would break matching them to their account.
+                        </span>
+                      )}
                     </div>
                     <div>
                       <label htmlFor={`employee-role-${b.id}`}>Role</label>
@@ -668,11 +767,86 @@ export default function OnboardingPage() {
                         ))}
                       </select>
                     </div>
+                    {/* Same live-suggestion address input as the owner's
+                        own profile and the branch-creation form — scoped
+                        directly against this real business's own id. */}
+                    <div style={{ position: "relative" }}>
+                      <label htmlFor={`employee-address-${b.id}`}>Address (optional)</label>
+                      <br />
+                      <input
+                        id={`employee-address-${b.id}`}
+                        autoComplete="off"
+                        value={employeeDraft.address_line1}
+                        onChange={(e) => handleEmployeeAddressChange(e.target.value)}
+                        onFocus={employeeAddress.openIfHasSuggestions}
+                        onBlur={employeeAddress.closeSoon}
+                      />
+                      {employeeAddress.suggestLoading && <span className="hint"> Searching…</span>}
+                      {employeeAddress.suggestOpen && employeeAddress.suggestions.length > 0 && (
+                        <ul
+                          style={{
+                            position: "absolute",
+                            zIndex: 1,
+                            margin: 0,
+                            padding: 0,
+                            listStyle: "none",
+                            background: "Canvas",
+                            color: "CanvasText",
+                            border: "1px solid #ccc",
+                            width: "100%",
+                            maxWidth: "32em",
+                          }}
+                        >
+                          {employeeAddress.suggestions.map((suggestion, i) => (
+                            <li key={i}>
+                              <button
+                                type="button"
+                                onClick={() => handleEmployeeAddressPickSuggestion(suggestion)}
+                                style={{ display: "block", width: "100%", textAlign: "left" }}
+                              >
+                                {suggestion.formatted_address}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <label htmlFor={`employee-city-${b.id}`}>City</label>
+                      <br />
+                      <input
+                        id={`employee-city-${b.id}`}
+                        value={employeeDraft.city}
+                        onChange={(e) => updateEmployeeDraft("city", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`employee-postal-code-${b.id}`}>Postal code</label>
+                      <br />
+                      <input
+                        id={`employee-postal-code-${b.id}`}
+                        value={employeeDraft.postal_code}
+                        onChange={(e) => updateEmployeeDraft("postal_code", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`employee-country-${b.id}`}>Country</label>
+                      <br />
+                      <input
+                        id={`employee-country-${b.id}`}
+                        value={employeeDraft.country}
+                        onChange={(e) => updateEmployeeDraft("country", e.target.value)}
+                      />
+                    </div>
                     {employeeError && <p className="status-error">{employeeError}</p>}
                     <button type="submit" disabled={employeeSubmitting}>
-                      {employeeSubmitting ? "Saving…" : "Save and continue to payment"}
+                      {employeeSubmitting
+                        ? "Saving…"
+                        : editingEmployeeSeatId
+                          ? "Save changes"
+                          : "Save and continue to payment"}
                     </button>{" "}
-                    <button type="button" disabled={employeeSubmitting} onClick={handleCancelAddEmployee}>
+                    <button type="button" disabled={employeeSubmitting} onClick={handleCancelEmployeeForm}>
                       Cancel
                     </button>
                   </form>
@@ -682,9 +856,12 @@ export default function OnboardingPage() {
                     {employeeSeatsByBusiness[b.id].map((seat) => (
                       <li key={seat.id} className="hint">
                         {seat.first_name} {seat.surname} ({seat.role}) —{" "}
-                        <span className={seat.status === "active" ? "status-ok" : "status-error"}>
-                          {seatStatusLabel(seat.status)}
-                        </span>
+                        <span className={seat.status === "active" && seat.account_linked ? "status-ok" : "status-error"}>
+                          {seatStatusLabel(seat)}
+                        </span>{" "}
+                        <button type="button" onClick={() => handleOpenEditEmployee(b.id, seat)}>
+                          Edit
+                        </button>
                       </li>
                     ))}
                   </ul>

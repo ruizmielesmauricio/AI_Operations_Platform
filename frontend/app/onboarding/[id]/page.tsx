@@ -26,7 +26,8 @@ import type { AddressSuggestion, Business, BusinessProfileUpdate, SubscriptionSt
 
 function formFromBusiness(business: Business): BusinessProfileUpdate {
   return {
-    manager_name: business.manager_name ?? "",
+    manager_first_name: business.manager_first_name ?? "",
+    manager_surname: business.manager_surname ?? "",
     contact_email: business.contact_email ?? "",
     contact_phone: business.contact_phone ?? "",
     location_label: business.location_label ?? "",

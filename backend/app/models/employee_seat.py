@@ -27,23 +27,35 @@ class EmployeeSeat(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     __tablename__ = "employee_seats"
 
     invited_by_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
-    # Resolved from `email` at invite time — required (see product
-    # decision: an employee must already have signed up before being
-    # added; there is no invite-by-email/magic-link flow in this
-    # codebase yet). This is who the eventual Membership.user_id will be.
-    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False)
+    # Nullable — the owner/admin creates the profile directly; the
+    # employee does NOT need an existing account first (product
+    # direction: avoid requiring staff to sign up independently first).
+    # Resolved immediately at creation time if a User with a matching
+    # email (case-insensitive) already exists; otherwise linked later,
+    # automatically, the first time that email authenticates
+    # (app/application/employee_seats.py::reconcile_pending_employee_seats,
+    # called from get_current_user_synced). Membership is only ever
+    # created once BOTH this is set AND status == "active" — whichever
+    # of "paid" and "linked" happens second is what actually activates.
+    user_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("users.id"), nullable=True)
     first_name: Mapped[str] = mapped_column(String(128), nullable=False)
     surname: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Case is preserved as typed for display, but every lookup/match
+    # against this (reconciliation, "already invited" check) normalizes
+    # to lowercase first — email is conventionally case-insensitive
+    # (Gmail always is), and comparing raw case caused a real bug: an
+    # owner adding someone who'd already signed up got "No account
+    # found" purely because of a casing mismatch.
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     # Membership.ROLES minus "owner" — the account's existing owner is
     # already the admin (product decision); a new seat is manager or
     # staff.
     role: Mapped[str] = mapped_column(String(32), nullable=False)
-    # "pending_payment" -> "active" (Membership created) on the seat's
-    # Stripe subscription reaching active status; "payment_failed" or
-    # "canceled" on anything else, which also removes the Membership if
-    # one had been created — access tracks live payment status, not just
-    # its first success.
+    # "pending_payment" -> "active" (Membership created, once user_id is
+    # also set) on the seat's Stripe subscription reaching active status;
+    # "payment_failed" or "canceled" on anything else, which also removes
+    # the Membership if one had been created — access tracks live payment
+    # status, not just its first success.
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_payment")
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Unique, not composite with anything — a real Stripe subscription id
@@ -52,3 +64,11 @@ class EmployeeSeat(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # for a business reuses that business's own Stripe customer, since
     # the owner is who's actually paying.
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    # Optional profile fields, consistent with the owner/business profile
+    # (app/models/business.py) — same live Geoapify-suggestion input on
+    # the frontend. No timezone field: that's a business-level setting,
+    # not a personal one.
+    address_line1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(128), nullable=True)

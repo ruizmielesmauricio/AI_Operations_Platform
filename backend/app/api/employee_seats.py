@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -5,15 +7,21 @@ from app.api.deps import get_db
 from app.application.employee_seats import (
     AlreadyAMemberOrInvited,
     EmployeeSeatLimitReached,
+    EmployeeSeatNotFound,
     InvalidEmployeeRole,
     MAX_EMPLOYEE_SEATS_PER_BUSINESS,
-    NoAccountForEmail,
     add_employee,
+    update_employee_profile,
 )
 from app.billing.exceptions import EmployeeSeatPriceNotConfigured
 from app.models.membership import Membership
 from app.repositories.employee_seat import EmployeeSeatRepository
-from app.schemas.employee_seat import EmployeeSeatCreate, EmployeeSeatCreateResponse, EmployeeSeatOut
+from app.schemas.employee_seat import (
+    EmployeeSeatCreate,
+    EmployeeSeatCreateResponse,
+    EmployeeSeatOut,
+    EmployeeSeatUpdate,
+)
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
 
@@ -33,7 +41,7 @@ def list_employee_seats(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can view employee seats"
         )
     rows = EmployeeSeatRepository(db).list_for_business(membership.business_id)
-    return [EmployeeSeatOut.model_validate(r) for r in rows]
+    return [EmployeeSeatOut.from_seat(r) for r in rows]
 
 
 @router.post("", response_model=EmployeeSeatCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -57,6 +65,10 @@ def create_employee_seat(
             surname=payload.surname,
             email=payload.email,
             role=payload.role,
+            address_line1=payload.address_line1,
+            city=payload.city,
+            postal_code=payload.postal_code,
+            country=payload.country,
         )
     except InvalidEmployeeRole as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -64,11 +76,6 @@ def create_employee_seat(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"This shop already has {MAX_EMPLOYEE_SEATS_PER_BUSINESS} employee seats.",
-        ) from exc
-    except NoAccountForEmail as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"No account found for {exc.email} — ask them to sign up first, then try again.",
         ) from exc
     except AlreadyAMemberOrInvited as exc:
         raise HTTPException(
@@ -80,6 +87,37 @@ def create_employee_seat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Employee seats aren't available yet — billing isn't fully configured.",
         ) from exc
-    return EmployeeSeatCreateResponse(
-        employee_seat=EmployeeSeatOut.model_validate(seat), checkout_url=checkout_url
-    )
+    return EmployeeSeatCreateResponse(employee_seat=EmployeeSeatOut.from_seat(seat), checkout_url=checkout_url)
+
+
+@router.patch("/{seat_id}", response_model=EmployeeSeatOut)
+def update_employee_seat(
+    seat_id: uuid.UUID,
+    payload: EmployeeSeatUpdate,
+    membership: Membership = Depends(get_current_membership),
+    current_user: AuthenticatedUser = Depends(get_current_user_synced),
+    db: Session = Depends(get_db),
+) -> EmployeeSeatOut:
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can edit an employee"
+        )
+    try:
+        seat = update_employee_profile(
+            db,
+            business_id=membership.business_id,
+            seat_id=seat_id,
+            editing_user_id=current_user.id,
+            first_name=payload.first_name,
+            surname=payload.surname,
+            role=payload.role,
+            address_line1=payload.address_line1,
+            city=payload.city,
+            postal_code=payload.postal_code,
+            country=payload.country,
+        )
+    except InvalidEmployeeRole as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except EmployeeSeatNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found") from exc
+    return EmployeeSeatOut.from_seat(seat)

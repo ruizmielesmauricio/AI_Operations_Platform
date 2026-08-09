@@ -190,7 +190,8 @@ def test_update_business_profile_writes_only_whitelisted_fields(db_session):
         db_session,
         business=business,
         updates={
-            "manager_name": "Aoife Byrne",
+            "manager_first_name": "Aoife",
+            "manager_surname": "Byrne",
             "contact_email": "aoife@shopa.example",
             "city": "Dublin",
             # Not a real profile field — deliberately included to prove
@@ -199,7 +200,8 @@ def test_update_business_profile_writes_only_whitelisted_fields(db_session):
             "name": "Renamed via the back door",
         },
     )
-    assert updated.manager_name == "Aoife Byrne"
+    assert updated.manager_first_name == "Aoife"
+    assert updated.manager_surname == "Byrne"
     assert updated.contact_email == "aoife@shopa.example"
     assert updated.city == "Dublin"
     assert updated.name == "Shop A"
@@ -209,7 +211,7 @@ def test_update_business_profile_can_explicitly_clear_a_field(db_session):
     business = create_business_with_owner(
         db_session, name="Shop A", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="user-a"
     )
-    update_business_profile(db_session, business=business, updates={"manager_name": "Aoife Byrne"})
+    update_business_profile(db_session, business=business, updates={"manager_first_name": "Aoife"})
 
-    cleared = update_business_profile(db_session, business=business, updates={"manager_name": None})
-    assert cleared.manager_name is None
+    cleared = update_business_profile(db_session, business=business, updates={"manager_first_name": None})
+    assert cleared.manager_first_name is None

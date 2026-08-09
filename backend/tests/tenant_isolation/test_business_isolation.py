@@ -115,7 +115,8 @@ def test_owner_can_update_their_business_profile(client):
     response = client.patch(
         f"/businesses/{business['id']}",
         json={
-            "manager_name": "Aoife Byrne",
+            "manager_first_name": "Aoife",
+            "manager_surname": "Byrne",
             "contact_email": "aoife@shopa.example",
             "contact_phone": "+353 1 234 5678",
             "location_label": "Dublin - Rathmines",
@@ -129,14 +130,16 @@ def test_owner_can_update_their_business_profile(client):
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["manager_name"] == "Aoife Byrne"
+    assert body["manager_first_name"] == "Aoife"
+    assert body["manager_surname"] == "Byrne"
     assert body["contact_email"] == "aoife@shopa.example"
     assert body["location_label"] == "Dublin - Rathmines"
     assert body["country"] == "Ireland"
 
     # Persisted, not just echoed back.
     refetched = client.get(f"/businesses/{business['id']}", headers=headers).json()
-    assert refetched["manager_name"] == "Aoife Byrne"
+    assert refetched["manager_first_name"] == "Aoife"
+    assert refetched["manager_surname"] == "Byrne"
 
 
 def test_patch_only_touches_fields_actually_sent(client):
@@ -144,15 +147,15 @@ def test_patch_only_touches_fields_actually_sent(client):
     # left untouched, not silently cleared.
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Aoife Byrne"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "Aoife"}, headers=headers)
 
     response = client.patch(
         f"/businesses/{business['id']}", json={"contact_email": "aoife@shopa.example"}, headers=headers
     )
     assert response.status_code == 200
     body = response.json()
-    # manager_name survives the second PATCH, which never mentioned it.
-    assert body["manager_name"] == "Aoife Byrne"
+    # manager_first_name survives the second PATCH, which never mentioned it.
+    assert body["manager_first_name"] == "Aoife"
     assert body["contact_email"] == "aoife@shopa.example"
 
 
@@ -162,13 +165,13 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
 
     response = client.patch(
-        f"/businesses/{business_a['id']}", json={"manager_name": "Not Owner"}, headers=headers_b
+        f"/businesses/{business_a['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_b
     )
     assert response.status_code == 403
 
     # Confirmed untouched.
     refetched = client.get(f"/businesses/{business_a['id']}", headers=headers_a).json()
-    assert refetched["manager_name"] is None
+    assert refetched["manager_first_name"] is None
 
 
 # --- PR-6.5: audit logging for profile changes -------------------------------
@@ -184,7 +187,7 @@ def test_updating_a_profile_creates_an_audit_entry_with_field_names_not_values(c
 
     response = client.patch(
         f"/businesses/{business['id']}",
-        json={"manager_name": "Aoife Byrne", "contact_email": "aoife@shopa.example"},
+        json={"manager_first_name": "Aoife", "manager_surname": "Byrne", "contact_email": "aoife@shopa.example"},
         headers=headers,
     )
     assert response.status_code == 200
@@ -199,11 +202,12 @@ def test_updating_a_profile_creates_an_audit_entry_with_field_names_not_values(c
     assert entry.user_id == "user-a"
     assert entry.target_type == "business"
     assert entry.target_id == business["id"]
-    # Field names, not the actual values — "Aoife Byrne" / the email
+    # Field names, not the actual values — "Aoife"/"Byrne"/the email
     # address must never appear in the log itself.
-    assert set(entry.event_metadata["fields_changed"]) == {"manager_name", "contact_email"}
+    assert set(entry.event_metadata["fields_changed"]) == {"manager_first_name", "manager_surname", "contact_email"}
     serialized = str(entry.event_metadata)
-    assert "Aoife Byrne" not in serialized
+    assert "Aoife" not in serialized
+    assert "Byrne" not in serialized
     assert "aoife@shopa.example" not in serialized
 
 
@@ -217,7 +221,7 @@ def test_a_rejected_profile_update_creates_no_audit_entry(client):
     business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
 
     response = client.patch(
-        f"/businesses/{business_a['id']}", json={"manager_name": "Not Owner"}, headers=headers_b
+        f"/businesses/{business_a['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_b
     )
     assert response.status_code == 403
 

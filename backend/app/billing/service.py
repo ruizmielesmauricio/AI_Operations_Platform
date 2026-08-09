@@ -18,7 +18,6 @@ from app.billing.status import (
     derive_subscription_status,
 )
 from app.models.business import Business
-from app.models.membership import Membership
 from app.repositories.audit_log import record_audit_event
 from app.repositories.employee_seat import EmployeeSeatRepository
 from app.repositories.subscription import ProcessedStripeEventRepository, SubscriptionRepository
@@ -258,10 +257,31 @@ def _apply_employee_seat_event(
         # event, possibly before this one (Stripe doesn't guarantee order).
         return
 
+    # Local import: app/application/employee_seats.py imports this module
+    # back (start_employee_seat_checkout, inside add_employee) — kept
+    # local here purely to keep this file's own top-level imports free of
+    # application-layer concerns; there's no actual cycle at load time
+    # either way, since that other import is itself deferred to call time.
+    from app.application.employee_seats import revoke_employee_membership, try_activate_employee_seat
+
     was_active = seat.status == "active"
     if status == "active":
         if not was_active:
-            _activate_employee_membership(db, seat)
+            # Distinct from "employee_membership_activated" below —
+            # payment can succeed well before the employee has ever
+            # signed up (seat.user_id may still be None here), so
+            # "payment succeeded" and "access activated" are two
+            # separate, independently-timed audit events.
+            record_audit_event(
+                db,
+                business_id=seat.business_id,
+                user_id=seat.invited_by_user_id,
+                action="employee_payment_succeeded",
+                target_type="employee_seat",
+                target_id=str(seat.id),
+            )
+        seats.set_status(seat, "active", stripe_subscription_id=stripe_subscription_id)
+        if try_activate_employee_seat(db, seat):
             record_audit_event(
                 db,
                 business_id=seat.business_id,
@@ -270,7 +290,6 @@ def _apply_employee_seat_event(
                 target_type="employee_seat",
                 target_id=str(seat.id),
             )
-        seats.set_status(seat, "active", stripe_subscription_id=stripe_subscription_id)
         return
 
     # Any non-active status (past_due, canceled, incomplete, unpaid, ...) —
@@ -278,7 +297,7 @@ def _apply_employee_seat_event(
     # created while this seat was active, exactly once on the transition.
     new_status = "canceled" if status == "canceled" else "payment_failed"
     if was_active:
-        _revoke_employee_membership(db, seat)
+        revoke_employee_membership(db, seat)
     if seat.status != new_status:
         record_audit_event(
             db,
@@ -290,28 +309,6 @@ def _apply_employee_seat_event(
             metadata={"stripe_status": status},
         )
     seats.set_status(seat, new_status, stripe_subscription_id=stripe_subscription_id)
-
-
-def _activate_employee_membership(db: Session, seat) -> None:
-    existing = (
-        db.query(Membership)
-        .filter(Membership.business_id == seat.business_id, Membership.user_id == seat.user_id)
-        .first()
-    )
-    if existing is None:
-        db.add(Membership(business_id=seat.business_id, user_id=seat.user_id, role=seat.role))
-        db.flush()
-
-
-def _revoke_employee_membership(db: Session, seat) -> None:
-    membership = (
-        db.query(Membership)
-        .filter(Membership.business_id == seat.business_id, Membership.user_id == seat.user_id)
-        .first()
-    )
-    if membership is not None:
-        db.delete(membership)
-        db.flush()
 
 
 def _subscription_period_end(subscription_object: dict) -> datetime | None:

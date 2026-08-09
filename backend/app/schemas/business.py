@@ -26,7 +26,8 @@ class BusinessOut(BaseModel):
     # not a second login (see app/models/business.py). All optional; most
     # useful once an account has more than one location and the shop name
     # alone doesn't distinguish them.
-    manager_name: str | None = None
+    manager_first_name: str | None = None
+    manager_surname: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
     location_label: str | None = None
@@ -64,7 +65,8 @@ class BusinessProfileUpdate(BaseModel):
     explicit null still clears a field, omitting it entirely does not).
     """
 
-    manager_name: str | None = Field(default=None, max_length=255)
+    manager_first_name: str | None = Field(default=None, max_length=128)
+    manager_surname: str | None = Field(default=None, max_length=128)
     contact_email: str | None = Field(default=None, max_length=255)
     contact_phone: str | None = Field(default=None, max_length=64)
     location_label: str | None = Field(default=None, max_length=255)

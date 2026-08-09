@@ -12,7 +12,10 @@ import type { BusinessProfileUpdate } from "@/types";
 // manager/contact/location, then address, then city/postal/country/
 // timezone.
 export const PROFILE_FIELDS_BEFORE_ADDRESS: { key: keyof BusinessProfileUpdate; label: string; type?: string }[] = [
-  { key: "manager_name", label: "Manager / owner name" },
+  // Split into first/surname, not one combined field (direct request) —
+  // was a single "Manager / owner name" field.
+  { key: "manager_first_name", label: "Manager / owner first name" },
+  { key: "manager_surname", label: "Manager / owner surname" },
   { key: "contact_email", label: "Contact email", type: "email" },
   { key: "contact_phone", label: "Contact phone" },
   { key: "location_label", label: "Location label (e.g. \"Dublin - Rathmines\")" },

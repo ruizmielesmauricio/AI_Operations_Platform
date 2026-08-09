@@ -74,12 +74,36 @@ def get_current_user_synced(
     exists (upsert), since Supabase is the identity source of truth but
     memberships/audit_logs/etc. need a local foreign key to point at.
     Use this dependency on any route that writes data tied to a user_id.
+
+    Also the one place a newly (or re-)authenticated user gets checked
+    against any pending employee-seat invites addressed to their email
+    (app/application/employee_seats.py::reconcile_pending_employee_seats)
+    — this is what lets an owner add someone by email before they've
+    ever signed up, and have access apply automatically the moment they
+    do, with no separate "accept invite" step.
     """
+    # Normalized to lowercase on write, not just compared case-
+    # insensitively on read — closes the real bug this stored a raw-case
+    # value causing (an owner adding someone who'd genuinely already
+    # signed up got "No account found" purely from a casing mismatch)
+    # at the source, not just at every call site that happens to guard
+    # against it.
+    normalized_email = current_user.email.lower()
     user = db.get(User, current_user.id)
     if user is None:
-        db.add(User(id=current_user.id, email=current_user.email))
-        db.commit()
-    elif user.email != current_user.email:
-        user.email = current_user.email
-        db.commit()
+        user = User(id=current_user.id, email=normalized_email)
+        db.add(user)
+        db.flush()
+    elif user.email != normalized_email:
+        user.email = normalized_email
+        db.flush()
+
+    # Local import: app/application/employee_seats.py doesn't import
+    # anything from app/security/, so this isn't breaking a cycle — kept
+    # local anyway to keep this low-level auth module's own import list
+    # free of application-layer concerns at module load time.
+    from app.application.employee_seats import reconcile_pending_employee_seats
+
+    reconcile_pending_employee_seats(db, user)
+    db.commit()
     return current_user

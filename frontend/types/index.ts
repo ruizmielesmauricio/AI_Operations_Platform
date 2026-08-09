@@ -9,8 +9,10 @@ export interface Business {
   // POST /businesses/{id}/branches).
   parent_business_id: string | null;
   // Profile fields — descriptive contact/location record-keeping only,
-  // editable via PATCH /businesses/{id}. All optional.
-  manager_name: string | null;
+  // editable via PATCH /businesses/{id}. All optional. Split into first/
+  // surname (not one combined field, direct request).
+  manager_first_name: string | null;
+  manager_surname: string | null;
   contact_email: string | null;
   contact_phone: string | null;
   location_label: string | null;
@@ -25,10 +27,13 @@ export interface Business {
 }
 
 // A paid employee seat (EUR 5/month, up to 2 per business) —
-// GET/POST /businesses/{id}/employee-seats. "pending_payment" has no
-// matching access yet; access is only ever granted once a webhook
-// confirms the seat's own Stripe subscription is "active"
-// (app/billing/service.py::_apply_employee_seat_event).
+// GET/POST/PATCH .../employee-seats. The owner creates this directly —
+// the employee does NOT need an existing account first. Real access
+// (a Membership) is only ever granted once BOTH `status` is "active"
+// (payment succeeded) AND `account_linked` is true (that email has
+// signed up/logged in at least once) — whichever happens second is what
+// actually activates it (app/billing/service.py::_apply_employee_seat_event,
+// app/application/employee_seats.py::reconcile_pending_employee_seats).
 export interface EmployeeSeat {
   id: string;
   first_name: string;
@@ -36,6 +41,11 @@ export interface EmployeeSeat {
   email: string;
   role: string; // "manager" | "staff"
   status: string; // "pending_payment" | "active" | "payment_failed" | "canceled"
+  account_linked: boolean;
+  address_line1: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
   created_at: string;
 }
 
@@ -61,7 +71,8 @@ export interface AddressSuggestion {
 // PATCH /businesses/{id} body — every field optional, only what actually
 // changed needs sending (frontend/app/onboarding/page.tsx's edit form).
 export interface BusinessProfileUpdate {
-  manager_name?: string | null;
+  manager_first_name?: string | null;
+  manager_surname?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
   location_label?: string | null;

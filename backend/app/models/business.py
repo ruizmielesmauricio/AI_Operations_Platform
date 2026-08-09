@@ -40,7 +40,11 @@ class Business(Base, PKMixin, TimestampMixin):
     # invite + permissions system that doesn't exist anywhere in this
     # codebase yet), just richer, human-readable identification per
     # business, most useful once an account has multiple locations.
-    manager_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Split into first/surname (not one combined field, direct request) —
+    # was a single manager_name column; migrated with a best-effort split
+    # on the first space for any pre-existing data.
+    manager_first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    manager_surname: Mapped[str | None] = mapped_column(String(128), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # A short label distinct from `name`, e.g. "Dublin - Rathmines" — the

@@ -46,7 +46,7 @@ def test_missing_token_is_rejected(client):
 def test_owner_can_list_audit_events_for_their_business(client):
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Aoife Byrne"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "Aoife Byrne"}, headers=headers)
 
     response = client.get(f"/businesses/{business['id']}/audit-logs", headers=headers)
     assert response.status_code == 200
@@ -59,16 +59,16 @@ def test_owner_can_list_audit_events_for_their_business(client):
 def test_events_are_ordered_newest_first(client):
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "First"}, headers=headers)
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Second"}, headers=headers)
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Third"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "First"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "Second"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "Third"}, headers=headers)
 
     body = client.get(f"/businesses/{business['id']}/audit-logs", headers=headers).json()
     assert len(body) == 3
     assert [row["event_metadata"]["fields_changed"] for row in body] == [
-        ["manager_name"],
-        ["manager_name"],
-        ["manager_name"],
+        ["manager_first_name"],
+        ["manager_first_name"],
+        ["manager_first_name"],
     ]
     timestamps = [row["created_at"] for row in body]
     assert timestamps == sorted(timestamps, reverse=True)
@@ -79,7 +79,7 @@ def test_metadata_never_carries_the_actual_profile_values(client):
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
     client.patch(
         f"/businesses/{business['id']}",
-        json={"manager_name": "Aoife Byrne", "contact_email": "aoife@shopa.example"},
+        json={"manager_first_name": "Aoife Byrne", "contact_email": "aoife@shopa.example"},
         headers=headers,
     )
 
@@ -87,7 +87,7 @@ def test_metadata_never_carries_the_actual_profile_values(client):
     serialized = str(body)
     assert "Aoife Byrne" not in serialized
     assert "aoife@shopa.example" not in serialized
-    assert set(body[0]["event_metadata"]["fields_changed"]) == {"manager_name", "contact_email"}
+    assert set(body[0]["event_metadata"]["fields_changed"]) == {"manager_first_name", "contact_email"}
 
 
 def test_events_are_tenant_scoped_and_cross_tenant_access_is_forbidden(client):
@@ -95,8 +95,8 @@ def test_events_are_tenant_scoped_and_cross_tenant_access_is_forbidden(client):
     headers_b = bearer_header("user-b", "b@example.com")
     business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
     business_b = client.post("/businesses", json={"name": "Shop B"}, headers=headers_b).json()
-    client.patch(f"/businesses/{business_a['id']}", json={"manager_name": "A"}, headers=headers_a)
-    client.patch(f"/businesses/{business_b['id']}", json={"manager_name": "B"}, headers=headers_b)
+    client.patch(f"/businesses/{business_a['id']}", json={"manager_first_name": "A"}, headers=headers_a)
+    client.patch(f"/businesses/{business_b['id']}", json={"manager_first_name": "B"}, headers=headers_b)
 
     # Never trusts business_id from the URL alone — B has no membership on A.
     response = client.get(f"/businesses/{business_a['id']}/audit-logs", headers=headers_b)
@@ -125,7 +125,7 @@ def test_a_staff_member_is_denied(client):
 def test_listing_audit_logs_does_not_itself_create_an_audit_event(client):
     headers = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
-    client.patch(f"/businesses/{business['id']}", json={"manager_name": "Aoife"}, headers=headers)
+    client.patch(f"/businesses/{business['id']}", json={"manager_first_name": "Aoife"}, headers=headers)
 
     client.get(f"/businesses/{business['id']}/audit-logs", headers=headers)
     client.get(f"/businesses/{business['id']}/audit-logs", headers=headers)
