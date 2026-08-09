@@ -6,6 +6,7 @@ from app.models.billing import BillingAccount
 from app.models.business import Business
 from app.models.customer import Customer
 from app.models.employee import Employee
+from app.models.employee_seat import EmployeeSeat
 from app.models.import_record import ImportMappingProfile, ImportRecord
 from app.models.inventory_lot import InventoryLot
 from app.models.inventory_movement import InventoryMovement
@@ -30,6 +31,7 @@ __all__ = [
     "Business",
     "Customer",
     "Employee",
+    "EmployeeSeat",
     "ImportMappingProfile",
     "ImportRecord",
     "InventoryLot",

@@ -8,6 +8,7 @@ from app.billing.service import cancel_subscription
 from app.geocoding.service import suggest_addresses
 from app.models.business import Business
 from app.models.membership import Membership
+from app.repositories.audit_log import record_audit_event
 from app.repositories.business import (
     BusinessLimitReached,
     NotBusinessOwner,
@@ -134,6 +135,20 @@ def update_business(
     # optional, so "not sent" and "sent as empty" need to mean different
     # things.
     updates = payload.model_dump(exclude_unset=True)
+    if updates:
+        # Written before update_business_profile (rather than after) so it
+        # lands in that same commit (PR-6.5) — field *names* only, never
+        # the values themselves, which can carry contact/location PII
+        # this log has no reason to retain.
+        record_audit_event(
+            db,
+            business_id=business.id,
+            user_id=membership.user_id,
+            action="business_profile_updated",
+            target_type="business",
+            target_id=str(business.id),
+            metadata={"fields_changed": sorted(updates.keys())},
+        )
     business = update_business_profile(db, business=business, updates=updates)
     return _to_business_out(business, role=membership.role)
 
@@ -212,5 +227,25 @@ def delete_business(
     # business must not keep being billed. Best-effort ordering: if this
     # raises, the business stays un-deleted rather than silently leaving
     # an orphaned active subscription behind.
-    cancel_subscription(db, business_id=business_id)
+    subscription_canceled = cancel_subscription(db, business_id=business_id)
+    # Written before soft_delete_business (rather than after) so both
+    # entries land in that same commit (PR-6.5) — soft_delete_business is
+    # the one that actually commits the transaction below.
+    if subscription_canceled:
+        record_audit_event(
+            db,
+            business_id=business.id,
+            user_id=membership.user_id,
+            action="subscription_canceled",
+            target_type="business",
+            target_id=str(business.id),
+        )
+    record_audit_event(
+        db,
+        business_id=business.id,
+        user_id=membership.user_id,
+        action="branch_deleted" if business.parent_business_id else "business_deleted",
+        target_type="business",
+        target_id=str(business.id),
+    )
     soft_delete_business(db, business=business)

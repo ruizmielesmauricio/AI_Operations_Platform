@@ -24,6 +24,26 @@ export interface Business {
   deleted_at: string | null;
 }
 
+// A paid employee seat (EUR 5/month, up to 2 per business) —
+// GET/POST /businesses/{id}/employee-seats. "pending_payment" has no
+// matching access yet; access is only ever granted once a webhook
+// confirms the seat's own Stripe subscription is "active"
+// (app/billing/service.py::_apply_employee_seat_event).
+export interface EmployeeSeat {
+  id: string;
+  first_name: string;
+  surname: string;
+  email: string;
+  role: string; // "manager" | "staff"
+  status: string; // "pending_payment" | "active" | "payment_failed" | "canceled"
+  created_at: string;
+}
+
+export interface EmployeeSeatCreateResponse {
+  employee_seat: EmployeeSeat;
+  checkout_url: string;
+}
+
 // One row of GET /businesses/{id}/address-suggestions?text=... — a live,
 // as-you-type suggestion, never saved automatically
 // (frontend/app/onboarding/[id]/page.tsx's own dropdown applies whichever

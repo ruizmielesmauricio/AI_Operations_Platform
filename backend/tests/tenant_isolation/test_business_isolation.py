@@ -29,7 +29,9 @@ def client(tmp_path, monkeypatch):
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app)
+    test_client = TestClient(app)
+    test_client._SessionLocal = TestSessionLocal  # stashed for direct audit-log assertions
+    yield test_client
     app.dependency_overrides.clear()
 
 
@@ -167,6 +169,62 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     # Confirmed untouched.
     refetched = client.get(f"/businesses/{business_a['id']}", headers=headers_a).json()
     assert refetched["manager_name"] is None
+
+
+# --- PR-6.5: audit logging for profile changes -------------------------------
+
+
+def test_updating_a_profile_creates_an_audit_entry_with_field_names_not_values(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    response = client.patch(
+        f"/businesses/{business['id']}",
+        json={"manager_name": "Aoife Byrne", "contact_email": "aoife@shopa.example"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
+    session.close()
+
+    assert len(rows) == 1
+    entry = rows[0]
+    assert entry.action == "business_profile_updated"
+    assert entry.user_id == "user-a"
+    assert entry.target_type == "business"
+    assert entry.target_id == business["id"]
+    # Field names, not the actual values — "Aoife Byrne" / the email
+    # address must never appear in the log itself.
+    assert set(entry.event_metadata["fields_changed"]) == {"manager_name", "contact_email"}
+    serialized = str(entry.event_metadata)
+    assert "Aoife Byrne" not in serialized
+    assert "aoife@shopa.example" not in serialized
+
+
+def test_a_rejected_profile_update_creates_no_audit_entry(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = client.post("/businesses", json={"name": "Shop A"}, headers=headers_a).json()
+
+    response = client.patch(
+        f"/businesses/{business_a['id']}", json={"manager_name": "Not Owner"}, headers=headers_b
+    )
+    assert response.status_code == 403
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business_a["id"])).all()
+    session.close()
+    assert rows == []
 
 
 # --- GET /businesses/{id}/address-suggestions -------------------------------

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.deps import get_db
 from app.main import app
 from app.models import Base
-from tests.auth_helpers import bearer_header, patch_jwks
+from tests.auth_helpers import bearer_header, patch_jwks, seed_active_subscription
 
 
 @pytest.fixture()
@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = override_get_db
     test_client = TestClient(app)
     test_client._SessionLocal = TestSessionLocal
+    test_client._engine = engine  # stashed so seed_active_subscription can seed one directly
     yield test_client
     app.dependency_overrides.clear()
 
@@ -106,6 +107,98 @@ def test_deleting_an_already_deleted_shop_404s_not_500s(client):
 
     response = client.delete(f"/businesses/{business['id']}", headers=headers)
     assert response.status_code == 404
+
+
+def test_deleting_a_shop_creates_a_business_deleted_audit_entry(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    client.delete(f"/businesses/{business['id']}", headers=headers)
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
+    session.close()
+
+    # No subscription existed on this business, so cancel_subscription is
+    # a real no-op (app/billing/service.py) — exactly one entry, not a
+    # misleading "subscription_canceled" alongside it.
+    assert len(rows) == 1
+    entry = rows[0]
+    assert entry.action == "business_deleted"
+    assert entry.user_id == "user-a"
+    assert entry.target_type == "business"
+    assert entry.target_id == business["id"]
+
+
+def test_deleting_a_shop_with_an_active_subscription_also_logs_the_cancellation(client, monkeypatch):
+    import uuid
+
+    from app.billing import client as billing_client
+    from app.models.audit_log import AuditLog
+
+    monkeypatch.setattr(billing_client, "cancel_subscription", lambda stripe_subscription_id: None)
+
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+    seed_active_subscription(client._engine, business["id"])
+
+    response = client.delete(f"/businesses/{business['id']}", headers=headers)
+    assert response.status_code == 204
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
+    session.close()
+
+    actions = {row.action for row in rows}
+    assert actions == {"subscription_canceled", "business_deleted"}
+
+
+def test_deleting_a_branch_logs_branch_deleted_not_business_deleted(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+
+    headers = bearer_header("user-a", "a@example.com")
+    parent = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+    branch = client.post(f"/businesses/{parent['id']}/branches", json={"name": "Branch A"}, headers=headers).json()
+
+    response = client.delete(f"/businesses/{branch['id']}", headers=headers)
+    assert response.status_code == 204
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(branch["id"])).all()
+    session.close()
+
+    assert len(rows) == 1
+    assert rows[0].action == "branch_deleted"
+
+
+def test_a_non_owner_s_rejected_delete_creates_no_audit_entry(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+
+    response = client.delete(f"/businesses/{business['id']}", headers=headers_staff)
+    assert response.status_code == 403
+
+    session = client._SessionLocal()
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
+    session.close()
+    assert rows == []
 
 
 def test_deleting_a_shop_does_not_touch_its_existing_data(client):

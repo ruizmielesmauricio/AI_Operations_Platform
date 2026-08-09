@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.billing import client
+from app.billing.exceptions import EmployeeSeatPriceNotConfigured
 from app.billing.status import (
     DISPUTE_EVENTS,
     HANDLED_EVENTS,
@@ -17,6 +18,9 @@ from app.billing.status import (
     derive_subscription_status,
 )
 from app.models.business import Business
+from app.models.membership import Membership
+from app.repositories.audit_log import record_audit_event
+from app.repositories.employee_seat import EmployeeSeatRepository
 from app.repositories.subscription import ProcessedStripeEventRepository, SubscriptionRepository
 from app.settings.config import get_settings
 
@@ -50,7 +54,7 @@ def start_checkout(*, db: Session, business_id: uuid.UUID, business_email: str) 
     return session.url
 
 
-def cancel_subscription(db: Session, *, business_id: uuid.UUID) -> None:
+def cancel_subscription(db: Session, *, business_id: uuid.UUID) -> bool:
     """Called from app/api/businesses.py's DELETE route when a business is
     soft-deleted — stops billing immediately rather than leaving a live
     Stripe subscription running against an archived business. A no-op,
@@ -65,14 +69,46 @@ def cancel_subscription(db: Session, *, business_id: uuid.UUID) -> None:
     the webhook (once it does arrive) is idempotent via
     ProcessedStripeEventRepository, so this doesn't risk a duplicate
     state change.
+
+    Returns whether a real Stripe subscription was actually canceled —
+    the caller uses this to decide whether a "subscription_canceled"
+    audit entry would be accurate or misleading (PR-6.5).
     """
     subscription = SubscriptionRepository(db).get_by_business_id(business_id)
     if subscription is None or subscription.stripe_subscription_id is None:
-        return
+        return False
     client.cancel_subscription(subscription.stripe_subscription_id)
     SubscriptionRepository(db).upsert_from_stripe(
         business_id=business_id, stripe_customer_id=subscription.stripe_customer_id, status="canceled"
     )
+    return True
+
+
+def start_employee_seat_checkout(
+    *, db: Session, business_id: uuid.UUID, employee_seat_id: uuid.UUID, business_email: str
+) -> str:
+    """A paid employee seat (EUR 5/month, up to 2/business) gets its own
+    dedicated Stripe subscription, same shape as a branch's — just a
+    distinct price and an extra `employee_seat_id` metadata key so the
+    webhook (_apply_employee_seat_event below) can tell this apart from
+    the business's own subscription/branch checkout.
+    """
+    settings = get_settings()
+    if not settings.stripe_employee_seat_price_id:
+        raise EmployeeSeatPriceNotConfigured()
+    # Same Stripe Customer as the business's own subscription, if one
+    # exists — the owner is who's actually paying for the seat.
+    existing = SubscriptionRepository(db).get_by_business_id(business_id)
+    session = client.create_checkout_session(
+        business_id=business_id,
+        business_email=business_email,
+        price_id=settings.stripe_employee_seat_price_id,
+        existing_stripe_customer_id=existing.stripe_customer_id if existing else None,
+        success_url=f"{settings.app_base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{settings.app_base_url}/billing/cancel",
+        extra_metadata={"employee_seat_id": str(employee_seat_id)},
+    )
+    return session.url
 
 
 def start_portal_session(*, stripe_customer_id: str) -> str:
@@ -121,6 +157,16 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
 
     if event_type == "checkout.session.completed":
         business_id = uuid.UUID(obj["metadata"]["business_id"])
+        employee_seat_id = obj["metadata"].get("employee_seat_id")
+        if employee_seat_id:
+            _apply_employee_seat_event(
+                db,
+                employee_seat_id=uuid.UUID(employee_seat_id),
+                stripe_customer_id=obj["customer"],
+                stripe_subscription_id=None,
+                status=None,
+            )
+            return
         subscriptions.upsert_from_stripe(business_id=business_id, stripe_customer_id=obj["customer"])
         return
 
@@ -131,6 +177,16 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         # same business_id, so a row can still be created from this event.
         business_id = uuid.UUID(obj["metadata"]["business_id"])
         status = derive_subscription_status(event_type, obj.get("status"))
+        employee_seat_id = obj["metadata"].get("employee_seat_id")
+        if employee_seat_id:
+            _apply_employee_seat_event(
+                db,
+                employee_seat_id=uuid.UUID(employee_seat_id),
+                stripe_customer_id=obj["customer"],
+                stripe_subscription_id=obj["id"],
+                status=status,
+            )
+            return
         subscriptions.upsert_from_stripe(
             business_id=business_id,
             stripe_customer_id=obj["customer"],
@@ -153,6 +209,16 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         return
     business_id = uuid.UUID(subscription_details["metadata"]["business_id"])
     status = derive_subscription_status(event_type, None)
+    employee_seat_id = subscription_details["metadata"].get("employee_seat_id")
+    if employee_seat_id:
+        _apply_employee_seat_event(
+            db,
+            employee_seat_id=uuid.UUID(employee_seat_id),
+            stripe_customer_id=obj["customer"],
+            stripe_subscription_id=subscription_details["subscription"],
+            status=status,
+        )
+        return
     subscriptions.upsert_from_stripe(
         business_id=business_id,
         stripe_customer_id=obj["customer"],
@@ -160,6 +226,92 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         status=status,
         current_period_end=_invoice_period_end(obj),
     )
+
+
+def _apply_employee_seat_event(
+    db: Session,
+    *,
+    employee_seat_id: uuid.UUID,
+    stripe_customer_id: str,
+    stripe_subscription_id: str | None,
+    status: str | None,
+) -> None:
+    """The employee-seat mirror of the business-subscription upsert above —
+    same event vocabulary (derive_subscription_status), but the outcome is
+    Membership existence, not a Subscription row, and "active" only ever
+    happens once (idempotent): a repeated identical event must never
+    create a second Membership or double-log an audit entry.
+    """
+    seats = EmployeeSeatRepository(db)
+    seat = seats.get_by_id(employee_seat_id)
+    if seat is None:
+        # Defensive only — seats are never hard-deleted, so a webhook
+        # naming one that isn't in our own DB should never happen in
+        # practice. Must not crash the whole webhook delivery over it.
+        logger.warning("Employee seat webhook event for unknown seat id=%s", employee_seat_id)
+        return
+    if stripe_customer_id and seat.stripe_customer_id != stripe_customer_id:
+        seats.set_stripe_customer_id(seat, stripe_customer_id)
+    if status is None:
+        # checkout.session.completed only ever confirms the customer id —
+        # the subscription's real status arrives via a separate lifecycle
+        # event, possibly before this one (Stripe doesn't guarantee order).
+        return
+
+    was_active = seat.status == "active"
+    if status == "active":
+        if not was_active:
+            _activate_employee_membership(db, seat)
+            record_audit_event(
+                db,
+                business_id=seat.business_id,
+                user_id=seat.invited_by_user_id,
+                action="employee_membership_activated",
+                target_type="employee_seat",
+                target_id=str(seat.id),
+            )
+        seats.set_status(seat, "active", stripe_subscription_id=stripe_subscription_id)
+        return
+
+    # Any non-active status (past_due, canceled, incomplete, unpaid, ...) —
+    # access must not outlive payment: revoke a Membership that was
+    # created while this seat was active, exactly once on the transition.
+    new_status = "canceled" if status == "canceled" else "payment_failed"
+    if was_active:
+        _revoke_employee_membership(db, seat)
+    if seat.status != new_status:
+        record_audit_event(
+            db,
+            business_id=seat.business_id,
+            user_id=seat.invited_by_user_id,
+            action="employee_payment_canceled" if new_status == "canceled" else "employee_payment_failed",
+            target_type="employee_seat",
+            target_id=str(seat.id),
+            metadata={"stripe_status": status},
+        )
+    seats.set_status(seat, new_status, stripe_subscription_id=stripe_subscription_id)
+
+
+def _activate_employee_membership(db: Session, seat) -> None:
+    existing = (
+        db.query(Membership)
+        .filter(Membership.business_id == seat.business_id, Membership.user_id == seat.user_id)
+        .first()
+    )
+    if existing is None:
+        db.add(Membership(business_id=seat.business_id, user_id=seat.user_id, role=seat.role))
+        db.flush()
+
+
+def _revoke_employee_membership(db: Session, seat) -> None:
+    membership = (
+        db.query(Membership)
+        .filter(Membership.business_id == seat.business_id, Membership.user_id == seat.user_id)
+        .first()
+    )
+    if membership is not None:
+        db.delete(membership)
+        db.flush()
 
 
 def _subscription_period_end(subscription_object: dict) -> datetime | None:

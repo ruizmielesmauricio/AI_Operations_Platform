@@ -5,11 +5,14 @@ from sqlalchemy.orm import sessionmaker
 from app.models import (
     AIRequest,
     Alert,
+    AuditLog,
     Base,
     Business,
+    EmployeeSeat,
     ImportMappingProfile,
     ImportRecord,
     InventoryMovement,
+    Membership,
     ProcessedStripeEvent,
     Product,
     ProductCategory,
@@ -20,6 +23,7 @@ from app.models import (
     SaleItem,
     Subscription,
     Upload,
+    User,
 )
 
 
@@ -60,7 +64,11 @@ def db_session(_engine):
     session.query(Upload).delete()
     session.query(Subscription).delete()
     session.query(ProcessedStripeEvent).delete()
+    session.query(AuditLog).delete()
+    session.query(EmployeeSeat).delete()
+    session.query(Membership).delete()
     session.query(Business).delete()
+    session.query(User).delete()
     session.commit()
     session.close()
 

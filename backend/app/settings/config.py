@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # already built and tested for the primary price, just a different
     # price id (see app/billing/service.py::start_checkout).
     stripe_branch_price_id: str = ""
+    # A paid employee seat (EUR 5/month, up to 2 per business) — its own
+    # dedicated Stripe subscription, same shape as stripe_branch_price_id
+    # above, just a distinct price point and metadata key
+    # (employee_seat_id instead of no extra key at all — see
+    # app/billing/service.py::_apply_event). Needs its own Price object
+    # created in the Stripe Dashboard, same as the other two.
+    stripe_employee_seat_price_id: str = ""
 
     resend_api_key: str = ""
 
