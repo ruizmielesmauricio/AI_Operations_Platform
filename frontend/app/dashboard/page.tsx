@@ -241,8 +241,9 @@ export default function DashboardPage() {
         categories={categories}
         categoryId={retailCategoryId}
         setCategoryId={setRetailCategoryId}
+        businessId={businessId}
       />
-      <WorkshopSection data={workshop} error={errors.workshop} />
+      <WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} />
       <ForecastSection
         data={forecast}
         error={errors.forecast}
@@ -331,12 +332,14 @@ function RetailSection({
   categories,
   categoryId,
   setCategoryId,
+  businessId,
 }: {
   data: RetailOperations | null;
   error?: string;
   categories: ProductCategory[];
   categoryId: string;
   setCategoryId: (id: string) => void;
+  businessId: string;
 }) {
   const categoryFilter = <CategoryFilterSelect id="retail-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
   if (error) return <Section title="Retail Operations">{categoryFilter}<p className="status-error">{error}</p></Section>;
@@ -344,14 +347,18 @@ function RetailSection({
 
   const withCover = data.stock_cover.filter((r) => r.cover_days !== null);
   const noRecentSales = data.stock_cover.filter((r) => r.cover_days === null && r.stock_on_hand > 0);
+  const salesTxHref = `/transactions?business=${businessId}&type=sales${categoryId ? `&category_id=${categoryId}` : ""}`;
 
   return (
     <Section title="Retail Operations">
       {categoryFilter}
       <Stat label="Inventory value" value={formatMoney(data.inventory_value.value_at_cost)} />
       <Stat label="Sell-through rate" title={DEFINITIONS.sellThrough} value={formatRate(data.sell_through_rate)} />
+      <p>
+        <a href={salesTxHref}>View individual sale transactions{categoryId ? " in this category" : ""} →</a>
+      </p>
 
-      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} />
+      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} businessId={businessId} />
 
       <h3 title={DEFINITIONS.stockCover}>Stock cover</h3>
       {withCover.length > 0 ? (
@@ -381,7 +388,15 @@ function RetailSection({
 // high-price, low-volume item can dominate revenue without being what's
 // actually popular) — a toggle over both, rather than one ambiguous "top
 // sellers" list ranked by whichever the backend happened to pick.
-function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byRevenue: ProductSalesRow[] }) {
+function TopSellers({
+  byUnits,
+  byRevenue,
+  businessId,
+}: {
+  byUnits: ProductSalesRow[];
+  byRevenue: ProductSalesRow[];
+  businessId: string;
+}) {
   const [sortBy, setSortBy] = useState<"units" | "revenue">("units");
   const rows = sortBy === "units" ? byUnits : byRevenue;
 
@@ -410,6 +425,7 @@ function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byReve
               <th>Product</th>
               <th>Units sold</th>
               <th>Revenue</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -421,6 +437,11 @@ function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byReve
                 </td>
                 <td>{row.units_sold}</td>
                 <td>{formatMoney(row.revenue)}</td>
+                <td>
+                  <a href={`/transactions?business=${businessId}&type=sales&product_id=${row.product_id}`}>
+                    View transactions →
+                  </a>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -492,7 +513,15 @@ function CategoryFilterSelect({
 
 // --- Workshop Performance --------------------------------------------------
 
-function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; error?: string }) {
+function WorkshopSection({
+  data,
+  error,
+  businessId,
+}: {
+  data: WorkshopPerformance | null;
+  error?: string;
+  businessId: string;
+}) {
   if (error) return <Section title="Workshop Performance"><p className="status-error">{error}</p></Section>;
   if (!data) return <Section title="Workshop Performance"><p>Loading…</p></Section>;
 
@@ -516,6 +545,9 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
           actual work done.
         </p>
       )}
+      <p>
+        <a href={`/transactions?business=${businessId}&type=repairs`}>View individual repairs →</a>
+      </p>
     </Section>
   );
 }

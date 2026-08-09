@@ -18,7 +18,7 @@ from app.models.report import Report
 from app.models.return_ import Return
 from app.models.sale import Sale, SaleItem
 from app.models.subscription import ProcessedStripeEvent, Subscription
-from app.models.supplier import Supplier
+from app.models.supplier import ProductSupplier, Supplier
 from app.models.upload import Upload
 from app.models.user import User
 
@@ -41,6 +41,7 @@ __all__ = [
     "ProcessedStripeEvent",
     "Product",
     "ProductCategory",
+    "ProductSupplier",
     "ProductionEvent",
     "ProductionEventInput",
     "ProductionEventOutput",

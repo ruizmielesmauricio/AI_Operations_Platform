@@ -69,6 +69,19 @@ export function AppNav({ businessId }: { businessId?: string }) {
       {" · "}
       <a href={`/chat${suffix}`}>Ask ORLA</a>
       {" · "}
+      {/* Product-management surfaces (Gaps 1/4/5) — business-scoped like
+          Reports/Chat above; nothing to show without a selected business,
+          same reasoning as those two. */}
+      {businessId && (
+        <>
+          <a href={`/products${suffix}`}>Thresholds</a>
+          {" · "}
+          <a href={`/suppliers${suffix}`}>Suppliers</a>
+          {" · "}
+          <a href={`/transactions${suffix}`}>Transactions</a>
+          {" · "}
+        </>
+      )}
       {/* No businessId suffix — this links to the full list (every
           business the user owns, active or not), not one specific
           business. Still the same /onboarding route/page (first-run

@@ -160,6 +160,26 @@ class ProductRepository:
         self.session.flush()
         return product
 
+    def get_for_business(self, business_id: uuid.UUID, product_id: uuid.UUID) -> Product | None:
+        return self.session.scalar(
+            select(Product).where(Product.id == product_id, Product.business_id == business_id)
+        )
+
+    def update_low_stock_threshold_days(
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, threshold_days: Decimal | None
+    ) -> Product | None:
+        """The first write path for this column since it was added at
+        Stage C12 (PR-9.3) — everything before this round could only read
+        it. None clears the override back to "inherit from category/
+        default", same "absent means fall through" semantics
+        resolve_low_stock_threshold already has."""
+        product = self.get_for_business(business_id, product_id)
+        if product is None:
+            return None
+        product.low_stock_threshold_days = threshold_days
+        self.session.flush()
+        return product
+
 
 class ProductCategoryRepository:
     def __init__(self, session: Session):
@@ -185,5 +205,20 @@ class ProductCategoryRepository:
         # match-or-create by normalized name.
         category = ProductCategory(business_id=business_id, name=name)
         self.session.add(category)
+        self.session.flush()
+        return category
+
+    def get_for_business(self, business_id: uuid.UUID, category_id: uuid.UUID) -> ProductCategory | None:
+        return self.session.scalar(
+            select(ProductCategory).where(ProductCategory.id == category_id, ProductCategory.business_id == business_id)
+        )
+
+    def update_low_stock_threshold_days(
+        self, *, business_id: uuid.UUID, category_id: uuid.UUID, threshold_days: Decimal | None
+    ) -> ProductCategory | None:
+        category = self.get_for_business(business_id, category_id)
+        if category is None:
+            return None
+        category.low_stock_threshold_days = threshold_days
         self.session.flush()
         return category

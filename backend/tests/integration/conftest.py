@@ -17,11 +17,13 @@ from app.models import (
     Product,
     ProductCategory,
     ProductionEvent,
+    ProductSupplier,
     Report,
     Return,
     Sale,
     SaleItem,
     Subscription,
+    Supplier,
     Upload,
     User,
 )
@@ -57,8 +59,10 @@ def db_session(_engine):
     session.query(Return).delete()
     session.query(SaleItem).delete()
     session.query(Sale).delete()
+    session.query(ProductSupplier).delete()
     session.query(Product).delete()
     session.query(ProductCategory).delete()
+    session.query(Supplier).delete()
     session.query(ImportRecord).delete()
     session.query(ImportMappingProfile).delete()
     session.query(Upload).delete()

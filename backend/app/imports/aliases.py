@@ -96,6 +96,11 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "purchase_reference",
         # Optional — see the shared _CATEGORY_ALIASES comment below.
         "category",
+        # Optional — matched against existing suppliers by normalized
+        # name, match-or-create, same exact pattern as "category" just
+        # above — never required (MINIMUM_MAPPING_RULES below doesn't
+        # reference it). See app/models/supplier.py.
+        "supplier",
         # Optional — see the shared _LOCATION_ALIASES comment above.
         "location",
     ],
@@ -286,6 +291,10 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "purchase order id", "po id", "supplier order reference", "supplier invoice number",
         ],
         "category": _CATEGORY_ALIASES,
+        "supplier": [
+            "supplier", "vendor", "supplier name", "vendor name", "manufacturer",
+            "supplied by", "ordered from",
+        ],
         "location": _LOCATION_ALIASES,
     },
     "repairs": {

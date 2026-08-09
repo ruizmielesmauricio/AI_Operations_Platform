@@ -17,6 +17,7 @@ _PURCHASE_FIELD_MAPPING = {
     "unit_cost": "Unit Cost",
     "purchase_reference": None,
     "category": None,
+    "supplier": None,
     "location": None,
 }
 _REPAIR_FIELD_MAPPING = {

@@ -99,3 +99,15 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # this column existed — no retroactive backfill possible, the data
     # was never captured.
     unit_cost: Mapped[Decimal | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+
+    # Only ever set for reason="purchase" rows — which supplier this
+    # specific batch was bought from, captured from the purchases
+    # upload's optional supplier column (match-or-create, mirrors
+    # category's exact pattern). A per-transaction snapshot, not a
+    # product-level default, since the same product can legitimately be
+    # sourced from different suppliers over time — see
+    # app/models/supplier.py::ProductSupplier for the aggregate
+    # product<->supplier relationship this feeds.
+    supplier_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("suppliers.id"), nullable=True, index=True
+    )

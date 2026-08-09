@@ -16,6 +16,7 @@ def test_clean_purchases_export_resolves_via_alias():
         "unit_cost": "Unit Cost",
         "purchase_reference": None,
         "category": None,
+        "supplier": None,
         "location": None,
     }
 

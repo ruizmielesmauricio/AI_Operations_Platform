@@ -11,7 +11,10 @@ from app.api import (
     health,
     imports,
     product_categories,
+    products,
     reports,
+    suppliers,
+    transactions,
     uploads,
 )
 
@@ -29,3 +32,6 @@ api_router.include_router(alerts.router)
 api_router.include_router(reports.router)
 api_router.include_router(ai.router)
 api_router.include_router(product_categories.router)
+api_router.include_router(products.router)
+api_router.include_router(suppliers.router)
+api_router.include_router(transactions.router)

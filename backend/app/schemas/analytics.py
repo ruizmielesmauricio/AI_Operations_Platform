@@ -290,13 +290,15 @@ class RepairDetailOut(BaseModel):
 
 class ProductCategoryOut(BaseModel):
     """Backs GET /businesses/{id}/product-categories — populates the
-    dashboard's per-section category filter dropdowns. No create/edit
-    endpoint exists yet; every category today is created organically via
-    an import's optional "category" column (see app/imports/importer.py's
-    CategoryMatcher)."""
+    dashboard's per-section category filter dropdowns. Every category is
+    still created organically via an import's optional "category" column
+    (see app/imports/importer.py's CategoryMatcher) — the only edit
+    surface is PATCH .../product-categories/{id}/threshold (Gap 1 /
+    PR-9.3), everything else about a category stays read-only here."""
 
     id: uuid.UUID
     name: str
+    low_stock_threshold_days: Decimal | None = None
 
     model_config = {"from_attributes": True}
 

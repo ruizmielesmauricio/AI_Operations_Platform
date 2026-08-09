@@ -69,6 +69,7 @@ const FIELD_ORDER: Record<string, string[]> = {
     "unit_cost",
     "purchase_reference",
     "category",
+    "supplier",
     "location",
   ],
   repairs: ["repair_date", "description", "price_charged", "labour_cost", "tax_amount", "repair_reference", "location"],
@@ -105,6 +106,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
     purchase_reference: "Which column is the PO or invoice number? (optional)",
     category: "Which column is the product category or department? (optional)",
+    supplier: "Which column is the supplier or vendor name? (optional)",
     location: "Which column is the store, branch, or location? (optional)",
   },
   repairs: {
@@ -162,6 +164,9 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     category:
       "Matched against your existing product categories by name, or created if it's new — powers the Category " +
       "Breakdown report and per-category dashboard filters.",
+    supplier:
+      "Matched against your existing suppliers by name, or created if it's new — powers the Suppliers page's " +
+      "spend breakdown and stock-recommendation lead times.",
     location: LOCATION_HINT,
   },
   repairs: {

@@ -39,6 +39,7 @@ from app.repositories.return_ import ReturnRepository
 from app.repositories.production_event import ProductionEventRepository
 from app.repositories.sale import SaleRepository
 from app.repositories.sale_item import SaleItemRepository
+from app.repositories.supplier import SupplierRepository, normalize_supplier_name
 from app.repositories.upload import UploadRepository
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,9 @@ class ParsedPurchaseRow:
     reference: str | None = None
     # See ParsedSaleRow.category above.
     category: str | None = None
+    # See ParsedSaleRow.category above — same optional, match-or-create
+    # role, resolved against Supplier instead of ProductCategory.
+    supplier_name: str | None = None
 
 
 @dataclass
@@ -313,6 +317,10 @@ def validate_and_parse_purchase_row(
     # existing one is still recognised as the same reference.
     reference = _normalize_reference(_blank_to_none(mapped_values.get("purchase_reference")))
     category = _blank_to_none(mapped_values.get("category"))
+    # Optional — never a rejection reason, same as category. "Unknown
+    # supplier" (nothing mapped, or a blank cell) is a normal, expected
+    # state, not an error — see app/models/supplier.py.
+    supplier_name = _blank_to_none(mapped_values.get("supplier"))
 
     return ParsedPurchaseRow(
         row_number=row_number,
@@ -323,6 +331,7 @@ def validate_and_parse_purchase_row(
         reference=reference,
         unit_cost=unit_cost,
         category=category,
+        supplier_name=supplier_name,
     )
 
 
@@ -504,6 +513,25 @@ class CategoryMatcher:
 
     def register_created(self, category) -> None:
         self._by_name[normalize_category_name(category.name)] = category
+
+
+class SupplierMatcher:
+    """Pure in-memory supplier-name matching — no DB access. Mirrors
+    CategoryMatcher exactly (see its own docstring); seeded once per
+    import from SupplierRepository.list_for_business (active suppliers
+    only — a merged-away name should resolve to/create a fresh supplier
+    under that name, never resurrect the merged row)."""
+
+    def __init__(self, existing_suppliers) -> None:
+        self._by_name: dict[str, object] = {}
+        for supplier in existing_suppliers:
+            self._by_name[normalize_supplier_name(supplier.name)] = supplier
+
+    def resolve(self, name: str):
+        return self._by_name.get(normalize_supplier_name(name))
+
+    def register_created(self, supplier) -> None:
+        self._by_name[normalize_supplier_name(supplier.name)] = supplier
 
 
 # --- Inventory reconciliation (pure, no DB) ------------------------------
@@ -746,6 +774,22 @@ def _resolve_category_id(
         category = category_repo.create(business_id=business_id, name=name)
         matcher.register_created(category)
     return category.id
+
+
+def _resolve_supplier_id(
+    supplier_repo: SupplierRepository, matcher: SupplierMatcher, *, business_id: uuid.UUID, name: str | None
+) -> uuid.UUID | None:
+    """Match-or-create a Supplier by name for one purchase row's mapped
+    supplier text — exact mirror of _resolve_category_id above. Returns
+    None when the row didn't map a supplier at all (an "unknown
+    supplier" purchase is a normal, valid outcome, never a rejection)."""
+    if not name:
+        return None
+    supplier = matcher.resolve(name)
+    if supplier is None:
+        supplier = supplier_repo.create(business_id=business_id, name=name)
+        matcher.register_created(supplier)
+    return supplier.id
 
 
 def _write_sales(
@@ -1005,8 +1049,10 @@ def _write_purchases(
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
     category_repo = ProductCategoryRepository(db)
+    supplier_repo = SupplierRepository(db)
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
     category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
+    supplier_matcher = SupplierMatcher(supplier_repo.list_for_business(upload.business_id))
     # Keyed by (reference, product_id), not reference alone — a real
     # purchase order routinely covers several different products under one
     # PO/invoice number (found live: a 1656-row file with one PO number per
@@ -1033,6 +1079,9 @@ def _write_purchases(
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
         category_id = _resolve_category_id(
             category_repo, category_matcher, business_id=upload.business_id, name=row.category
+        )
+        supplier_id = _resolve_supplier_id(
+            supplier_repo, supplier_matcher, business_id=upload.business_id, name=row.supplier_name
         )
         if match.action == "create":
             product = product_repo.create(
@@ -1106,7 +1155,15 @@ def _write_purchases(
             # "expenses" (InventoryMovementRepository.
             # aggregate_purchase_cost_by_product_in_range).
             unit_cost=row.unit_cost,
+            supplier_id=supplier_id,
         )
+        if supplier_id is not None:
+            # Keeps the product<->supplier relationship visible/manageable
+            # independent of any one purchase row — see
+            # app/models/supplier.py::ProductSupplier.
+            supplier_repo.upsert_product_supplier(
+                business_id=upload.business_id, product_id=product_id, supplier_id=supplier_id
+            )
         touched_product_ids.add(product_id)
         rows_imported += 1
     return rows_imported, warnings, touched_product_ids, duplicate_rejections

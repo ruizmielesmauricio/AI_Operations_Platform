@@ -1,10 +1,14 @@
 # 18_Product_Gaps_Roadmap.md
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Draft
 **Phase:** Phase 3 (Core Product) / Phase 7 (Expansion), see per-gap classification below
 **Author:** Founder & CTO
-**Last Updated:** 09/08/2026
+**Last Updated:** 10/08/2026
+
+---
+
+**Update, 10/08/2026 (v1.56):** Gaps 1, 4, and 5 below are now implemented — see `11_Development_Roadmap.md`'s v1.56 entry for the full change list. This document's per-gap build plans are kept as-written below (the actual build matched them closely) rather than rewritten after the fact, so they remain an accurate record of what was scoped before building. Two sub-pieces were explicitly deferred within the "implemented" gaps, per their own stated escape hatches: Gap 1's automatic scheduled threshold-recompute job (the calculation surface is built and callable; no new recurring job applies it automatically yet), and a dedicated AI "explain this recommendation" round-trip (judged unnecessary — the recommendation's `basis`/`lead_time_days`/`safety_buffer_days` fields are already self-explanatory without an AI call). Gap 2 was fixed in v1.55; Gap 3 remains explicitly out of scope, unchanged.
 
 ---
 

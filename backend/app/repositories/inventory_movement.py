@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.analytics.types import ProductPurchaseCostAggregate
 from app.models.inventory_movement import InventoryMovement
+from app.models.product import Product
+from app.models.supplier import Supplier
 
 _STOCK_AFFECTING_REASONS = ("sale", "purchase", "return", "production_consumption", "production_output")
 _LOOKUP_LIMIT = 10
@@ -29,6 +31,7 @@ class InventoryMovementRepository:
         event_date: date | None = None,
         resulting_quantity_on_hand: int | None = None,
         unit_cost: Decimal | None = None,
+        supplier_id: uuid.UUID | None = None,
     ) -> InventoryMovement:
         # Flush only — app/imports/importer.py owns the single commit.
         movement = InventoryMovement(
@@ -42,6 +45,7 @@ class InventoryMovementRepository:
             event_date=event_date,
             resulting_quantity_on_hand=resulting_quantity_on_hand,
             unit_cost=unit_cost,
+            supplier_id=supplier_id,
         )
         self.session.add(movement)
         self.session.flush()
@@ -278,3 +282,44 @@ class InventoryMovementRepository:
             )
         )
         return set(rows)
+
+    def list_purchases_paginated(
+        self,
+        business_id: uuid.UUID,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+        product_id: uuid.UUID | None = None,
+        category_id: uuid.UUID | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[tuple[InventoryMovement, Product | None, Supplier | None]], int]:
+        """Raw, one-purchase-row-per-item listing behind the dashboard's
+        transaction drill-down (Gap 5) — deliberately separate from
+        list_purchases above (ORLA chat lookup, fixed low limit, no
+        pagination/category filter) and aggregate_purchase_cost_by_product_
+        in_range (per-product sums only). Every filter optional and
+        AND-ed; category_id requires the outer join to Product.
+        Most-recent-first, stable (event_date, id) ordering.
+        """
+        conditions = [InventoryMovement.business_id == business_id, InventoryMovement.reason == "purchase"]
+        if start is not None:
+            conditions.append(InventoryMovement.event_date >= start)
+        if end is not None:
+            conditions.append(InventoryMovement.event_date <= end)
+        if product_id is not None:
+            conditions.append(InventoryMovement.product_id == product_id)
+        if category_id is not None:
+            conditions.append(Product.category_id == category_id)
+
+        base = (
+            select(InventoryMovement, Product, Supplier)
+            .outerjoin(Product, Product.id == InventoryMovement.product_id)
+            .outerjoin(Supplier, Supplier.id == InventoryMovement.supplier_id)
+            .where(*conditions)
+        )
+        total = self.session.scalar(select(func.count()).select_from(base.subquery())) or 0
+        rows = self.session.execute(
+            base.order_by(InventoryMovement.event_date.desc(), InventoryMovement.id.desc()).limit(limit).offset(offset)
+        ).all()
+        return [(movement, product, supplier) for movement, product, supplier in rows], total

@@ -191,3 +191,37 @@ class ProductionEventRepository:
             tax_amount_known=Decimal(tax_amount_known or 0),
             labour_cost_for_known_tax=Decimal(labour_cost_for_known_tax or 0),
         )
+
+    def list_repairs_paginated(
+        self,
+        business_id: uuid.UUID,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[ProductionEvent], int]:
+        """Real pagination behind the dashboard's transaction drill-down
+        (Gap 5) — deliberately separate from find_repairs above (ORLA
+        chat lookup, fixed low limit, reference/description search, no
+        offset). No category filter: a repair has no product_id to hang
+        one off (see ProductionEvent's own docstring). Most-recent-first,
+        stable (completed_at, id) ordering.
+        """
+        conditions = [ProductionEvent.business_id == business_id, ProductionEvent.event_type == "repair"]
+        if start is not None:
+            conditions.append(ProductionEvent.completed_at >= start)
+        if end is not None:
+            conditions.append(ProductionEvent.completed_at < end)
+
+        total = self.session.scalar(select(func.count()).select_from(ProductionEvent).where(*conditions)) or 0
+        rows = list(
+            self.session.scalars(
+                select(ProductionEvent)
+                .where(*conditions)
+                .order_by(ProductionEvent.completed_at.desc(), ProductionEvent.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        return rows, total

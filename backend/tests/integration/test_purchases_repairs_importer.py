@@ -10,6 +10,7 @@ from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
 from app.models.production_event import ProductionEvent
+from app.models.supplier import ProductSupplier, Supplier
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.inventory_movement import InventoryMovementRepository
@@ -429,6 +430,103 @@ def test_an_undone_stock_count_does_not_exclude_a_purchase(db_session, business_
     chain_lube = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
     current_stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [chain_lube.id])
     assert current_stock[chain_lube.id] == 50  # the undone count contributes nothing; only the purchase counts
+
+
+# --- supplier tracking (Gap 4) -------------------------------------------
+
+
+def test_purchase_import_auto_creates_a_supplier_when_mapped(db_session, business_id, _fake_r2):
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n"
+        "2026-01-05,Chain Lube,CL-100,50,4.75,Acme Parts Ltd\n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="purchases_supplier.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 1
+
+    supplier = db_session.scalar(select(Supplier).where(Supplier.business_id == business_id))
+    assert supplier is not None
+    assert supplier.name == "Acme Parts Ltd"
+
+    movement = db_session.scalar(select(InventoryMovement).where(InventoryMovement.business_id == business_id))
+    assert movement.supplier_id == supplier.id
+
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    link = db_session.scalar(
+        select(ProductSupplier).where(ProductSupplier.business_id == business_id, ProductSupplier.product_id == product.id)
+    )
+    assert link is not None
+    assert link.supplier_id == supplier.id
+
+
+def test_purchase_import_matches_an_existing_supplier_by_normalized_name(db_session, business_id, _fake_r2):
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n"
+        "2026-01-05,Chain Lube,CL-100,25,4.75,Acme Parts Ltd\n"
+        "2026-01-06,Bar Tape,BT-200,10,2.00,  acme parts ltd  \n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="purchases_supplier_match.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    suppliers = list(db_session.scalars(select(Supplier).where(Supplier.business_id == business_id)))
+    assert len(suppliers) == 1  # matched, not duplicated, despite different casing/whitespace
+
+
+def test_purchase_import_never_matches_a_supplier_across_businesses(db_session, business_id, _fake_r2):
+    from app.models.business import Business
+
+    other_business = Business(name="Other Business")
+    db_session.add(other_business)
+    db_session.commit()
+
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n2026-01-05,Chain Lube,CL-100,50,4.75,Shared Name Co\n".encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+
+    upload_a, record_a = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload_a, record_a)
+
+    upload_b, record_b = _make_mapped_upload(
+        db_session, other_business.id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload_b, record_b)
+
+    suppliers_a = list(db_session.scalars(select(Supplier).where(Supplier.business_id == business_id)))
+    suppliers_b = list(db_session.scalars(select(Supplier).where(Supplier.business_id == other_business.id)))
+    assert len(suppliers_a) == 1
+    assert len(suppliers_b) == 1
+    assert suppliers_a[0].id != suppliers_b[0].id  # same name, genuinely separate rows per business
+
+
+def test_purchase_import_without_a_supplier_column_leaves_supplier_unset(db_session, business_id, _fake_r2):
+    # The existing _PURCHASE_FIELD_MAPPING never maps "supplier" —
+    # confirms this remains a fully valid, unaffected import path.
+    upload, record = _make_purchase_upload(db_session, business_id, _fake_r2)
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    movements = list(db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)))
+    assert all(m.supplier_id is None for m in movements)
+    assert db_session.scalar(select(Supplier).where(Supplier.business_id == business_id)) is None
 
 
 # --- repairs ------------------------------------------------------------
