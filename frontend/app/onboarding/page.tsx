@@ -2,15 +2,49 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiDelete, apiGet, apiPost } from "@/lib/api/client";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
+import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
+import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { Business, SubscriptionStatus } from "@/types";
+import type { AddressSuggestion, Business, SubscriptionStatus } from "@/types";
 
 // Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
 // models this as a template choice, not a hardcoded assumption, so adding
 // cafe/garage later is a new option here, not new UI.
 const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
+
+// The branch-creation flow's own form state — collects the full profile
+// up front, all fields required, before a branch can proceed to payment
+// (direct request). Shares its field names 1:1 with BusinessProfileUpdate
+// (lib/businessProfileFields.ts) plus "name", which that type doesn't
+// carry (the standalone/branch name isn't editable from the profile PATCH
+// route — see [id]/page.tsx's own comment on that).
+type BranchDraft = {
+  name: string;
+  manager_name: string;
+  contact_email: string;
+  contact_phone: string;
+  location_label: string;
+  address_line1: string;
+  city: string;
+  postal_code: string;
+  country: string;
+  timezone: string;
+};
+
+const EMPTY_BRANCH_DRAFT: BranchDraft = {
+  name: "",
+  manager_name: "",
+  contact_email: "",
+  contact_phone: "",
+  location_label: "",
+  address_line1: "",
+  city: "",
+  postal_code: "",
+  country: "",
+  timezone: "Europe/Dublin",
+};
 
 // The four states a business can actually be in, collapsed from the raw
 // Stripe subscription status (active/past_due/incomplete/.../null) plus
@@ -45,12 +79,21 @@ export default function OnboardingPage() {
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   // Which standalone business's "Add a branch" form is expanded, if any —
   // only one open at a time, matching the create-business form's own
-  // single-form-on-screen feel.
+  // single-form-on-screen feel. Doubles as the businessId passed to
+  // useAddressAutocomplete below: the parent's own id, since the branch
+  // doesn't exist yet to scope the address-suggestions call against, and
+  // that endpoint's business_id is only ever used for its membership gate
+  // anyway (the caller being a member of the parent already proves that).
   const [branchFormOpenFor, setBranchFormOpenFor] = useState<string | null>(null);
-  const [branchName, setBranchName] = useState("");
-  const [branchTimezone, setBranchTimezone] = useState("Europe/Dublin");
+  const [branchDraft, setBranchDraft] = useState<BranchDraft>(EMPTY_BRANCH_DRAFT);
+  // Set once POST .../branches succeeds — lets a retry after a failed
+  // profile save (network blip, etc.) only PATCH this same branch, never
+  // create a second one. Mirrors this page's own existing
+  // create-before-pay, resumable-if-abandoned pattern for Checkout itself.
+  const [branchId, setBranchId] = useState<string | null>(null);
   const [branchSubmitting, setBranchSubmitting] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
+  const branchAddress = useAddressAutocomplete(branchFormOpenFor);
 
   useEffect(() => {
     if (session) {
@@ -145,10 +188,50 @@ export default function OnboardingPage() {
     }
   }
 
-  function handleCancelAddBranch() {
-    setBranchFormOpenFor(null);
+  function handleOpenAddBranch(parentId: string) {
+    setBranchFormOpenFor(parentId);
+    setBranchDraft(EMPTY_BRANCH_DRAFT);
+    setBranchId(null);
     setBranchError(null);
-    setBranchName("");
+  }
+
+  function handleCancelAddBranch() {
+    const idToDelete = branchId;
+    setBranchFormOpenFor(null);
+    setBranchDraft(EMPTY_BRANCH_DRAFT);
+    setBranchId(null);
+    setBranchError(null);
+    if (idToDelete) {
+      // Best-effort cleanup, not awaited — a branch already created
+      // mid-flow (profile unfinished, payment never reached) is
+      // soft-deleted rather than left behind as an orphaned "Pending
+      // Payment" row with a blank profile. Cancel closes the form
+      // immediately either way; if this fails, the branch just sits there
+      // exactly as any other abandoned "Pending Payment" branch already
+      // does, still deletable normally from this same page.
+      apiDelete(`/businesses/${idToDelete}`).catch(() => undefined);
+    }
+  }
+
+  function updateBranchDraft(key: keyof BranchDraft, value: string) {
+    setBranchDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function handleBranchAddressChange(value: string) {
+    updateBranchDraft("address_line1", value);
+    branchAddress.handleAddressChange(value);
+  }
+
+  function handleBranchPickSuggestion(suggestion: AddressSuggestion) {
+    setBranchDraft((prev) => ({
+      ...prev,
+      address_line1: suggestion.address_line1 ?? prev.address_line1,
+      city: suggestion.city ?? prev.city,
+      postal_code: suggestion.postal_code ?? prev.postal_code,
+      country: suggestion.country ?? prev.country,
+      timezone: suggestion.timezone ?? prev.timezone,
+    }));
+    branchAddress.reset();
   }
 
   async function handleAddBranch(e: React.FormEvent, parentId: string) {
@@ -156,20 +239,44 @@ export default function OnboardingPage() {
     setBranchError(null);
     setBranchSubmitting(true);
     try {
-      const branch = await apiPost<Business>(`/businesses/${parentId}/branches`, {
-        name: branchName,
-        template,
-        timezone: branchTimezone,
+      // Create once, then only ever PATCH on a retry — branchId, set the
+      // moment creation succeeds, is what makes that safe (see its own
+      // comment above).
+      let id = branchId;
+      if (!id) {
+        const branch = await apiPost<Business>(`/businesses/${parentId}/branches`, {
+          name: branchDraft.name,
+          template,
+          timezone: branchDraft.timezone,
+        });
+        id = branch.id;
+        setBranchId(id);
+        // Shows up in the list right away as "Pending Payment" — same as
+        // before, in case Checkout below is abandoned rather than
+        // completed. The profile PATCH about to run fills in the rest.
+        setBusinesses((prev) => [...prev, branch]);
+      }
+      await apiPatch<Business>(`/businesses/${id}`, {
+        manager_name: branchDraft.manager_name,
+        contact_email: branchDraft.contact_email,
+        contact_phone: branchDraft.contact_phone,
+        location_label: branchDraft.location_label,
+        address_line1: branchDraft.address_line1,
+        city: branchDraft.city,
+        postal_code: branchDraft.postal_code,
+        country: branchDraft.country,
+        timezone: branchDraft.timezone,
       });
       // Straight into Stripe Checkout for the branch price — no
       // intermediate "sits here unpaid" step for the user to stall on.
-      // If they abandon Checkout, the branch row still exists (the same
-      // create-before-pay shape every standalone shop already uses) and
-      // stays clearly marked "Pending Payment" with a resumable
+      // If they abandon Checkout, the branch (now with a complete
+      // profile) stays clearly marked "Pending Payment" with a resumable
       // "Complete payment" button below, rather than disappearing.
-      await redirectToCheckout(branch.id);
+      await redirectToCheckout(id);
     } catch (err) {
-      setBranchError(err instanceof ApiError ? err.message : "Could not add the branch. Is the backend running?");
+      setBranchError(
+        err instanceof ApiError ? err.message : "Could not save the branch profile. Is the backend running?"
+      );
     } finally {
       setBranchSubmitting(false);
     }
@@ -298,7 +405,7 @@ export default function OnboardingPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        branchFormOpenFor === b.id ? handleCancelAddBranch() : setBranchFormOpenFor(b.id)
+                        branchFormOpenFor === b.id ? handleCancelAddBranch() : handleOpenAddBranch(b.id)
                       }
                     >
                       {branchFormOpenFor === b.id ? "Cancel" : "+ Add a branch (€30/mo)"}
@@ -307,28 +414,96 @@ export default function OnboardingPage() {
                 )}
                 {isStandalone && branchFormOpenFor === b.id && (
                   <form onSubmit={(e) => handleAddBranch(e, b.id)}>
+                    <h3>Branch profile</h3>
+                    <p className="hint">
+                      Every field below is required before this branch can proceed to payment — it&apos;s
+                      what tells this location apart from {b.name} once you have more than one.
+                    </p>
                     <div>
                       <label htmlFor={`branch-name-${b.id}`}>Branch name</label>
                       <br />
                       <input
                         id={`branch-name-${b.id}`}
                         required
-                        value={branchName}
-                        onChange={(e) => setBranchName(e.target.value)}
+                        value={branchDraft.name}
+                        onChange={(e) => updateBranchDraft("name", e.target.value)}
                       />
                     </div>
-                    <div>
-                      <label htmlFor={`branch-timezone-${b.id}`}>Timezone</label>
+                    {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel, type }) => (
+                      <div key={key}>
+                        <label htmlFor={`branch-${key}-${b.id}`}>{fieldLabel}</label>
+                        <br />
+                        <input
+                          id={`branch-${key}-${b.id}`}
+                          type={type ?? "text"}
+                          required
+                          value={branchDraft[key]}
+                          onChange={(e) => updateBranchDraft(key, e.target.value)}
+                        />
+                      </div>
+                    ))}
+                    {/* Same live-suggestion address input as the profile edit
+                        page (useAddressAutocomplete), scoped against this
+                        branch's own not-yet-created id via the parent's —
+                        see branchAddress's own declaration above for why
+                        that's safe. */}
+                    <div style={{ position: "relative" }}>
+                      <label htmlFor={`branch-address-${b.id}`}>Address</label>
                       <br />
                       <input
-                        id={`branch-timezone-${b.id}`}
-                        value={branchTimezone}
-                        onChange={(e) => setBranchTimezone(e.target.value)}
+                        id={`branch-address-${b.id}`}
+                        autoComplete="off"
+                        required
+                        value={branchDraft.address_line1}
+                        onChange={(e) => handleBranchAddressChange(e.target.value)}
+                        onFocus={branchAddress.openIfHasSuggestions}
+                        onBlur={branchAddress.closeSoon}
                       />
+                      {branchAddress.suggestLoading && <span className="hint"> Searching…</span>}
+                      {branchAddress.suggestOpen && branchAddress.suggestions.length > 0 && (
+                        <ul
+                          style={{
+                            position: "absolute",
+                            zIndex: 1,
+                            margin: 0,
+                            padding: 0,
+                            listStyle: "none",
+                            background: "Canvas",
+                            color: "CanvasText",
+                            border: "1px solid #ccc",
+                            width: "100%",
+                            maxWidth: "32em",
+                          }}
+                        >
+                          {branchAddress.suggestions.map((suggestion, i) => (
+                            <li key={i}>
+                              <button
+                                type="button"
+                                onClick={() => handleBranchPickSuggestion(suggestion)}
+                                style={{ display: "block", width: "100%", textAlign: "left" }}
+                              >
+                                {suggestion.formatted_address}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
+                    {PROFILE_FIELDS_AFTER_ADDRESS.map(({ key, label: fieldLabel }) => (
+                      <div key={key}>
+                        <label htmlFor={`branch-${key}-${b.id}`}>{fieldLabel}</label>
+                        <br />
+                        <input
+                          id={`branch-${key}-${b.id}`}
+                          required
+                          value={branchDraft[key]}
+                          onChange={(e) => updateBranchDraft(key, e.target.value)}
+                        />
+                      </div>
+                    ))}
                     {branchError && <p className="status-error">{branchError}</p>}
                     <button type="submit" disabled={branchSubmitting}>
-                      {branchSubmitting ? "Adding…" : "Add branch"}
+                      {branchSubmitting ? "Saving…" : "Save and continue to payment"}
                     </button>{" "}
                     <button type="button" disabled={branchSubmitting} onClick={handleCancelAddBranch}>
                       Cancel

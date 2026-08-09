@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppNav } from "@/components/AppNav";
 import { ApiError, apiGet, apiPatch } from "@/lib/api/client";
+import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
+import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { AddressSuggestion, Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
 
@@ -14,35 +16,13 @@ import type { AddressSuggestion, Business, BusinessProfileUpdate, SubscriptionSt
 // editable here — renaming a business has wider display implications
 // this page doesn't take on.
 //
-// address_line1 is deliberately not in this generic list — it gets its
-// own live-suggestion input below (direct request: suggestions as you
-// type, like any modern address field, not a separate click-to-validate
-// step). city/postal_code/country/timezone stay in this list too, still
-// directly editable, since picking a suggestion only fills them in as a
-// starting point — an owner can still correct any of them by hand
-// afterward, same as before.
-// Split around the custom Address input below so the field order on
-// screen stays exactly what it was before (manager/contact/location,
-// then address, then city/postal/country/timezone) without a map() that
-// has to special-case one key in the middle of the list.
-const PROFILE_FIELDS_BEFORE_ADDRESS: { key: keyof BusinessProfileUpdate; label: string }[] = [
-  { key: "manager_name", label: "Manager / owner name" },
-  { key: "contact_email", label: "Contact email" },
-  { key: "contact_phone", label: "Contact phone" },
-  { key: "location_label", label: "Location label (e.g. \"Dublin - Rathmines\")" },
-];
-const PROFILE_FIELDS_AFTER_ADDRESS: { key: keyof BusinessProfileUpdate; label: string }[] = [
-  { key: "city", label: "City" },
-  { key: "postal_code", label: "Postal code" },
-  { key: "country", label: "Country" },
-  { key: "timezone", label: "Timezone" },
-];
-
-// Debounced after typing stops, and only once there's enough text to
-// plausibly match something — keeps request volume reasonable against
-// Geoapify's free-tier cap without needing a manual trigger.
-const ADDRESS_SUGGEST_DEBOUNCE_MS = 350;
-const ADDRESS_SUGGEST_MIN_CHARS = 3;
+// address_line1 is deliberately not in the shared field list
+// (lib/businessProfileFields.ts) — it gets its own live-suggestion input
+// below (direct request: suggestions as you type, like any modern address
+// field, not a separate click-to-validate step). city/postal_code/
+// country/timezone stay in that list too, still directly editable, since
+// picking a suggestion only fills them in as a starting point — an owner
+// can still correct any of them by hand afterward, same as before.
 
 function formFromBusiness(business: Business): BusinessProfileUpdate {
   return {
@@ -83,14 +63,8 @@ export default function BusinessProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // Live address suggestions — a dropdown under the Address input, not a
-  // separate click-to-validate step. suggestOpen tracks whether the
-  // dropdown should render at all (closed on blur-via-selection, on a
-  // too-short query, and once a suggestion is applied) independent of
-  // whether `suggestions` still holds stale results from a moment ago.
-  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // separate click-to-validate step.
+  const address = useAddressAutocomplete(businessId ?? null);
 
   useEffect(() => {
     if (!session || !businessId) return;
@@ -119,12 +93,6 @@ export default function BusinessProfilePage() {
       .catch(() => undefined);
   }, [businessId]);
 
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, []);
-
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaveError(null);
@@ -147,30 +115,7 @@ export default function BusinessProfilePage() {
 
   function handleAddressChange(value: string) {
     setForm((prev) => ({ ...prev, address_line1: value }));
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (value.trim().length < ADDRESS_SUGGEST_MIN_CHARS) {
-      setSuggestions([]);
-      setSuggestOpen(false);
-      return;
-    }
-    debounceRef.current = setTimeout(() => {
-      setSuggestLoading(true);
-      apiGet<AddressSuggestion[]>(`/businesses/${businessId}/address-suggestions?text=${encodeURIComponent(value)}`)
-        .then((results) => {
-          setSuggestions(results);
-          setSuggestOpen(results.length > 0);
-        })
-        .catch(() => {
-          // Quiet failure, matching backend/app/geocoding/service.py's own
-          // posture — a live-suggestion field just showing no dropdown is
-          // normal UX while typing, not something to interrupt with an
-          // error banner.
-          setSuggestions([]);
-          setSuggestOpen(false);
-        })
-        .finally(() => setSuggestLoading(false));
-    }, ADDRESS_SUGGEST_DEBOUNCE_MS);
+    address.handleAddressChange(value);
   }
 
   function handlePickSuggestion(suggestion: AddressSuggestion) {
@@ -184,8 +129,7 @@ export default function BusinessProfilePage() {
       // better can still overwrite any of these fields by hand afterward.
       timezone: suggestion.timezone ?? prev.timezone,
     }));
-    setSuggestOpen(false);
-    setSuggestions([]);
+    address.reset();
   }
 
   if (checkingSession) {
@@ -239,12 +183,13 @@ export default function BusinessProfilePage() {
       </p>
 
       <form onSubmit={handleSave}>
-        {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel }) => (
+        {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel, type }) => (
           <div key={key}>
             <label htmlFor={`profile-${key}`}>{fieldLabel}</label>
             <br />
             <input
               id={`profile-${key}`}
+              type={type ?? "text"}
               value={form[key] ?? ""}
               onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
             />
@@ -263,18 +208,11 @@ export default function BusinessProfilePage() {
             autoComplete="off"
             value={form.address_line1 ?? ""}
             onChange={(e) => handleAddressChange(e.target.value)}
-            onFocus={() => {
-              if (suggestions.length > 0) setSuggestOpen(true);
-            }}
-            onBlur={() => {
-              // A short delay, not an immediate close — a direct blur-then-
-              // click on a suggestion would otherwise close the dropdown
-              // before the click's own handler ever fires.
-              setTimeout(() => setSuggestOpen(false), 150);
-            }}
+            onFocus={address.openIfHasSuggestions}
+            onBlur={address.closeSoon}
           />
-          {suggestLoading && <span className="hint"> Searching…</span>}
-          {suggestOpen && suggestions.length > 0 && (
+          {address.suggestLoading && <span className="hint"> Searching…</span>}
+          {address.suggestOpen && address.suggestions.length > 0 && (
             <ul
               style={{
                 position: "absolute",
@@ -293,7 +231,7 @@ export default function BusinessProfilePage() {
                 maxWidth: "32em",
               }}
             >
-              {suggestions.map((suggestion, i) => (
+              {address.suggestions.map((suggestion, i) => (
                 <li key={i}>
                   <button
                     type="button"
