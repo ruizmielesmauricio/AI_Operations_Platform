@@ -29,6 +29,7 @@ _FULL_FIELD_MAPPING = {
     "tax_amount": None,
     "order_reference": None,
     "category": None,
+    "location": None,
 }
 
 

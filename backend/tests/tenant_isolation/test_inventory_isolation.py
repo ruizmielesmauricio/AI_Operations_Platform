@@ -16,6 +16,7 @@ _INVENTORY_FIELD_MAPPING = {
     "unit_cost": None,
     "category": None,
     "as_of_date": None,
+    "location": None,
 }
 _SALES_FIELD_MAPPING = {
     "sale_date": "Order Date",
@@ -28,6 +29,7 @@ _SALES_FIELD_MAPPING = {
     "tax_amount": None,
     "order_reference": None,
     "category": None,
+    "location": None,
 }
 
 

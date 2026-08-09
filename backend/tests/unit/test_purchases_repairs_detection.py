@@ -16,6 +16,7 @@ def test_clean_purchases_export_resolves_via_alias():
         "unit_cost": "Unit Cost",
         "purchase_reference": None,
         "category": None,
+        "location": None,
     }
 
 
@@ -103,6 +104,7 @@ def test_clean_repairs_export_resolves_via_alias():
         "price_charged": "Price Charged",
         "labour_cost": "Labour Cost",
         "repair_reference": None,
+        "location": None,
     }
 
 

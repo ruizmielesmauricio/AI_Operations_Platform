@@ -125,9 +125,14 @@ export interface DetectMappingResponse {
 }
 
 export interface ConfirmMappingResponse {
-  import_record_id: string;
-  mapping_profile_id: string;
-  status: string;
+  // Both null specifically when status === "needs_location_confirmation" —
+  // nothing was created yet (BD-007 anti-bypass check).
+  import_record_id: string | null;
+  mapping_profile_id: string | null;
+  status: string; // "mapped" | "needs_location_confirmation"
+  // Only set when status === "needs_location_confirmation": the distinct
+  // location values found in the mapped location column.
+  locations: string[] | null;
 }
 
 // --- Stage C9/C10/C11/C12: analytics dashboard -----------------------------

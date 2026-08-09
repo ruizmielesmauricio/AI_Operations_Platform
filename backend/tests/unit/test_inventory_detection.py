@@ -18,6 +18,7 @@ def test_clean_inventory_export_resolves_via_alias():
         "unit_cost": None,
         "category": None,
         "as_of_date": None,
+        "location": None,
     }
 
 

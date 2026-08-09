@@ -29,6 +29,7 @@ _FULL_FIELD_MAPPING = {
     "tax_amount": None,
     "order_reference": None,
     "category": None,
+    "location": None,
 }
 
 
@@ -79,8 +80,10 @@ def test_detect_mapping_requires_the_upload_step_to_be_complete(db_session, busi
 def test_confirm_mapping_persists_a_profile_and_creates_an_import_record(db_session, business_id):
     upload = _make_uploaded(db_session, business_id)
 
-    record, profile_id = service.confirm_mapping(db_session, upload, _FULL_FIELD_MAPPING)
+    result = service.confirm_mapping(db_session, upload, _FULL_FIELD_MAPPING)
+    record, profile_id = result.import_record, result.mapping_profile_id
 
+    assert result.status == "confirmed"
     assert record.status == "mapped"
     assert record.upload_id == upload.id
     assert record.mapping_profile_id == profile_id
@@ -173,10 +176,12 @@ def test_detect_mapping_allows_a_mapped_upload_to_remap(db_session, business_id)
 def test_confirm_mapping_on_a_remap_replaces_the_import_record(db_session, business_id):
     upload = _make_uploaded(db_session, business_id)
     wrong_mapping = dict(_FULL_FIELD_MAPPING, sku=None)
-    first_record, first_profile_id = service.confirm_mapping(db_session, upload, wrong_mapping)
+    first_result = service.confirm_mapping(db_session, upload, wrong_mapping)
+    first_record, first_profile_id = first_result.import_record, first_result.mapping_profile_id
 
     refreshed = UploadRepository(db_session).get_for_business(upload.id, business_id)
-    corrected_record, corrected_profile_id = service.confirm_mapping(db_session, refreshed, _FULL_FIELD_MAPPING)
+    corrected_result = service.confirm_mapping(db_session, refreshed, _FULL_FIELD_MAPPING)
+    corrected_record, corrected_profile_id = corrected_result.import_record, corrected_result.mapping_profile_id
 
     assert corrected_record.id != first_record.id
     records = db_session.scalars(
@@ -211,3 +216,96 @@ def test_cannot_remap_an_upload_whose_import_already_ran(db_session, business_id
 def test_delete_for_upload_is_a_no_op_when_nothing_exists(db_session, business_id):
     upload = _make_uploaded(db_session, business_id)
     ImportRecordRepository(db_session).delete_for_upload(business_id, upload.id)  # must not raise
+
+
+# --- BD-007: multi-location bypass check -----------------------------------
+# A direct request: block a file that itself carries a location/store/branch
+# column spanning more than one value, since that's a real, deterministic
+# signal a customer is uploading combined multi-location data into a single
+# business to avoid the per-branch fee.
+
+_MULTI_LOCATION_CSV_CONTENT = (
+    "Order Date,Item Description,SKU,Qty,Unit Price,Store\n"
+    "2026-01-03,Chain Lube,CL-100,3,9.99,Dublin\n"
+    "2026-01-04,Inner Tube 700c,IT-700,10,5.50,Galway\n"
+    "2026-01-05,Bar Tape,BT-200,2,12.00,Dublin\n"
+).encode()
+
+_SINGLE_LOCATION_CSV_CONTENT = (
+    "Order Date,Item Description,SKU,Qty,Unit Price,Store\n"
+    "2026-01-03,Chain Lube,CL-100,3,9.99,Dublin\n"
+    "2026-01-04,Inner Tube 700c,IT-700,10,5.50,Dublin\n"
+).encode()
+
+_LOCATION_FIELD_MAPPING = dict(_FULL_FIELD_MAPPING, location="Store")
+
+
+def _make_uploaded_with_content(db_session, business_id, monkeypatch, content, filename="sales.csv"):
+    # Overrides the module's autouse _fake_r2 fixture with different bytes —
+    # needed here since these tests need a Store column the shared
+    # _CSV_CONTENT above doesn't have.
+    monkeypatch.setattr(r2_client, "get_object_size", lambda *, storage_key: len(content))
+    monkeypatch.setattr(r2_client, "download_object", lambda *, storage_key: content)
+    return _make_uploaded(db_session, business_id, filename)
+
+
+def test_confirm_mapping_blocks_a_file_spanning_more_than_one_location(db_session, business_id, monkeypatch):
+    upload = _make_uploaded_with_content(db_session, business_id, monkeypatch, _MULTI_LOCATION_CSV_CONTENT)
+
+    result = service.confirm_mapping(db_session, upload, _LOCATION_FIELD_MAPPING)
+
+    assert result.status == "needs_location_confirmation"
+    assert result.import_record is None
+    assert result.mapping_profile_id is None
+    assert set(result.locations) == {"Dublin", "Galway"}
+
+    # Blocking makes zero DB changes — cleanly re-triable, not stuck in a
+    # half-confirmed state.
+    profiles = db_session.scalars(
+        select(ImportMappingProfile).where(ImportMappingProfile.business_id == business_id)
+    ).all()
+    assert profiles == []
+    records = db_session.scalars(
+        select(ImportRecord).where(ImportRecord.business_id == business_id)
+    ).all()
+    assert records == []
+    refreshed = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    assert refreshed.status == "uploaded"  # unchanged — never reached "mapped"
+
+
+def test_confirm_mapping_override_pushes_a_multi_location_file_through(db_session, business_id, monkeypatch):
+    upload = _make_uploaded_with_content(db_session, business_id, monkeypatch, _MULTI_LOCATION_CSV_CONTENT)
+    blocked = service.confirm_mapping(db_session, upload, _LOCATION_FIELD_MAPPING)
+    assert blocked.status == "needs_location_confirmation"
+
+    refreshed = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    result = service.confirm_mapping(
+        db_session, refreshed, _LOCATION_FIELD_MAPPING, confirm_multiple_locations=True
+    )
+
+    assert result.status == "confirmed"
+    assert result.import_record.status == "mapped"
+    final = UploadRepository(db_session).get_for_business(upload.id, business_id)
+    assert final.status == "mapped"
+
+
+def test_confirm_mapping_does_not_block_a_single_location_value(db_session, business_id, monkeypatch):
+    upload = _make_uploaded_with_content(db_session, business_id, monkeypatch, _SINGLE_LOCATION_CSV_CONTENT)
+
+    result = service.confirm_mapping(db_session, upload, _LOCATION_FIELD_MAPPING)
+
+    assert result.status == "confirmed"
+    assert result.import_record.status == "mapped"
+
+
+def test_confirm_mapping_ignores_location_entirely_when_not_mapped(db_session, business_id, monkeypatch):
+    # _FULL_FIELD_MAPPING maps location=None — a multi-location file must
+    # still import cleanly when the location column simply isn't mapped at
+    # all (mirrors a shop whose export happens to have such a column but
+    # who never chose to map it — the check is opt-in via the mapping,
+    # not something scanned for automatically regardless of user intent).
+    upload = _make_uploaded_with_content(db_session, business_id, monkeypatch, _MULTI_LOCATION_CSV_CONTENT)
+
+    result = service.confirm_mapping(db_session, upload, _FULL_FIELD_MAPPING)
+
+    assert result.status == "confirmed"

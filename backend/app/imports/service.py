@@ -82,6 +82,20 @@ def mark_uploaded(db: Session, upload: Upload) -> Upload:
 
 
 @dataclass
+class ConfirmMappingResult:
+    status: str  # "confirmed" | "needs_location_confirmation"
+    import_record: ImportRecord | None
+    mapping_profile_id: uuid.UUID | None
+    # Only populated when status == "needs_location_confirmation": the
+    # distinct values found in the mapped "location" column (BD-007
+    # anti-bypass check — see _distinct_location_values below). More than
+    # one means this file looks like it combines more than one physical
+    # location's data into a single business, which is exactly the
+    # branch-fee bypass this check exists to catch.
+    locations: list[str] | None = None
+
+
+@dataclass
 class DetectMappingResult:
     status: str  # "reused" | "needs_confirmation" | "header_not_found"
     mapping_profile_id: uuid.UUID | None
@@ -187,9 +201,34 @@ def detect_mapping_for_upload(
     )
 
 
+def _distinct_location_values(
+    grid: list[Row], result: detection.DetectionResult, location_column: str
+) -> list[str]:
+    """Scans the same bounded detection-window grid already read for this
+    request (no second file read) for every distinct non-blank value in
+    the mapped location column — the BD-007 anti-bypass signal. Honest
+    limitation, accepted: data split across more than _DETECTION_WINDOW_ROWS
+    rows won't all be seen, same bounded-window trade-off detection.py
+    already makes everywhere else.
+    """
+    column_index = result.columns.index(location_column)
+    values: dict[str, None] = {}  # dict, not set — preserves first-seen order
+    for row in grid[result.header_row_index + 1 :]:
+        if column_index >= len(row):
+            continue
+        value = normalize_cell(row[column_index])
+        if value:
+            values.setdefault(value, None)
+    return list(values.keys())
+
+
 def confirm_mapping(
-    db: Session, upload: Upload, field_mapping: dict[str, str | None], header_row_index: int | None = None
-) -> tuple[ImportRecord, uuid.UUID]:
+    db: Session,
+    upload: Upload,
+    field_mapping: dict[str, str | None],
+    header_row_index: int | None = None,
+    confirm_multiple_locations: bool = False,
+) -> ConfirmMappingResult:
     # See detect_mapping_for_upload's docstring note — same relaxed
     # precondition, same "imported" scope boundary.
     if upload.status not in ("uploaded", "mapped"):
@@ -213,6 +252,26 @@ def confirm_mapping(
 
     if not MINIMUM_MAPPING_RULES[upload.entity_type](field_mapping):
         raise InsufficientMapping(upload.entity_type)
+
+    # BD-007 anti-bypass check — a real direct request: block a file that
+    # itself carries a location/store/branch column spanning more than one
+    # value, since that's a real, deterministic signal a customer is
+    # uploading combined multi-location data into a single business to
+    # avoid the per-branch fee. Checked here, before any DB writes below,
+    # so a blocked attempt makes zero changes and is cleanly re-triable —
+    # explicit override (confirm_multiple_locations) lets a genuinely
+    # single-location shop whose export happens to repeat a store name/code
+    # push through anyway.
+    location_column = field_mapping.get("location")
+    if location_column is not None and not confirm_multiple_locations:
+        locations = _distinct_location_values(grid, result, location_column)
+        if len(locations) > 1:
+            return ConfirmMappingResult(
+                status="needs_location_confirmation",
+                import_record=None,
+                mapping_profile_id=None,
+                locations=locations,
+            )
 
     column_mapping = {
         "entity_type": upload.entity_type,
@@ -242,4 +301,6 @@ def confirm_mapping(
         status="mapped",
     )
     UploadRepository(db).set_status(upload, status="mapped")
-    return record, profile.id
+    return ConfirmMappingResult(
+        status="confirmed", import_record=record, mapping_profile_id=profile.id, locations=None
+    )

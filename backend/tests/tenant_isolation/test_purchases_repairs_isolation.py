@@ -17,6 +17,7 @@ _PURCHASE_FIELD_MAPPING = {
     "unit_cost": "Unit Cost",
     "purchase_reference": None,
     "category": None,
+    "location": None,
 }
 _REPAIR_FIELD_MAPPING = {
     "repair_date": "Date",
@@ -24,6 +25,7 @@ _REPAIR_FIELD_MAPPING = {
     "price_charged": "Price Charged",
     "labour_cost": "Labour Cost",
     "repair_reference": None,
+    "location": None,
 }
 
 

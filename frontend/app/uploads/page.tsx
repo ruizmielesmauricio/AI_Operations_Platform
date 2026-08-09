@@ -58,8 +58,9 @@ const FIELD_ORDER: Record<string, string[]> = {
     "tax_amount",
     "order_reference",
     "category",
+    "location",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "category", "as_of_date"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "category", "location", "as_of_date"],
   purchases: [
     "purchase_date",
     "product_name",
@@ -68,8 +69,9 @@ const FIELD_ORDER: Record<string, string[]> = {
     "unit_cost",
     "purchase_reference",
     "category",
+    "location",
   ],
-  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference", "location"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -84,6 +86,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     tax_amount: "Which column is the tax/VAT amount? (optional)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
     category: "Which column is the product category or department? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
   inventory: {
     product_name: "Which column is the product name? (optional if SKU is set)",
@@ -91,6 +94,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     quantity_on_hand: "Which column is the current quantity in stock?",
     unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
     category: "Which column is the product category or department? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
     as_of_date: "Which column is the date this count was taken? (optional)",
   },
   purchases: {
@@ -101,6 +105,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
     purchase_reference: "Which column is the PO or invoice number? (optional)",
     category: "Which column is the product category or department? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
   repairs: {
     repair_date: "Which column is the repair date?",
@@ -108,6 +113,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     price_charged: "Which column is the price charged to the customer? (optional)",
     labour_cost: "Which column is your labour cost for this job? (optional)",
     repair_reference: "Which column is the job or invoice number? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
 };
 
@@ -115,6 +121,15 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
 // (see the .hint CSS class) — kept separate from FIELD_LABELS above so
 // the primary question stays short and scannable. Only fields where the
 // short question alone leaves real ambiguity get one.
+// Shared across all four entity types — only map this if every row in the
+// file is genuinely from one location. If it has more than one value,
+// confirm-mapping blocks with a prompt to add a branch instead
+// (app/imports/service.py::confirm_mapping, BD-007).
+const LOCATION_HINT =
+  "Only map this if your export includes it. If this column has more than one value, we'll ask you to " +
+  "confirm this file is really all one location before importing — each additional location is billed " +
+  "separately as its own branch.";
+
 const FIELD_HINTS: Record<string, Record<string, string>> = {
   sales: {
     unit_price: "What the customer paid for one item — before tax, if your file has a separate tax column.",
@@ -129,6 +144,7 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     category:
       "Matched against your existing product categories by name, or created if it's new — powers the Category " +
       "Breakdown report and per-category dashboard filters.",
+    location: LOCATION_HINT,
   },
   inventory: {
     as_of_date:
@@ -137,6 +153,7 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     category:
       "Matched against your existing product categories by name, or created if it's new — powers the Category " +
       "Breakdown report and per-category dashboard filters.",
+    location: LOCATION_HINT,
   },
   purchases: {
     purchase_reference:
@@ -144,11 +161,13 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     category:
       "Matched against your existing product categories by name, or created if it's new — powers the Category " +
       "Breakdown report and per-category dashboard filters.",
+    location: LOCATION_HINT,
   },
   repairs: {
     labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
     repair_reference:
       "Prevents accidentally importing the same repair twice if you re-upload a file that overlaps an earlier one.",
+    location: LOCATION_HINT,
   },
 };
 
@@ -200,6 +219,12 @@ export default function UploadsPage() {
   // to confirm-mapping once the user gets there.
   const [previewRows, setPreviewRows] = useState<string[][] | null>(null);
   const [chosenHeaderRowIndex, setChosenHeaderRowIndex] = useState<number | null>(null);
+
+  // Set when confirm-mapping comes back "needs_location_confirmation"
+  // (BD-007 anti-bypass check) — the distinct location values it found in
+  // the mapped location column. Rendered as a block-with-override prompt
+  // instead of silently saving the mapping.
+  const [locationWarning, setLocationWarning] = useState<string[] | null>(null);
 
   // Per-upload so running/undoing one row's import doesn't disable another's.
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
@@ -282,6 +307,7 @@ export default function UploadsPage() {
 
   async function startMapping(uploadId: string, uploadEntityType: string, headerRowIndex?: number) {
     setMappingError(null);
+    setLocationWarning(null);
     setMappingEntityType(uploadEntityType);
     try {
       const body = headerRowIndex === undefined ? {} : { header_row_index: headerRowIndex };
@@ -323,8 +349,10 @@ export default function UploadsPage() {
     if (mappingUploadId) startMapping(mappingUploadId, mappingEntityType, rowIndex);
   }
 
-  async function handleConfirmMapping(e: React.FormEvent) {
-    e.preventDefault();
+  // Shared by the normal submit and the "yes, this really is one location"
+  // override button — only the confirm_multiple_locations flag differs
+  // between the two (app/imports/service.py::confirm_mapping, BD-007).
+  async function submitMapping(confirmMultipleLocations: boolean) {
     if (!mappingUploadId) return;
     setConfirming(true);
     setMappingError(null);
@@ -332,10 +360,22 @@ export default function UploadsPage() {
       const fieldValues = Object.fromEntries(
         FIELD_ORDER[mappingEntityType].map((field) => [field, fieldMapping[field] || null])
       );
-      await apiPost<ConfirmMappingResponse>(
+      const result = await apiPost<ConfirmMappingResponse>(
         `/businesses/${businessId}/uploads/${mappingUploadId}/confirm-mapping`,
-        { field_mapping: fieldValues, header_row_index: chosenHeaderRowIndex }
+        {
+          field_mapping: fieldValues,
+          header_row_index: chosenHeaderRowIndex,
+          confirm_multiple_locations: confirmMultipleLocations,
+        }
       );
+      if (result.status === "needs_location_confirmation") {
+        // Deliberately does not clear mappingUploadId/detection — the form
+        // stays open so the user can either fix the mapping (e.g. unmap
+        // location) or use the override button rendered below it.
+        setLocationWarning(result.locations ?? []);
+        return;
+      }
+      setLocationWarning(null);
       setNotice("Mapping saved.");
       setMappingUploadId(null);
       setDetection(null);
@@ -350,6 +390,7 @@ export default function UploadsPage() {
       // failure look like the same "check your mapping" issue even when
       // it wasn't, which is exactly what made a genuinely-correct mapping
       // impossible to debug from this message alone.
+      setLocationWarning(null);
       setMappingError(
         err instanceof ApiError
           ? err.message
@@ -358,6 +399,15 @@ export default function UploadsPage() {
     } finally {
       setConfirming(false);
     }
+  }
+
+  async function handleConfirmMapping(e: React.FormEvent) {
+    e.preventDefault();
+    await submitMapping(false);
+  }
+
+  async function handleConfirmMultipleLocationsOverride() {
+    await submitMapping(true);
   }
 
   async function handleRunImport(uploadId: string) {
@@ -646,6 +696,22 @@ export default function UploadsPage() {
           })}
           {detection.unmapped_columns.length > 0 && (
             <p>Not used: {detection.unmapped_columns.join(", ")}</p>
+          )}
+          {locationWarning && (
+            <div className="status-warn">
+              <p>
+                This file looks like it has data from more than one location: {locationWarning.join(", ")}.
+                Each additional location is billed separately as its own branch (€30/month) — uploading
+                combined data into a single shop instead isn&apos;t supported.
+              </p>
+              <p>
+                <a href="/onboarding">Add a branch</a> for the other location, or if this really is all one
+                location — e.g. the column just repeats your shop&apos;s own name or code — confirm below.
+              </p>
+              <button type="button" disabled={confirming} onClick={handleConfirmMultipleLocationsOverride}>
+                {confirming ? "Confirming…" : "Yes, this is genuinely one location"}
+              </button>
+            </div>
           )}
           {mappingError && <p className="status-error">{mappingError}</p>}
           <button type="submit" disabled={confirming}>

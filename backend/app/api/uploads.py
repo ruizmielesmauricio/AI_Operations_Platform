@@ -174,8 +174,12 @@ def confirm_mapping(
 ) -> ConfirmMappingResponse:
     upload = _get_upload_or_404(db, upload_id, membership.business_id)
     try:
-        record, mapping_profile_id = service.confirm_mapping(
-            db, upload, payload.field_mapping, payload.header_row_index
+        result = service.confirm_mapping(
+            db,
+            upload,
+            payload.field_mapping,
+            payload.header_row_index,
+            payload.confirm_multiple_locations,
         )
     except UploadNotReady as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -195,6 +199,15 @@ def confirm_mapping(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_INSUFFICIENT_MAPPING_MESSAGES.get(exc.entity_type, str(exc)),
         ) from exc
+    if result.status == "needs_location_confirmation":
+        return ConfirmMappingResponse(
+            import_record_id=None,
+            mapping_profile_id=None,
+            status=result.status,
+            locations=result.locations,
+        )
     return ConfirmMappingResponse(
-        import_record_id=record.id, mapping_profile_id=mapping_profile_id, status=record.status
+        import_record_id=result.import_record.id,
+        mapping_profile_id=result.mapping_profile_id,
+        status=result.import_record.status,
     )

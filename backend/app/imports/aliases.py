@@ -40,6 +40,14 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # pattern as product SKU/name matching); never required
         # (MINIMUM_MAPPING_RULES below doesn't reference it).
         "category",
+        # Optional — see the shared _LOCATION_ALIASES comment below. Never
+        # persisted anywhere (no Product/Sale table gains a location
+        # column) — purely a pre-import signal app/imports/service.py::
+        # confirm_mapping checks for more than one distinct value and
+        # blocks on, since that's a strong sign a file combines more than
+        # one physical location's data into a single business (each
+        # location should be its own branch — direct request).
+        "location",
     ],
     # A stock-count snapshot, not a transaction: one row per product's
     # current on-hand quantity.
@@ -57,6 +65,8 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "unit_cost",
         # Optional — see the shared _CATEGORY_ALIASES comment below.
         "category",
+        # Optional — see the shared _LOCATION_ALIASES comment above.
+        "location",
         # Optional — supersedes an earlier "inventory has no date field by
         # design" decision (that design assumed reconciliation always
         # compares against whatever's *currently* derived, which is
@@ -86,6 +96,8 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "purchase_reference",
         # Optional — see the shared _CATEGORY_ALIASES comment below.
         "category",
+        # Optional — see the shared _LOCATION_ALIASES comment above.
+        "location",
     ],
     # One row per finished repair, from a shop's own workshop log/export —
     # treated the same as sales at the row level, not the line-item level
@@ -98,6 +110,12 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # Optional — same reasoning as purchases' purchase_reference above,
         # for workshop revenue instead of stock.
         "repair_reference",
+        # Optional — see the shared _LOCATION_ALIASES comment above. Unlike
+        # "category" (deliberately excluded here — ProductionEvent has no
+        # product_id to hang a category off), a repair's own location is a
+        # first-class attribute of the repair row itself, no FK gap to work
+        # around.
+        "location",
     ],
 }
 
@@ -139,6 +157,24 @@ _UNIT_COST_ALIASES = [
 _CATEGORY_ALIASES = [
     "category", "product category", "department", "type", "product type",
     "product group", "group", "class", "classification",
+]
+
+# Shared across sales/inventory/purchases/repairs — direct request: a
+# real, deterministic signal that an uploaded file combines more than one
+# physical location's data into a single business (avoiding the €30/
+# month branch fee each additional one should be billed separately —
+# BD-007). Deliberately not resolved against anything or written to the
+# database anywhere (no Product/Sale/ProductionEvent table gains a
+# location column) — purely a pre-import check
+# (app/imports/service.py::confirm_mapping counts distinct values in
+# whichever column this resolves to and blocks, with an explicit
+# override, when there's more than one). Kept industry-agnostic per this
+# file's own convention: "store"/"branch"/"outlet"/"site" all describe
+# the same concept a bike shop, a cafe, or a pharmacy chain would each
+# use their own term for.
+_LOCATION_ALIASES = [
+    "location", "store", "store name", "store id", "branch", "branch name",
+    "shop", "outlet", "site", "location name", "location id",
 ]
 
 # Every field's canonical name is itself a valid alias (normalized), so
@@ -191,6 +227,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "invoice no", "reference number", "reference",
         ],
         "category": _CATEGORY_ALIASES,
+        "location": _LOCATION_ALIASES,
     },
     "inventory": {
         "product_name": [
@@ -208,6 +245,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         ],
         "unit_cost": _UNIT_COST_ALIASES,
         "category": _CATEGORY_ALIASES,
+        "location": _LOCATION_ALIASES,
         "as_of_date": [
             "as of date", "count date", "stock date", "snapshot date", "date counted",
             "inventory date", "date",
@@ -240,6 +278,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "purchase order id", "po id", "supplier order reference", "supplier invoice number",
         ],
         "category": _CATEGORY_ALIASES,
+        "location": _LOCATION_ALIASES,
     },
     "repairs": {
         "repair_date": [
@@ -281,6 +320,7 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         "repair_reference": [
             "job number", "invoice number", "reference", "work order", "ticket number",
         ],
+        "location": _LOCATION_ALIASES,
     },
 }
 
