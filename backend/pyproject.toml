@@ -16,13 +16,17 @@ dependencies = [
     "boto3>=1.34",
     "openpyxl>=3.1",
     "xlrd>=2.0",
+    "httpx>=0.27",
+    # Offline lat/lon -> IANA timezone lookup for app/geocoding/ — no
+    # network call, no extra provider dependency, and no second vendor's
+    # timezone guess to reconcile against Geoapify's own address match.
+    "timezonefinder>=6.5",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]

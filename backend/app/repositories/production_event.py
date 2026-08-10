@@ -28,6 +28,7 @@ class ProductionEventRepository:
         performed_by_id: uuid.UUID | None,
         import_record_id: uuid.UUID | None,
         repair_reference: str | None = None,
+        tax_amount: Decimal | None = None,
     ) -> ProductionEvent:
         # Flush only — app/imports/importer.py owns the single commit.
         event = ProductionEvent(
@@ -43,6 +44,7 @@ class ProductionEventRepository:
             performed_by_id=performed_by_id,
             import_record_id=import_record_id,
             repair_reference=repair_reference,
+            tax_amount=tax_amount,
         )
         self.session.add(event)
         self.session.flush()
@@ -93,6 +95,48 @@ class ProductionEventRepository:
         ).all()
         return {(ref, description, price_charged, labour_cost) for ref, description, price_charged, labour_cost in rows}
 
+    def find_repairs(
+        self,
+        business_id: uuid.UUID,
+        *,
+        repair_reference: str | None = None,
+        description_contains: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 10,
+    ) -> list[ProductionEvent]:
+        """Backs ORLA's repair_lookup chat intent ("how much did repair
+        JOB-364 cost" / "what repairs did I do last week") — event_type
+        is always fixed to "repair" here, unlike this repository's other
+        read paths, which are business-wide across both event types; a
+        lookup should never accidentally surface a production batch.
+        Tries `repair_reference` first (case-insensitive substring, same
+        reasoning as InventoryMovementRepository.list_purchases's
+        purchase_reference match); `description_contains` is a fallback
+        for when no reference was named — repairs have no product_id or
+        reliable customer name to search by instead
+        (ProductionEvent.customer_id is NULL on every imported repair, no
+        match key from free text in a file). Most-recent-first by
+        opened_at, capped at `limit` for the same reason every other new
+        lookup method in this pass is capped.
+        """
+        conditions = [ProductionEvent.business_id == business_id, ProductionEvent.event_type == "repair"]
+        if repair_reference is not None:
+            needle = repair_reference.strip().upper()
+            conditions.append(func.upper(ProductionEvent.repair_reference).like(f"%{needle}%"))
+        if description_contains is not None:
+            needle = description_contains.strip().lower()
+            conditions.append(func.lower(ProductionEvent.description).like(f"%{needle}%"))
+        if start is not None:
+            conditions.append(ProductionEvent.opened_at >= start)
+        if end is not None:
+            conditions.append(ProductionEvent.opened_at < end)
+        return list(
+            self.session.scalars(
+                select(ProductionEvent).where(*conditions).order_by(ProductionEvent.opened_at.desc()).limit(limit)
+            )
+        )
+
     def aggregate_completed_repairs_in_range(
         self, business_id: uuid.UUID, start: datetime, end: datetime
     ) -> RepairPeriodTotals:
@@ -103,6 +147,7 @@ class ProductionEventRepository:
         date on a completed repair, mirroring Sale.sold_at's role."""
         known_price = ProductionEvent.price_charged.isnot(None)
         known_both = known_price & ProductionEvent.labour_cost.isnot(None)
+        known_both_and_tax = known_both & ProductionEvent.tax_amount.isnot(None)
 
         row = self.session.execute(
             select(
@@ -112,6 +157,9 @@ class ProductionEventRepository:
                 func.sum(case((known_both, 1), else_=0)),
                 func.sum(case((known_both, ProductionEvent.price_charged), else_=0)),
                 func.sum(case((known_both, ProductionEvent.labour_cost), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.price_charged), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.tax_amount), else_=0)),
+                func.sum(case((known_both_and_tax, ProductionEvent.labour_cost), else_=0)),
             ).where(
                 ProductionEvent.business_id == business_id,
                 ProductionEvent.event_type == "repair",
@@ -121,7 +169,17 @@ class ProductionEventRepository:
             )
         ).one()
 
-        repair_count, repairs_with_known_price, revenue, repairs_with_known_both, labour_known_revenue, labour_cost = row
+        (
+            repair_count,
+            repairs_with_known_price,
+            revenue,
+            repairs_with_known_both,
+            labour_known_revenue,
+            labour_cost,
+            labour_known_revenue_with_known_tax,
+            tax_amount_known,
+            labour_cost_for_known_tax,
+        ) = row
         return RepairPeriodTotals(
             repair_count=int(repair_count or 0),
             repairs_with_known_price=int(repairs_with_known_price or 0),
@@ -129,4 +187,41 @@ class ProductionEventRepository:
             repairs_with_known_price_and_labour=int(repairs_with_known_both or 0),
             labour_cost_known_revenue=Decimal(labour_known_revenue or 0),
             labour_cost=Decimal(labour_cost or 0),
+            labour_cost_known_revenue_with_known_tax=Decimal(labour_known_revenue_with_known_tax or 0),
+            tax_amount_known=Decimal(tax_amount_known or 0),
+            labour_cost_for_known_tax=Decimal(labour_cost_for_known_tax or 0),
         )
+
+    def list_repairs_paginated(
+        self,
+        business_id: uuid.UUID,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[ProductionEvent], int]:
+        """Real pagination behind the dashboard's transaction drill-down
+        (Gap 5) — deliberately separate from find_repairs above (ORLA
+        chat lookup, fixed low limit, reference/description search, no
+        offset). No category filter: a repair has no product_id to hang
+        one off (see ProductionEvent's own docstring). Most-recent-first,
+        stable (completed_at, id) ordering.
+        """
+        conditions = [ProductionEvent.business_id == business_id, ProductionEvent.event_type == "repair"]
+        if start is not None:
+            conditions.append(ProductionEvent.completed_at >= start)
+        if end is not None:
+            conditions.append(ProductionEvent.completed_at < end)
+
+        total = self.session.scalar(select(func.count()).select_from(ProductionEvent).where(*conditions)) or 0
+        rows = list(
+            self.session.scalars(
+                select(ProductionEvent)
+                .where(*conditions)
+                .order_by(ProductionEvent.completed_at.desc(), ProductionEvent.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        return rows, total

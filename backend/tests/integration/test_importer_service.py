@@ -7,9 +7,11 @@ from app.imports.exceptions import ImportRecordNotReady, MappedColumnMissing
 from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
+from app.models.return_ import Return
 from app.models.sale import Sale, SaleItem
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
+from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.upload import UploadRepository
 
 _HEADER = ["Order Date", "Item Description", "SKU", "Qty", "Unit Price", "Order Number"]
@@ -131,6 +133,56 @@ def test_run_import_creates_sales_sale_items_and_inventory_movements(db_session,
     assert refreshed_upload.status == "imported"
 
     assert _fake_r2 == [upload.storage_key]  # deleted only after success
+
+
+_CSV_CONTENT_RETURNS = (
+    "Order Date,Item Description,SKU,Qty,Unit Price,Order Number\n"
+    "2026-01-03,Chain Lube,CL-100,5,9.99,ORD-10\n"
+    "2026-01-04,Chain Lube,CL-100,-1,9.99,ORD-11\n"
+).encode()
+
+
+def test_run_import_accepts_a_return_and_restores_stock_and_nets_revenue(db_session, business_id, _fake_r2):
+    # Real bug found via Gate B testing with synthetic_sales.csv: a
+    # negative-quantity row (a return, mixed into the same sales file)
+    # used to be rejected outright as non_positive_quantity, silently
+    # excluding real refund data from every calculation.
+    upload, record = _make_mapped_upload(db_session, business_id, filename="returns.csv")
+    _fake_r2.content_by_key[upload.storage_key] = _CSV_CONTENT_RETURNS
+
+    result = run_import(db_session, upload, record)
+
+    assert result.status == "completed"
+    assert result.rows_total == 2
+    assert result.rows_imported == 2  # the return is accepted, not rejected
+    assert result.rows_rejected == 0
+    assert "reasons" not in (result.rejection_summary or {})
+    assert result.rejection_summary["warnings"]["sales_includes_returns"]["count"] == 1
+
+    sales = db_session.scalars(select(Sale).where(Sale.business_id == business_id)).all()
+    assert len(sales) == 2
+    return_sale = next(s for s in sales if s.order_reference == "ORD-11")
+    # unit_price (9.99, positive, from the file) * quantity (-1) — the
+    # refunded amount, correctly negative.
+    assert return_sale.total_amount == Decimal("-9.99")
+
+    returns = db_session.scalars(select(Return).where(Return.business_id == business_id)).all()
+    assert len(returns) == 1
+    assert returns[0].refund_amount == Decimal("9.99")
+    assert returns[0].reason is None  # the file gives no reason data — never invented
+
+    movements = db_session.scalars(
+        select(InventoryMovement).where(InventoryMovement.business_id == business_id)
+    ).all()
+    assert len(movements) == 2
+    sale_movement = next(m for m in movements if m.reason == "sale")
+    return_movement = next(m for m in movements if m.reason == "return")
+    assert sale_movement.quantity_delta == -5
+    assert return_movement.quantity_delta == 1  # stock restored, not further decreased
+
+    product = db_session.scalars(select(Product).where(Product.business_id == business_id)).one()
+    stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock[product.id] == -4  # 5 sold, 1 returned — net stock impact
 
 
 def test_run_import_matches_an_existing_product_by_sku_on_a_second_import(db_session, business_id, _fake_r2):

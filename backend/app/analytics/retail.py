@@ -65,6 +65,12 @@ class DeadStockEntry:
     # stock_on_hand alone for these, per compute_inventory_value_at_cost's
     # same completeness caveat).
     value_at_cost: Decimal | None
+    # None when the product has no category set (the overwhelming
+    # majority until categories are actively imported) or the caller
+    # didn't supply category_name_by_product at all — direct request:
+    # show each product's category next to its name in every product-row
+    # table, not just when a category filter is active.
+    category_name: str | None = None
 
 
 def find_dead_stock(
@@ -72,6 +78,7 @@ def find_dead_stock(
     stock_by_product: dict[uuid.UUID, int],
     products_by_id: dict[uuid.UUID, str],
     cost_price_by_product: dict[uuid.UUID, Decimal | None],
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> list[DeadStockEntry]:
     """Products with stock on hand but zero units sold within the
     requested period. Deliberately uses the same period the rest of the
@@ -80,6 +87,7 @@ def find_dead_stock(
     period will over-flag products that simply haven't had a chance to
     sell, which is a caller/UI-level caveat rather than a formula bug.
     """
+    category_name_by_product = category_name_by_product or {}
     entries = []
     for product_id, stock_on_hand in stock_by_product.items():
         if stock_on_hand <= 0:
@@ -96,6 +104,7 @@ def find_dead_stock(
                 name=products_by_id.get(product_id, "Unknown product"),
                 stock_on_hand=stock_on_hand,
                 value_at_cost=value_at_cost,
+                category_name=category_name_by_product.get(product_id),
             )
         )
     return sorted(entries, key=lambda entry: entry.stock_on_hand, reverse=True)
@@ -116,17 +125,23 @@ class ProductSalesRow:
     name: str
     units_sold: int
     revenue: Decimal
+    # See DeadStockEntry.category_name's docstring.
+    category_name: str | None = None
 
 
 def _build_sales_rows(
-    aggregates: list[ProductPeriodAggregate], products_by_id: dict[uuid.UUID, str]
+    aggregates: list[ProductPeriodAggregate],
+    products_by_id: dict[uuid.UUID, str],
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> list[ProductSalesRow]:
+    category_name_by_product = category_name_by_product or {}
     return [
         ProductSalesRow(
             product_id=a.product_id,
             name=products_by_id.get(a.product_id, "Unknown product"),
             units_sold=a.units_sold,
             revenue=_quantize_money(a.revenue),
+            category_name=category_name_by_product.get(a.product_id),
         )
         for a in aggregates
     ]
@@ -137,13 +152,14 @@ def rank_top_sellers_by_units(
     products_by_id: dict[uuid.UUID, str],
     *,
     top_n: int = 5,
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> list[ProductSalesRow]:
     """Top N products by units sold in the period — "what's actually
     selling the most" (02_Operational_Domains.md's Retail Operations
     question). Deliberately separate from rank_top_sellers_by_revenue: a
     high-price, low-volume item outranking a genuinely popular one on
     revenue alone would misrepresent what's actually moving."""
-    rows = _build_sales_rows(aggregates, products_by_id)
+    rows = _build_sales_rows(aggregates, products_by_id, category_name_by_product)
     return sorted(rows, key=lambda row: row.units_sold, reverse=True)[:top_n]
 
 
@@ -152,13 +168,14 @@ def rank_top_sellers_by_revenue(
     products_by_id: dict[uuid.UUID, str],
     *,
     top_n: int = 5,
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> list[ProductSalesRow]:
     """Top N products by revenue in the period — "what's making the most
     money," the Financial-Performance-adjacent lens. Complements
     rank_top_sellers_by_units rather than replacing it; a caller wanting
     only one view should pick deliberately, not rely on this being the
     default "top sellers.\""""
-    rows = _build_sales_rows(aggregates, products_by_id)
+    rows = _build_sales_rows(aggregates, products_by_id, category_name_by_product)
     return sorted(rows, key=lambda row: row.revenue, reverse=True)[:top_n]
 
 
@@ -174,6 +191,8 @@ class StockCoverRow:
     # rank "about to run out" products by what they're worth, not just by
     # how soon they'll run out.
     revenue_in_period: Decimal
+    # See DeadStockEntry.category_name's docstring.
+    category_name: str | None = None
 
 
 def build_stock_cover_report(
@@ -181,12 +200,14 @@ def build_stock_cover_report(
     stock_by_product: dict[uuid.UUID, int],
     products_by_id: dict[uuid.UUID, str],
     period_days: int,
+    category_name_by_product: dict[uuid.UUID, str | None] | None = None,
 ) -> list[StockCoverRow]:
     """One row per product with stock or sales activity, sorted by cover
     ascending (running out soonest first). Rows with unknown cover (no
     recent sales to project a depletion rate from) sort last — "unknown"
     is not "safest" and must not be mixed in with genuinely low-risk rows.
     """
+    category_name_by_product = category_name_by_product or {}
     rows = []
     for product_id, stock_on_hand in stock_by_product.items():
         aggregate = aggregates_by_product.get(product_id)
@@ -201,6 +222,7 @@ def build_stock_cover_report(
                 units_sold_in_period=units_sold,
                 cover_days=cover_days,
                 revenue_in_period=revenue_in_period,
+                category_name=category_name_by_product.get(product_id),
             )
         )
     # Sort key's second element is only ever compared between two rows that
@@ -228,3 +250,52 @@ def compute_inventory_value_at_cost(
             continue
         total += cost_price * stock_on_hand
     return InventoryValueResult(value_at_cost=_quantize_money(total), products_missing_cost=missing_cost_count)
+
+
+# --- Stage D18 (scheduled reports) — mover buckets and turnover ---------
+#
+# Both built on top of data C9-C13 already compute (StockCoverRow,
+# GrossMarginResult.cogs, InventoryValueResult) — no new queries, just two
+# small pure classifications on results the report assembly layer already
+# has in hand.
+
+# <=14 days of cover at the recent sales rate: selling quickly relative to
+# stock on hand. >=60 days: a lot of stock sitting relative to how fast
+# it's moving. Deliberately not exhaustive labels (a product between the
+# two is neither) — this is a simple two-bucket signal, not a full ABC
+# inventory classification.
+FAST_MOVER_MAX_COVER_DAYS = Decimal("14")
+SLOW_MOVER_MIN_COVER_DAYS = Decimal("60")
+
+
+@dataclass(frozen=True)
+class MoverSummary:
+    fast_movers: list[StockCoverRow]
+    slow_movers: list[StockCoverRow]
+
+
+def classify_movers(stock_cover_rows: list[StockCoverRow]) -> MoverSummary:
+    """Buckets rows with a *known* cover_days (i.e. real recent sales
+    activity behind the estimate) into fast/slow. Deliberately excludes
+    rows where cover_days is None (no recent sales at all to estimate a
+    rate from) — that's dead stock's territory (find_dead_stock above),
+    not "slow moving"; folding them in here would double-count the same
+    underlying signal under two different labels in the same report.
+    """
+    fast = [r for r in stock_cover_rows if r.cover_days is not None and r.cover_days <= FAST_MOVER_MAX_COVER_DAYS]
+    slow = [r for r in stock_cover_rows if r.cover_days is not None and r.cover_days >= SLOW_MOVER_MIN_COVER_DAYS]
+    return MoverSummary(fast_movers=fast, slow_movers=slow)
+
+
+def compute_inventory_turnover(cogs_in_period: Decimal, inventory_value_at_cost: Decimal) -> Decimal | None:
+    """A simplified turnover ratio: this period's cost of goods sold
+    divided by *current* inventory value at cost — not a true
+    period-average (which would need a historical value-at-cost snapshot
+    this system doesn't keep), a stated approximation. None when there's
+    no inventory value to divide by — "infinite turnover" isn't a
+    meaningful number to show, and a business with genuinely zero
+    inventory value has nothing this ratio can say anything about.
+    """
+    if inventory_value_at_cost <= 0:
+        return None
+    return _quantize_rate(cogs_in_period / inventory_value_at_cost)

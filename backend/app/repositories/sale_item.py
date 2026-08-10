@@ -6,6 +6,7 @@ from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.analytics.types import ProductPeriodAggregate
+from app.models.product import Product
 from app.models.sale import Sale, SaleItem
 
 
@@ -152,3 +153,47 @@ class SaleItemRepository:
             )
         ).all()
         return [(product_id, sold_at, quantity) for product_id, sold_at, quantity in rows]
+
+    def list_paginated_for_business(
+        self,
+        business_id: uuid.UUID,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        product_id: uuid.UUID | None = None,
+        category_id: uuid.UUID | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[tuple[SaleItem, Sale, Product | None]], int]:
+        """Raw, one-line-item-per-row listing behind the dashboard's
+        transaction drill-down (Gap 5) — deliberately separate from
+        aggregate_by_product_in_range above, which only ever returns
+        per-product sums. Every filter is optional and AND-ed together;
+        category_id requires the outer join to Product since SaleItem
+        has no category of its own. Most-recent-first, stable
+        (Sale.sold_at, SaleItem.id) ordering so pagination never skips or
+        repeats a row across pages even when several sales share a
+        timestamp. `limit` is the caller's (API layer's) responsibility
+        to cap — this method applies whatever it's given.
+        """
+        conditions = [SaleItem.business_id == business_id]
+        if start is not None:
+            conditions.append(Sale.sold_at >= start)
+        if end is not None:
+            conditions.append(Sale.sold_at < end)
+        if product_id is not None:
+            conditions.append(SaleItem.product_id == product_id)
+        if category_id is not None:
+            conditions.append(Product.category_id == category_id)
+
+        base = (
+            select(SaleItem, Sale, Product)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .outerjoin(Product, Product.id == SaleItem.product_id)
+            .where(*conditions)
+        )
+        total = self.session.scalar(select(func.count()).select_from(base.subquery())) or 0
+        rows = self.session.execute(
+            base.order_by(Sale.sold_at.desc(), SaleItem.id.desc()).limit(limit).offset(offset)
+        ).all()
+        return [(item, sale, product) for item, sale, product in rows], total

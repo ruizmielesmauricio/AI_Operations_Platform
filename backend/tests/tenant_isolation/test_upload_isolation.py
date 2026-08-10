@@ -7,7 +7,7 @@ from app.api.deps import get_db
 from app.imports import r2_client
 from app.main import app
 from app.models import Base
-from tests.auth_helpers import bearer_header, patch_jwks
+from tests.auth_helpers import bearer_header, patch_jwks, seed_active_subscription
 
 
 @pytest.fixture()
@@ -29,12 +29,43 @@ def client(tmp_path, monkeypatch):
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app)
+    test_client = TestClient(app)
+    test_client._engine = engine  # stashed so _create_business can seed an active subscription
+    yield test_client
     app.dependency_overrides.clear()
 
 
 def _create_business(client, headers, name):
-    return client.post("/businesses", json={"name": name}, headers=headers).json()
+    # Uploads/imports now require an active subscription
+    # (app/billing/access.py::require_active_subscription) — seeded here,
+    # bypassing Stripe entirely, since every test in this file is about
+    # upload/tenant-isolation behavior, not billing state.
+    business = client.post("/businesses", json={"name": name}, headers=headers).json()
+    seed_active_subscription(client._engine, business["id"])
+    return business
+
+
+def test_uploading_without_an_active_subscription_is_blocked(client):
+    # Direct API call, not _create_business (which always seeds an active
+    # subscription for every other test in this file) — proves the real
+    # revenue-protection gate this feature exists for.
+    headers = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers).json()
+
+    response = client.post(
+        f"/businesses/{business['id']}/uploads",
+        json={"filename": "sales.csv", "entity_type": "sales"},
+        headers=headers,
+    )
+    assert response.status_code == 402
+
+    seed_active_subscription(client._engine, business["id"])
+    response = client.post(
+        f"/businesses/{business['id']}/uploads",
+        json={"filename": "sales.csv", "entity_type": "sales"},
+        headers=headers,
+    )
+    assert response.status_code == 201
 
 
 def test_uploading_requires_membership_of_the_business(client):

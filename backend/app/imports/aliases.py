@@ -35,6 +35,19 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # and app/analytics/financial.py's net_gross_margin_pct.
         "tax_amount",
         "order_reference",
+        # Optional — see the shared _CATEGORY_ALIASES comment below.
+        # Resolves against ProductCategory by name (match-or-create, same
+        # pattern as product SKU/name matching); never required
+        # (MINIMUM_MAPPING_RULES below doesn't reference it).
+        "category",
+        # Optional — see the shared _LOCATION_ALIASES comment below. Never
+        # persisted anywhere (no Product/Sale table gains a location
+        # column) — purely a pre-import signal app/imports/service.py::
+        # confirm_mapping checks for more than one distinct value and
+        # blocks on, since that's a strong sign a file combines more than
+        # one physical location's data into a single business (each
+        # location should be its own branch — direct request).
+        "location",
     ],
     # A stock-count snapshot, not a transaction: one row per product's
     # current on-hand quantity.
@@ -50,6 +63,10 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # shop that never uploads a separate purchases file still set
         # Product.cost_price.
         "unit_cost",
+        # Optional — see the shared _CATEGORY_ALIASES comment below.
+        "category",
+        # Optional — see the shared _LOCATION_ALIASES comment above.
+        "location",
         # Optional — supersedes an earlier "inventory has no date field by
         # design" decision (that design assumed reconciliation always
         # compares against whatever's *currently* derived, which is
@@ -77,6 +94,15 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         # (MINIMUM_MAPPING_RULES below never references it) — see
         # app/imports/importer.py::validate_and_parse_purchase_row.
         "purchase_reference",
+        # Optional — see the shared _CATEGORY_ALIASES comment below.
+        "category",
+        # Optional — matched against existing suppliers by normalized
+        # name, match-or-create, same exact pattern as "category" just
+        # above — never required (MINIMUM_MAPPING_RULES below doesn't
+        # reference it). See app/models/supplier.py.
+        "supplier",
+        # Optional — see the shared _LOCATION_ALIASES comment above.
+        "location",
     ],
     # One row per finished repair, from a shop's own workshop log/export —
     # treated the same as sales at the row level, not the line-item level
@@ -86,9 +112,23 @@ CANONICAL_FIELDS: dict[str, list[str]] = {
         "description",
         "price_charged",
         "labour_cost",
+        # Optional — same reasoning as sales' tax_amount above: when
+        # price_charged is tax-inclusive (a very common shape for a
+        # workshop invoice total), mapping this lets workshop margin be
+        # computed net of tax instead of silently overstating it. Never
+        # required (MINIMUM_MAPPING_RULES below doesn't reference it) —
+        # see app/imports/importer.py::validate_and_parse_repair_row and
+        # app/analytics/workshop.py's net_gross_margin_pct.
+        "tax_amount",
         # Optional — same reasoning as purchases' purchase_reference above,
         # for workshop revenue instead of stock.
         "repair_reference",
+        # Optional — see the shared _LOCATION_ALIASES comment above. Unlike
+        # "category" (deliberately excluded here — ProductionEvent has no
+        # product_id to hang a category off), a repair's own location is a
+        # first-class attribute of the repair row itself, no FK gap to work
+        # around.
+        "location",
     ],
 }
 
@@ -114,6 +154,40 @@ MINIMUM_MAPPING_RULES: dict[str, Callable[[dict[str, str | None]], bool]] = {
 _UNIT_COST_ALIASES = [
     "unit cost", "cost", "cost price", "cost/unit", "cost each",
     "purchase price", "supplier price", "landed cost", "buy price",
+]
+
+# Shared across sales/inventory/purchases — a plain text field, not a
+# money field, so (unlike unit_cost) it never needs a detection.py
+# structural-scoring entry, matching purchase_reference/repair_reference's
+# treatment. Resolved at import time against ProductCategory by normalized
+# name (match existing, or create — same match-or-create shape as product
+# SKU/name resolution, see app/imports/importer.py). Deliberately not
+# offered on "repairs": ProductionEvent has no product_id at all (no live
+# FK path to a category exists for a repair). Kept industry-agnostic per
+# this file's own stated convention — "category"/"department"/"type" cover
+# a bike shop's parts categories just as well as a cafe's menu sections or
+# a pharmacy's product classes.
+_CATEGORY_ALIASES = [
+    "category", "product category", "department", "type", "product type",
+    "product group", "group", "class", "classification",
+]
+
+# Shared across sales/inventory/purchases/repairs — direct request: a
+# real, deterministic signal that an uploaded file combines more than one
+# physical location's data into a single business (avoiding the €30/
+# month branch fee each additional one should be billed separately —
+# BD-007). Deliberately not resolved against anything or written to the
+# database anywhere (no Product/Sale/ProductionEvent table gains a
+# location column) — purely a pre-import check
+# (app/imports/service.py::confirm_mapping counts distinct values in
+# whichever column this resolves to and blocks, with an explicit
+# override, when there's more than one). Kept industry-agnostic per this
+# file's own convention: "store"/"branch"/"outlet"/"site" all describe
+# the same concept a bike shop, a cafe, or a pharmacy chain would each
+# use their own term for.
+_LOCATION_ALIASES = [
+    "location", "store", "store name", "store id", "branch", "branch name",
+    "shop", "outlet", "site", "location name", "location id",
 ]
 
 # Every field's canonical name is itself a valid alias (normalized), so
@@ -165,6 +239,8 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "transaction number", "txn id", "txn number", "invoice number",
             "invoice no", "reference number", "reference",
         ],
+        "category": _CATEGORY_ALIASES,
+        "location": _LOCATION_ALIASES,
     },
     "inventory": {
         "product_name": [
@@ -181,6 +257,8 @@ ALIASES: dict[str, dict[str, list[str]]] = {
             "units in stock", "available stock", "stock qty",
         ],
         "unit_cost": _UNIT_COST_ALIASES,
+        "category": _CATEGORY_ALIASES,
+        "location": _LOCATION_ALIASES,
         "as_of_date": [
             "as of date", "count date", "stock date", "snapshot date", "date counted",
             "inventory date", "date",
@@ -206,7 +284,18 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         "unit_cost": _UNIT_COST_ALIASES,
         "purchase_reference": [
             "po number", "purchase order", "po", "invoice number", "reference", "order number",
+            # Found via Gate B testing with synthetic_orders.csv — none of
+            # these real ERP column names matched anything above (this
+            # entry list is exact-string-match only, no fuzzy/substring
+            # matching exists anywhere in this engine).
+            "purchase order id", "po id", "supplier order reference", "supplier invoice number",
         ],
+        "category": _CATEGORY_ALIASES,
+        "supplier": [
+            "supplier", "vendor", "supplier name", "vendor name", "manufacturer",
+            "supplied by", "ordered from",
+        ],
+        "location": _LOCATION_ALIASES,
     },
     "repairs": {
         "repair_date": [
@@ -216,18 +305,43 @@ ALIASES: dict[str, dict[str, list[str]]] = {
         "description": [
             "description", "repair description", "work performed", "job description",
             "work done", "notes", "service description",
+            # "notes" alone is a weak, often-empty free-text field in real
+            # exports (Gate B testing found it winning over the genuinely
+            # descriptive "issue_description" column purely because it
+            # matched first) — this is the actual repair description.
+            "issue description",
         ],
         "price_charged": [
             "price charged", "amount charged", "charge", "invoice amount",
             "invoice total", "total charged", "repair price", "service price",
             "amount", "total",
+            # "amount"/"total" above only match a column named exactly
+            # that one word — a two-word "Total Amount" header (a very
+            # common real export shape, found via Gate B testing) matched
+            # neither and fell through to structural scoring, where it
+            # used to lose a tie to "labour_amount" (see detection.py's
+            # _MONEY_TIE_EPSILON comment). Structural scoring now breaks
+            # that tie correctly too, but a direct alias is a stronger,
+            # zero-ambiguity signal.
+            "total amount", "total price",
         ],
         "labour_cost": [
             "labour cost", "labor cost", "internal cost", "labour charge",
+            # Found via Gate B testing: "labour_amount" (the real per-
+            # repair labour cost in currency) used to lose a three-way
+            # structural tie to "labour_hours" (a duration, not a cost —
+            # see detection.py's _MONEY_TIE_EPSILON comment for the full
+            # mechanism) purely because it appeared first in the file.
+            "labour amount", "labor amount",
+        ],
+        "tax_amount": [
+            "tax", "vat", "tax amount", "vat amount", "sales tax", "tax charged",
+            "total tax", "gst",
         ],
         "repair_reference": [
             "job number", "invoice number", "reference", "work order", "ticket number",
         ],
+        "location": _LOCATION_ALIASES,
     },
 }
 

@@ -30,6 +30,8 @@ _FIELD_MAPPING = {
     "cost_price_at_sale": None,
     "tax_amount": None,
     "order_reference": None,
+    "category": None,
+    "location": None,
 }
 
 
@@ -80,7 +82,8 @@ def test_manual_header_pick_then_confirm_then_import_end_to_end(db_session, busi
     assert second.suggested_mapping["sale_date"] == "Order Date"
 
     # Step 3: confirm, passing the same header_row_index through.
-    record, profile_id = confirm_mapping(db_session, upload, _FIELD_MAPPING, header_row_index)
+    result = confirm_mapping(db_session, upload, _FIELD_MAPPING, header_row_index)
+    record = result.import_record
     assert record.status == "mapped"
 
     upload = UploadRepository(db_session).get_for_business(upload.id, business_id)

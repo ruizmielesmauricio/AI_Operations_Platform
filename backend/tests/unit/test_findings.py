@@ -1,17 +1,19 @@
 import uuid
 from decimal import Decimal
 
-from app.analytics.financial import GrossMarginResult, ProductMarginRow, RevenueTrend
+from app.analytics.financial import GrossMarginResult, ProductMarginRow, ReturnsSummary, RevenueTrend
 from app.analytics.findings import (
     DEFAULT_LOW_STOCK_THRESHOLD_DAYS,
     Finding,
     build_recommendations,
     evaluate_dead_stock,
+    evaluate_high_return_rate,
     evaluate_incomplete_cost_data,
     evaluate_low_gross_margin,
     evaluate_low_stock,
     evaluate_products_at_loss,
     evaluate_revenue_decline,
+    evaluate_thin_margin_high_revenue,
     resolve_low_stock_threshold,
 )
 from app.analytics.retail import DeadStockEntry, StockCoverRow
@@ -62,6 +64,38 @@ def test_revenue_decline_does_not_trigger_on_growth_or_small_dip():
 def test_revenue_decline_does_not_trigger_with_no_previous_period_data():
     no_baseline = RevenueTrend(current=Decimal("500"), previous=Decimal("0"), change_pct=None)
     assert evaluate_revenue_decline(no_baseline) == []
+
+
+# --- high_return_rate ----------------------------------------------------
+
+
+def _returns_summary(*, gross="1000", returns="0", count=0, rate="0.0"):
+    return ReturnsSummary(
+        gross_revenue=Decimal(gross),
+        returns_amount=Decimal(returns),
+        return_count=count,
+        net_revenue=Decimal(gross) - Decimal(returns),
+        return_rate_pct=Decimal(rate) if rate is not None else None,
+    )
+
+
+def test_high_return_rate_triggers_past_the_threshold():
+    summary = _returns_summary(gross="1000", returns="150", count=3, rate="15.0")
+    findings = evaluate_high_return_rate(summary)
+    assert len(findings) == 1
+    assert findings[0].type == "high_return_rate"
+    assert findings[0].severity == "warning"
+    assert findings[0].evidence["return_count"] == 3
+
+
+def test_high_return_rate_does_not_trigger_below_threshold():
+    summary = _returns_summary(gross="1000", returns="50", count=1, rate="5.0")
+    assert evaluate_high_return_rate(summary) == []
+
+
+def test_high_return_rate_does_not_trigger_with_no_gross_revenue():
+    summary = _returns_summary(gross="0", returns="0", count=0, rate=None)
+    assert evaluate_high_return_rate(summary) == []
 
 
 # --- low_gross_margin / incomplete_cost_data ----------------------------
@@ -121,6 +155,69 @@ def test_products_at_loss_flags_only_negative_gross_profit_rows():
     findings = evaluate_products_at_loss(rows)
     assert len(findings) == 1
     assert findings[0].evidence["product_id"] == str(_P1)
+
+
+# --- high_revenue_thin_margin ---------------------------------------------
+# Live-verified real gap: a user asked "Which products are hurting my
+# profitability even though they sell well?" and ORLA answered "I don't
+# have any profitability figures" — evaluate_products_at_loss only ever
+# catches an outright net loss, and rank_products_by_margin's top/bottom-
+# by-gross-profit slices can leave a strong-revenue, thin-but-positive-
+# margin product outside both windows entirely. This rule closes that gap
+# by re-ranking the full, unsliced product list by revenue instead.
+
+
+def test_thin_margin_high_revenue_flags_a_top_seller_well_below_the_business_average():
+    rows = [
+        # Sells the most by far, but its margin sits 15 points below the
+        # 30% business average — exactly the "sells well, thin margin" case.
+        ProductMarginRow(product_id=_P1, name="Best Seller", revenue=Decimal("5000"), gross_profit=Decimal("750"), gross_margin_pct=Decimal("15.0")),
+        # A normal, healthy-margin product — must not be flagged.
+        ProductMarginRow(product_id=_P2, name="Healthy Product", revenue=Decimal("200"), gross_profit=Decimal("60"), gross_margin_pct=Decimal("30.0")),
+    ]
+    findings = evaluate_thin_margin_high_revenue(rows, business_gross_margin_pct=Decimal("30.0"))
+    assert len(findings) == 1
+    assert findings[0].type == "high_revenue_thin_margin"
+    assert findings[0].evidence["product_id"] == str(_P1)
+    assert findings[0].evidence["business_gross_margin_pct"] == Decimal("30.0")
+
+
+def test_thin_margin_high_revenue_does_not_trigger_on_an_ordinary_margin_gap():
+    # 5 points below average is normal product-to-product variation, not
+    # a "meaningfully thin" margin — must not fire on noise.
+    rows = [ProductMarginRow(product_id=_P1, name="Fine", revenue=Decimal("1000"), gross_profit=Decimal("250"), gross_margin_pct=Decimal("25.0"))]
+    assert evaluate_thin_margin_high_revenue(rows, business_gross_margin_pct=Decimal("30.0")) == []
+
+
+def test_thin_margin_high_revenue_skips_a_product_already_caught_by_products_at_loss():
+    # A genuine net loss stays exclusively product_selling_at_loss's
+    # story — must not also show up here as a second, redundant finding.
+    rows = [ProductMarginRow(product_id=_P1, name="Loser", revenue=Decimal("1000"), gross_profit=Decimal("-50"), gross_margin_pct=Decimal("-5.0"))]
+    assert evaluate_thin_margin_high_revenue(rows, business_gross_margin_pct=Decimal("30.0")) == []
+
+
+def test_thin_margin_high_revenue_returns_nothing_without_a_business_margin_baseline():
+    # No cost data at all -> no baseline to compare against -> never guess.
+    rows = [ProductMarginRow(product_id=_P1, name="Widget", revenue=Decimal("1000"), gross_profit=Decimal("100"), gross_margin_pct=Decimal("10.0"))]
+    assert evaluate_thin_margin_high_revenue(rows, business_gross_margin_pct=None) == []
+
+
+def test_thin_margin_high_revenue_only_examines_the_top_n_by_revenue():
+    # A thin-margin product that isn't actually one of the top sellers by
+    # revenue isn't "selling well" — it's just a low-margin product, a
+    # different (already-covered) story. Five higher-revenue, healthy-
+    # margin products push it outside the top-5-by-revenue window.
+    higher_revenue_healthy = [
+        ProductMarginRow(product_id=uuid.uuid4(), name=f"Seller {i}", revenue=Decimal("1000"), gross_profit=Decimal("300"), gross_margin_pct=Decimal("30.0"))
+        for i in range(5)
+    ]
+    low_revenue_thin_margin = ProductMarginRow(
+        product_id=_P1, name="Low Revenue Thin Margin", revenue=Decimal("5"), gross_profit=Decimal("0.50"), gross_margin_pct=Decimal("10.0")
+    )
+    findings = evaluate_thin_margin_high_revenue(
+        [*higher_revenue_healthy, low_revenue_thin_margin], business_gross_margin_pct=Decimal("30.0")
+    )
+    assert findings == []
 
 
 # --- low_stock (the rule Stage C12 will reuse directly) ------------------

@@ -7,7 +7,7 @@ from app.api.deps import get_db
 from app.imports import r2_client
 from app.main import app
 from app.models import Base
-from tests.auth_helpers import bearer_header, patch_jwks
+from tests.auth_helpers import bearer_header, patch_jwks, seed_active_subscription
 
 _CSV_CONTENT = (
     "Order Date,Item Description,SKU,Qty,Unit Price\n"
@@ -28,6 +28,8 @@ _FULL_FIELD_MAPPING = {
     "cost_price_at_sale": None,
     "tax_amount": None,
     "order_reference": None,
+    "category": None,
+    "location": None,
 }
 
 
@@ -53,12 +55,20 @@ def client(tmp_path, monkeypatch):
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app)
+    test_client = TestClient(app)
+    test_client._engine = engine  # stashed so _create_business can seed an active subscription
+    yield test_client
     app.dependency_overrides.clear()
 
 
 def _create_business(client, headers, name):
-    return client.post("/businesses", json={"name": name}, headers=headers).json()
+    # Uploads/imports now require an active subscription
+    # (app/billing/access.py::require_active_subscription) — seeded here,
+    # bypassing Stripe entirely, since these tests are about tenant
+    # isolation, not billing state.
+    business = client.post("/businesses", json={"name": name}, headers=headers).json()
+    seed_active_subscription(client._engine, business["id"])
+    return business
 
 
 def _upload_and_mark_uploaded(client, headers, business_id, filename):

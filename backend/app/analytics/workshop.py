@@ -45,6 +45,20 @@ class WorkshopMarginResult:
     labour_cost_coverage_pct: Decimal | None
     # None when no repair has a known price to average.
     average_ticket: Decimal | None
+    # Margin computed net of tax, over only repairs where BOTH labour
+    # cost and tax are known (a stricter subset of
+    # labour_cost_known_revenue/gross_profit above) — mirrors
+    # financial.py's net_gross_profit/net_gross_margin_pct exactly, for
+    # the same reason: price_charged on a workshop invoice is very often
+    # tax-inclusive, so gross_margin_pct above can overstate true margin
+    # wherever tax data isn't known. None when no repair has both known.
+    net_gross_profit: Decimal | None = None
+    net_gross_margin_pct: Decimal | None = None
+    # labour_cost_known_revenue_with_known_tax / labour_cost_known_revenue,
+    # as a percentage — the completeness flag for net_gross_margin_pct,
+    # same role as financial.py's tax_data_coverage_pct. None when
+    # labour_cost_known_revenue is 0.
+    tax_data_coverage_pct: Decimal | None = None
 
 
 def compute_workshop_margin(totals: RepairPeriodTotals) -> WorkshopMarginResult:
@@ -68,6 +82,23 @@ def compute_workshop_margin(totals: RepairPeriodTotals) -> WorkshopMarginResult:
         else None
     )
 
+    net_revenue_with_known_tax = totals.labour_cost_known_revenue_with_known_tax - totals.tax_amount_known
+    net_gross_profit = (
+        net_revenue_with_known_tax - totals.labour_cost_for_known_tax
+        if totals.labour_cost_known_revenue_with_known_tax > 0
+        else None
+    )
+    net_gross_margin_pct = (
+        _quantize_pct(net_gross_profit / net_revenue_with_known_tax * 100)
+        if net_gross_profit is not None and net_revenue_with_known_tax > 0
+        else None
+    )
+    tax_data_coverage_pct = (
+        _quantize_pct(totals.labour_cost_known_revenue_with_known_tax / totals.labour_cost_known_revenue * 100)
+        if totals.labour_cost_known_revenue > 0
+        else None
+    )
+
     return WorkshopMarginResult(
         repair_count=totals.repair_count,
         revenue=_quantize_money(totals.revenue),
@@ -77,4 +108,7 @@ def compute_workshop_margin(totals: RepairPeriodTotals) -> WorkshopMarginResult:
         gross_margin_pct=gross_margin_pct,
         labour_cost_coverage_pct=labour_cost_coverage_pct,
         average_ticket=average_ticket,
+        net_gross_profit=_quantize_money(net_gross_profit) if net_gross_profit is not None else None,
+        net_gross_margin_pct=net_gross_margin_pct,
+        tax_data_coverage_pct=tax_data_coverage_pct,
     )

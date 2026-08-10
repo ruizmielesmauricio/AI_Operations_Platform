@@ -2,7 +2,10 @@ import uuid
 from decimal import Decimal
 
 from app.analytics.retail import (
+    StockCoverRow,
     build_stock_cover_report,
+    classify_movers,
+    compute_inventory_turnover,
     compute_inventory_value_at_cost,
     compute_sell_through_rate,
     compute_stock_cover_days,
@@ -125,3 +128,45 @@ def test_inventory_value_at_cost_sums_stock_times_cost_and_flags_missing_cost():
 
     assert result.value_at_cost == Decimal("200.00")  # only P1: 10 * 20.00; P3 excluded (0 stock)
     assert result.products_missing_cost == 1  # P2 has stock but no cost_price
+
+
+def _stock_cover_row(product_id, *, cover_days):
+    return StockCoverRow(
+        product_id=product_id,
+        name="Product",
+        stock_on_hand=10,
+        units_sold_in_period=1,
+        cover_days=Decimal(cover_days) if cover_days is not None else None,
+        revenue_in_period=Decimal("0"),
+    )
+
+
+def test_classify_movers_buckets_by_cover_days_boundary():
+    fast = _stock_cover_row(_P1, cover_days="14")  # exactly at the fast boundary — included
+    moderate = _stock_cover_row(_P2, cover_days="30")  # neither bucket
+    slow = _stock_cover_row(_P3, cover_days="60")  # exactly at the slow boundary — included
+
+    result = classify_movers([fast, moderate, slow])
+
+    assert [r.product_id for r in result.fast_movers] == [_P1]
+    assert [r.product_id for r in result.slow_movers] == [_P3]
+
+
+def test_classify_movers_excludes_unknown_cover_days():
+    # No recent sales at all (cover_days=None) is dead stock's territory,
+    # not "slow moving" — must not appear in either bucket.
+    unknown = _stock_cover_row(_P1, cover_days=None)
+
+    result = classify_movers([unknown])
+
+    assert result.fast_movers == []
+    assert result.slow_movers == []
+
+
+def test_inventory_turnover_divides_cogs_by_current_inventory_value():
+    assert compute_inventory_turnover(Decimal("600.00"), Decimal("200.00")) == Decimal("3.000")
+
+
+def test_inventory_turnover_is_none_when_no_inventory_value():
+    assert compute_inventory_turnover(Decimal("600.00"), Decimal("0")) is None
+    assert compute_inventory_turnover(Decimal("600.00"), Decimal("-5")) is None

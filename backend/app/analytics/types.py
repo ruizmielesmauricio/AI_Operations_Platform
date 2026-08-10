@@ -40,6 +40,29 @@ class ProductPeriodAggregate:
 
 
 @dataclass(frozen=True)
+class ProductPurchaseCostAggregate:
+    """One product's purchase activity within a date range, as summed from
+    inventory_movements (reason="purchase"). Feeds category/product
+    "expenses" (app/analytics/category.py) — deliberately separate from
+    ProductPeriodAggregate's cogs, which is cost of goods *sold*, not
+    purchased; these are two different figures by design (see
+    docs/governance/11_Development_Roadmap.md's category-breakdown entry).
+
+    quantity_received is every purchase row's quantity, regardless of
+    whether unit_cost is known (most purchase rows predate that column —
+    see InventoryMovement.unit_cost's own docstring). cost only sums rows
+    where unit_cost was captured; quantity_received_with_known_cost lets a
+    caller compute a completeness ratio (PR-3.5-style disclosure) rather
+    than silently understating expenses for a period with sparse cost data.
+    """
+
+    product_id: uuid.UUID
+    quantity_received: int
+    quantity_received_with_known_cost: int
+    cost: Decimal
+
+
+@dataclass(frozen=True)
 class RepairPeriodTotals:
     """Business-wide totals for completed repairs in a period, as summed
     from production_events — no per-product breakdown (a repair isn't tied
@@ -55,6 +78,14 @@ class RepairPeriodTotals:
     - labour_cost_known_revenue/labour_cost only count repairs where BOTH
       are known — margin is never computed against a price that has no
       matching labour cost to net against, or vice versa.
+
+    labour_cost_known_revenue_with_known_tax/tax_amount_known/
+    labour_cost_for_known_tax are a strict subset of the above — price
+    known AND labour cost known AND tax_amount known — the same role as
+    ProductPeriodAggregate's revenue_with_known_cost_and_tax/
+    tax_amount_known/cogs_for_known_tax, used to compute workshop margin
+    net of tax (app/analytics/workshop.py's net_gross_margin_pct) without
+    blending a tax-unknown repair into a "confirmed net" figure.
     """
 
     repair_count: int
@@ -63,3 +94,6 @@ class RepairPeriodTotals:
     repairs_with_known_price_and_labour: int
     labour_cost_known_revenue: Decimal
     labour_cost: Decimal
+    labour_cost_known_revenue_with_known_tax: Decimal = Decimal("0")
+    tax_amount_known: Decimal = Decimal("0")
+    labour_cost_for_known_tax: Decimal = Decimal("0")

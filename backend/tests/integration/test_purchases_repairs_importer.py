@@ -10,6 +10,7 @@ from app.imports.importer import run_import, undo_import
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
 from app.models.production_event import ProductionEvent
+from app.models.supplier import ProductSupplier, Supplier
 from app.repositories.import_mapping_profile import ImportMappingProfileRepository
 from app.repositories.import_record import ImportRecordRepository
 from app.repositories.inventory_movement import InventoryMovementRepository
@@ -431,6 +432,133 @@ def test_an_undone_stock_count_does_not_exclude_a_purchase(db_session, business_
     assert current_stock[chain_lube.id] == 50  # the undone count contributes nothing; only the purchase counts
 
 
+# --- supplier tracking (Gap 4) -------------------------------------------
+
+
+def test_purchase_import_auto_creates_a_supplier_when_mapped(db_session, business_id, _fake_r2):
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n"
+        "2026-01-05,Chain Lube,CL-100,50,4.75,Acme Parts Ltd\n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="purchases_supplier.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 1
+
+    supplier = db_session.scalar(select(Supplier).where(Supplier.business_id == business_id))
+    assert supplier is not None
+    assert supplier.name == "Acme Parts Ltd"
+
+    movement = db_session.scalar(select(InventoryMovement).where(InventoryMovement.business_id == business_id))
+    assert movement.supplier_id == supplier.id
+
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    link = db_session.scalar(
+        select(ProductSupplier).where(ProductSupplier.business_id == business_id, ProductSupplier.product_id == product.id)
+    )
+    assert link is not None
+    assert link.supplier_id == supplier.id
+
+
+def test_purchase_import_matches_an_existing_supplier_by_normalized_name(db_session, business_id, _fake_r2):
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = (
+        "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n"
+        "2026-01-05,Chain Lube,CL-100,25,4.75,Acme Parts Ltd\n"
+        "2026-01-06,Bar Tape,BT-200,10,2.00,  acme parts ltd  \n"
+    ).encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="purchases_supplier_match.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    suppliers = list(db_session.scalars(select(Supplier).where(Supplier.business_id == business_id)))
+    assert len(suppliers) == 1  # matched, not duplicated, despite different casing/whitespace
+
+
+def test_purchase_import_never_matches_a_supplier_across_businesses(db_session, business_id, _fake_r2):
+    from app.models.business import Business
+
+    other_business = Business(name="Other Business")
+    db_session.add(other_business)
+    db_session.commit()
+
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost", "Supplier"]
+    content = "Date,Product,SKU,Qty Received,Unit Cost,Supplier\n2026-01-05,Chain Lube,CL-100,50,4.75,Shared Name Co\n".encode()
+    field_mapping = {**_PURCHASE_FIELD_MAPPING, "supplier": "Supplier"}
+
+    upload_a, record_a = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="a.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload_a, record_a)
+
+    upload_b, record_b = _make_mapped_upload(
+        db_session, other_business.id, _fake_r2,
+        entity_type="purchases", header=header, content=content, filename="b.csv", field_mapping=field_mapping,
+    )
+    run_import(db_session, upload_b, record_b)
+
+    suppliers_a = list(db_session.scalars(select(Supplier).where(Supplier.business_id == business_id)))
+    suppliers_b = list(db_session.scalars(select(Supplier).where(Supplier.business_id == other_business.id)))
+    assert len(suppliers_a) == 1
+    assert len(suppliers_b) == 1
+    assert suppliers_a[0].id != suppliers_b[0].id  # same name, genuinely separate rows per business
+
+
+def test_purchase_import_without_a_supplier_column_leaves_supplier_unset(db_session, business_id, _fake_r2):
+    # The existing _PURCHASE_FIELD_MAPPING never maps "supplier" —
+    # confirms this remains a fully valid, unaffected import path.
+    upload, record = _make_purchase_upload(db_session, business_id, _fake_r2)
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    movements = list(db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)))
+    assert all(m.supplier_id is None for m in movements)
+    assert db_session.scalar(select(Supplier).where(Supplier.business_id == business_id)) is None
+
+
+def test_purchase_import_recalculates_thresholds_for_products_with_a_known_supplier_lead_time(
+    db_session, business_id, _fake_r2
+):
+    # A prior purchase already linked this product to a supplier with a
+    # known lead time (e.g. recorded manually on the Suppliers page) —
+    # this new upload's own recalculation pass should now apply a fresh,
+    # product-specific threshold instead of leaving it on the generic
+    # default, with no separate manual "Accept recommendation" click.
+    upload1, record1 = _make_purchase_upload(db_session, business_id, _fake_r2, filename="first.csv")
+    run_import(db_session, upload1, record1)
+    product = db_session.scalar(select(Product).where(Product.business_id == business_id, Product.sku == "CL-100"))
+    assert product.low_stock_threshold_days is None  # nothing to recalculate yet — no supplier lead time known
+
+    supplier = Supplier(business_id=business_id, name="Fast Co", normalized_name="fast co", status="active")
+    db_session.add(supplier)
+    db_session.flush()
+    db_session.add(
+        ProductSupplier(business_id=business_id, product_id=product.id, supplier_id=supplier.id, lead_time_days=Decimal("4"))
+    )
+    db_session.commit()
+
+    header = ["Date", "Product", "SKU", "Qty Received", "Unit Cost"]
+    content = "Date,Product,SKU,Qty Received,Unit Cost\n2026-01-06,Chain Lube,CL-100,10,4.75\n".encode()
+    upload2, record2 = _make_purchase_upload(db_session, business_id, _fake_r2, filename="second.csv", content=content)
+    run_import(db_session, upload2, record2)
+
+    refreshed = db_session.scalar(select(Product).where(Product.id == product.id))
+    assert refreshed.low_stock_threshold_days == Decimal("7.0")  # 4-day lead time + 3-day buffer
+
+
 # --- repairs ------------------------------------------------------------
 
 
@@ -456,6 +584,35 @@ def test_repair_import_creates_completed_production_events_with_no_stock_impact(
     # No InventoryMovement at all — repairs don't capture parts-consumed
     # detail in v1.
     assert db_session.scalars(select(InventoryMovement).where(InventoryMovement.business_id == business_id)).all() == []
+
+
+def test_repair_import_writes_tax_amount_when_mapped(db_session, business_id, _fake_r2):
+    # See app/analytics/workshop.py's net_gross_margin_pct fix — this
+    # proves the value makes it all the way from a mapped column through
+    # to the stored ProductionEvent row, not just the parsing layer
+    # already covered by tests/unit/test_purchases_repairs_validation.py.
+    header = ["Date", "Description", "Price Charged", "Labour Cost", "Tax"]
+    content = (
+        "Date,Description,Price Charged,Labour Cost,Tax\n"
+        "2026-01-05,Replaced brake pads,45.00,20.00,5.00\n"
+        "2026-01-06,Fixed a puncture,15.00,,\n"
+    ).encode()
+    field_mapping = {**_REPAIR_FIELD_MAPPING, "tax_amount": "Tax"}
+    upload, record = _make_mapped_upload(
+        db_session, business_id, _fake_r2,
+        entity_type="repairs", header=header, content=content, filename="repairs_tax.csv",
+        field_mapping=field_mapping,
+    )
+
+    result = run_import(db_session, upload, record)
+    assert result.rows_imported == 2
+
+    events = {
+        e.description: e
+        for e in db_session.scalars(select(ProductionEvent).where(ProductionEvent.business_id == business_id)).all()
+    }
+    assert events["Replaced brake pads"].tax_amount == Decimal("5.00")
+    assert events["Fixed a puncture"].tax_amount is None  # blank cell, never a rejection reason
 
 
 def test_repair_row_with_no_detail_is_rejected(db_session, business_id, _fake_r2):

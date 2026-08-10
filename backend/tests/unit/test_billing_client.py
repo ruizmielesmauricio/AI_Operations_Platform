@@ -67,6 +67,7 @@ def test_create_checkout_session_does_not_hardcode_payment_method_types(monkeypa
         business_email="owner@example.com",
         success_url="https://app.example.com/success",
         cancel_url="https://app.example.com/cancel",
+        price_id="price_test_123",
     )
 
     assert session.url == "https://checkout.stripe.com/test"
@@ -94,6 +95,7 @@ def test_create_checkout_session_reuses_an_existing_stripe_customer(monkeypatch)
         business_email="owner@example.com",
         success_url="https://app.example.com/success",
         cancel_url="https://app.example.com/cancel",
+        price_id="price_test_123",
         existing_stripe_customer_id="cus_existing",
     )
 

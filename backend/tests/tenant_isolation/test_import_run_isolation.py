@@ -7,7 +7,7 @@ from app.api.deps import get_db
 from app.imports import r2_client
 from app.main import app
 from app.models import Base
-from tests.auth_helpers import bearer_header, patch_jwks
+from tests.auth_helpers import bearer_header, patch_jwks, seed_active_subscription
 
 _CSV_CONTENT = (
     "Order Date,Item Description,SKU,Qty,Unit Price\n"
@@ -25,6 +25,8 @@ _FIELD_MAPPING = {
     "cost_price_at_sale": None,
     "tax_amount": None,
     "order_reference": None,
+    "category": None,
+    "location": None,
 }
 
 
@@ -51,12 +53,20 @@ def client(tmp_path, monkeypatch):
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app)
+    test_client = TestClient(app)
+    test_client._engine = engine  # stashed so _create_business can seed an active subscription
+    yield test_client
     app.dependency_overrides.clear()
 
 
 def _create_business(client, headers, name):
-    return client.post("/businesses", json={"name": name}, headers=headers).json()
+    # Uploads/imports now require an active subscription
+    # (app/billing/access.py::require_active_subscription) — seeded here,
+    # bypassing Stripe entirely, since these tests are about tenant
+    # isolation, not billing state.
+    business = client.post("/businesses", json={"name": name}, headers=headers).json()
+    seed_active_subscription(client._engine, business["id"])
+    return business
 
 
 def _upload_and_confirm(client, headers, business_id, filename):
@@ -139,6 +149,32 @@ def test_cannot_undo_another_business_s_import(client):
         f"/businesses/{business_b['id']}/import-records/{import_record_id}/undo", headers=headers_b
     )
     assert response.status_code == 404
+
+
+def test_running_import_is_blocked_once_the_subscription_is_no_longer_active(client):
+    # Confirms run_import has its own require_active_subscription gate,
+    # independent of the one on request_upload — subscribed through the
+    # whole upload/confirm-mapping flow, then the subscription lapses
+    # (a direct DB write, mirroring what a real Stripe cancellation
+    # webhook would do) before the actual import runs.
+    import uuid
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.subscription import Subscription
+
+    headers = bearer_header("user-a", "a@example.com")
+    business = _create_business(client, headers, "Shop A")
+    upload_id = _upload_and_confirm(client, headers, business["id"], "sales.csv")
+
+    session = sessionmaker(bind=client._engine, autoflush=False, expire_on_commit=False)()
+    subscription = session.query(Subscription).filter_by(business_id=uuid.UUID(business["id"])).one()
+    subscription.status = "canceled"
+    session.commit()
+    session.close()
+
+    response = client.post(f"/businesses/{business['id']}/uploads/{upload_id}/import", headers=headers)
+    assert response.status_code == 402
 
 
 def test_undo_via_api_reverses_the_import_and_rejects_a_second_undo(client):

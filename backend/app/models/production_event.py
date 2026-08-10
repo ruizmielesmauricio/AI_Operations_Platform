@@ -53,6 +53,13 @@ class ProductionEvent(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # Only meaningful for event_type="repair" — a production_batch's value
     # is realised later, when its output sells normally via a sale_item.
     price_charged: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+    # Mirrors SaleItem.tax_amount's exact shape and role: optional, only
+    # meaningful when price_charged is set, and only present when a
+    # workshop invoice export separates tax from the charged total. Lets
+    # app/analytics/workshop.py compute margin net of tax the same way
+    # app/analytics/financial.py already does for sales — see
+    # net_gross_margin_pct on both.
+    tax_amount: Mapped[object | None] = mapped_column(DECIMAL(12, 2), nullable=True)
     # Which import created this row, if any (nullable — a future real-time
     # entry screen won't have one). Mirrors Sale.import_record_id — undo
     # (app/imports/importer.py) uses this to find and remove exactly the

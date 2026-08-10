@@ -26,7 +26,7 @@ from app.analytics.retail import (
 )
 from app.models.business import Business
 from app.repositories.inventory_movement import InventoryMovementRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductCategoryRepository, ProductRepository
 from app.repositories.sale_item import SaleItemRepository
 
 _TOP_N = 5
@@ -51,6 +51,7 @@ def get_retail_operations(
     business_id: uuid.UUID,
     start_date: date | None = None,
     end_date: date | None = None,
+    category_id: uuid.UUID | None = None,
 ) -> RetailOperationsSummary:
     business = db.get(Business, business_id)
     if business is None:
@@ -59,9 +60,26 @@ def get_retail_operations(
     period = resolve_period(business.timezone, start_date, end_date)
 
     products = ProductRepository(db).list_for_business(business_id)
+    if category_id is not None:
+        # Constrains the product set *before* any of the existing
+        # formulas run — every downstream calculation (stock cover, dead
+        # stock, inventory value, sell-through) is reused completely
+        # unmodified, just over a smaller catalogue. A product's own
+        # sale/movement rows are never filtered by category directly
+        # (there's no category_id on those tables) — only which products
+        # are considered at all.
+        products = [p for p in products if p.category_id == category_id]
     products_by_id = {product.id: product.name for product in products}
     cost_price_by_product = {product.id: product.cost_price for product in products}
     product_ids = list(products_by_id.keys())
+
+    # Direct request: show each product's category beside its name in
+    # every product-row table, independent of whether a filter is active.
+    category_name_by_id = {c.id: c.name for c in ProductCategoryRepository(db).list_for_business(business_id)}
+    category_name_by_product = {
+        product.id: (category_name_by_id.get(product.category_id) if product.category_id else None)
+        for product in products
+    }
 
     stock_by_product = InventoryMovementRepository(db).sum_by_product_ids(business_id, product_ids)
     # A product with no movement row yet has 0 stock (per
@@ -72,12 +90,32 @@ def get_retail_operations(
         stock_by_product.setdefault(product_id, 0)
 
     aggregates = SaleItemRepository(db).aggregate_by_product_in_range(business_id, period.start, period.end)
+    if category_id is not None:
+        # aggregate_by_product_in_range has no category filter of its own
+        # (it doesn't join Product at all — see its own docstring) and
+        # returns every product business-wide; without this, an
+        # out-of-category product would still show up in
+        # top_sellers_by_units/revenue (falling back to "Unknown product"
+        # since it's absent from the already-filtered products_by_id
+        # above) and would inflate sell_through_rate's units-sold
+        # numerator against an already category-scoped stock denominator.
+        aggregates = [a for a in aggregates if a.product_id in products_by_id]
     aggregates_by_product = {a.product_id: a for a in aggregates}
 
-    top_sellers_by_units = rank_top_sellers_by_units(aggregates, products_by_id, top_n=_TOP_N)
-    top_sellers_by_revenue = rank_top_sellers_by_revenue(aggregates, products_by_id, top_n=_TOP_N)
-    stock_cover = build_stock_cover_report(aggregates_by_product, stock_by_product, products_by_id, period.days)
-    dead_stock = find_dead_stock(aggregates_by_product, stock_by_product, products_by_id, cost_price_by_product)
+    top_sellers_by_units = rank_top_sellers_by_units(
+        aggregates, products_by_id, top_n=_TOP_N, category_name_by_product=category_name_by_product
+    )
+    top_sellers_by_revenue = rank_top_sellers_by_revenue(
+        aggregates, products_by_id, top_n=_TOP_N, category_name_by_product=category_name_by_product
+    )
+    stock_cover = build_stock_cover_report(
+        aggregates_by_product, stock_by_product, products_by_id, period.days,
+        category_name_by_product=category_name_by_product,
+    )
+    dead_stock = find_dead_stock(
+        aggregates_by_product, stock_by_product, products_by_id, cost_price_by_product,
+        category_name_by_product=category_name_by_product,
+    )
     inventory_value = compute_inventory_value_at_cost(stock_by_product, cost_price_by_product)
 
     total_units_sold = sum(a.units_sold for a in aggregates)

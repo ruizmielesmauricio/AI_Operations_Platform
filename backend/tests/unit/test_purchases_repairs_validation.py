@@ -12,7 +12,9 @@ from app.imports.importer import (
 _PURCHASE_COLUMNS = {"purchase_date": 0, "product_name": 1, "sku": 2, "quantity_received": 3, "unit_cost": 4}
 _REPAIR_COLUMNS = {"repair_date": 0, "description": 1, "price_charged": 2, "labour_cost": 3}
 _PURCHASE_COLUMNS_WITH_REF = {**_PURCHASE_COLUMNS, "purchase_reference": 5}
+_PURCHASE_COLUMNS_WITH_SUPPLIER = {**_PURCHASE_COLUMNS, "supplier": 5}
 _REPAIR_COLUMNS_WITH_REF = {**_REPAIR_COLUMNS, "repair_reference": 4}
+_REPAIR_COLUMNS_WITH_TAX = {**_REPAIR_COLUMNS, "tax_amount": 4}
 
 
 def _parse_purchase(row, columns=_PURCHASE_COLUMNS, row_number=1):
@@ -98,6 +100,30 @@ def test_purchase_row_blank_reference_is_accepted_as_none():
     assert result.reference is None
 
 
+def test_purchase_row_without_a_supplier_column_is_accepted():
+    # Never a rejection reason on its own — "unknown supplier" is a
+    # normal, expected state, same as no category mapped.
+    result = _parse_purchase(["2026-01-05", "Chain Lube", "CL-100", "50", "4.75"])
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.supplier_name is None
+
+
+def test_purchase_row_supplier_parses_when_mapped():
+    result = _parse_purchase(
+        ["2026-01-05", "Chain Lube", "CL-100", "50", "4.75", "Acme Parts Ltd"], columns=_PURCHASE_COLUMNS_WITH_SUPPLIER
+    )
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.supplier_name == "Acme Parts Ltd"
+
+
+def test_purchase_row_blank_supplier_is_accepted_as_none():
+    result = _parse_purchase(
+        ["2026-01-05", "Chain Lube", "CL-100", "50", "4.75", ""], columns=_PURCHASE_COLUMNS_WITH_SUPPLIER
+    )
+    assert isinstance(result, ParsedPurchaseRow)
+    assert result.supplier_name is None
+
+
 # --- repairs ----------------------------------------------------------
 
 
@@ -148,3 +174,26 @@ def test_repair_row_reference_parses_when_mapped():
     )
     assert isinstance(result, ParsedRepairRow)
     assert result.reference == "JOB-9"
+
+
+def test_repair_row_without_a_tax_column_is_accepted():
+    # Never a rejection reason on its own, same as purchase/repair reference.
+    result = _parse_repair(["2026-01-05", "Replaced brake pads", "45.00", "20.00"])
+    assert isinstance(result, ParsedRepairRow)
+    assert result.tax_amount is None
+
+
+def test_repair_row_tax_amount_parses_when_mapped():
+    result = _parse_repair(
+        ["2026-01-05", "Replaced brake pads", "45.00", "20.00", "5.00"], columns=_REPAIR_COLUMNS_WITH_TAX
+    )
+    assert isinstance(result, ParsedRepairRow)
+    assert result.tax_amount == Decimal("5.00")
+
+
+def test_repair_row_blank_tax_amount_is_accepted_as_none():
+    result = _parse_repair(
+        ["2026-01-05", "Replaced brake pads", "45.00", "20.00", ""], columns=_REPAIR_COLUMNS_WITH_TAX
+    )
+    assert isinstance(result, ParsedRepairRow)
+    assert result.tax_amount is None

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api/client";
+import { ApiError, apiGet, apiPost } from "@/lib/api/client";
+import { redirectToCheckout } from "@/lib/billing";
 import { AppNav } from "@/components/AppNav";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -11,6 +12,7 @@ import type {
   ImportRunResponse,
   ImportUndoResponse,
   RejectionSummary,
+  SubscriptionStatus,
   Upload,
   UploadFreshnessEntry,
 } from "@/types";
@@ -34,7 +36,16 @@ const ENTITY_TYPES = [
 ];
 
 // Keyed by entity_type — order matters within each: it's the order fields
-// are asked about on the confirmation screen (PR-2.4).
+// are asked about on the confirmation screen (PR-2.4). Must list exactly
+// the same fields as backend/app/imports/aliases.py::CANONICAL_FIELDS for
+// each entity type — confirm-mapping rejects anything else outright
+// (app/imports/service.py::confirm_mapping requires an exact key-set
+// match). "category" was missing here entirely (added to CANONICAL_FIELDS
+// for sales/inventory/purchases as part of the product-categories feature,
+// never mirrored to this list) — every sales/inventory/purchases mapping
+// confirmation was silently guaranteed to fail with "must include exactly
+// the canonical fields," regardless of how correct the visible mapping
+// looked, until this was caught and fixed.
 const FIELD_ORDER: Record<string, string[]> = {
   sales: [
     "sale_date",
@@ -46,10 +57,22 @@ const FIELD_ORDER: Record<string, string[]> = {
     "cost_price_at_sale",
     "tax_amount",
     "order_reference",
+    "category",
+    "location",
   ],
-  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "as_of_date"],
-  purchases: ["purchase_date", "product_name", "sku", "quantity_received", "unit_cost", "purchase_reference"],
-  repairs: ["repair_date", "description", "price_charged", "labour_cost", "repair_reference"],
+  inventory: ["product_name", "sku", "quantity_on_hand", "unit_cost", "category", "location", "as_of_date"],
+  purchases: [
+    "purchase_date",
+    "product_name",
+    "sku",
+    "quantity_received",
+    "unit_cost",
+    "purchase_reference",
+    "category",
+    "supplier",
+    "location",
+  ],
+  repairs: ["repair_date", "description", "price_charged", "labour_cost", "tax_amount", "repair_reference", "location"],
 };
 
 const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -63,12 +86,16 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     cost_price_at_sale: "Which column is your cost for this item? (optional)",
     tax_amount: "Which column is the tax/VAT amount? (optional)",
     order_reference: "Which column is the order or receipt number? (optional — groups multiple rows into one sale)",
+    category: "Which column is the product category or department? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
   inventory: {
     product_name: "Which column is the product name? (optional if SKU is set)",
     sku: "Which column is the SKU or product code? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
     unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
+    category: "Which column is the product category or department? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
     as_of_date: "Which column is the date this count was taken? (optional)",
   },
   purchases: {
@@ -78,13 +105,18 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     quantity_received: "Which column is the quantity received?",
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
     purchase_reference: "Which column is the PO or invoice number? (optional)",
+    category: "Which column is the product category or department? (optional)",
+    supplier: "Which column is the supplier or vendor name? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
   repairs: {
     repair_date: "Which column is the repair date?",
     description: "Which column describes the work performed? (optional if price or labour cost is set)",
     price_charged: "Which column is the price charged to the customer? (optional)",
     labour_cost: "Which column is your labour cost for this job? (optional)",
+    tax_amount: "Which column is the tax/VAT amount? (optional)",
     repair_reference: "Which column is the job or invoice number? (optional)",
+    location: "Which column is the store, branch, or location? (optional)",
   },
 };
 
@@ -92,6 +124,15 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
 // (see the .hint CSS class) — kept separate from FIELD_LABELS above so
 // the primary question stays short and scannable. Only fields where the
 // short question alone leaves real ambiguity get one.
+// Shared across all four entity types — only map this if every row in the
+// file is genuinely from one location. If it has more than one value,
+// confirm-mapping blocks with a prompt to add a branch instead
+// (app/imports/service.py::confirm_mapping, BD-007).
+const LOCATION_HINT =
+  "Only map this if your export includes it. If this column has more than one value, we'll ask you to " +
+  "confirm this file is really all one location before importing — each additional location is billed " +
+  "separately as its own branch.";
+
 const FIELD_HINTS: Record<string, Record<string, string>> = {
   sales: {
     unit_price: "What the customer paid for one item — before tax, if your file has a separate tax column.",
@@ -103,20 +144,37 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
     tax_amount: "The tax/VAT charged to the customer, included in your total — lets margin be calculated net of tax.",
     order_reference:
       "Prevents accidentally importing the same order twice if you re-upload a file that overlaps an earlier one.",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
+    location: LOCATION_HINT,
   },
   inventory: {
     as_of_date:
       "Most stock-count exports don't have this — leave it blank and we'll use today's date. Only map it if " +
       "your file states the date the count was actually taken (e.g. an overnight export dated for the day before).",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
+    location: LOCATION_HINT,
   },
   purchases: {
     purchase_reference:
       "Prevents accidentally importing the same purchase twice if you re-upload a file that overlaps an earlier one.",
+    category:
+      "Matched against your existing product categories by name, or created if it's new — powers the Category " +
+      "Breakdown report and per-category dashboard filters.",
+    supplier:
+      "Matched against your existing suppliers by name, or created if it's new — powers the Suppliers page's " +
+      "spend breakdown and stock-recommendation lead times.",
+    location: LOCATION_HINT,
   },
   repairs: {
     labour_cost: "What the job cost YOU in labour — not what you charged the customer.",
+    tax_amount: "The tax/VAT charged to the customer, included in the price charged — lets margin be calculated net of tax.",
     repair_reference:
       "Prevents accidentally importing the same repair twice if you re-upload a file that overlaps an earlier one.",
+    location: LOCATION_HINT,
   },
 };
 
@@ -125,6 +183,17 @@ const NOT_PRESENT = "";
 export default function UploadsPage() {
   const { session, checkingSession } = useRequireSession();
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
+  // Uploads/imports 402 without an active subscription (require_active_
+  // subscription) — a business pending payment (unsubscribed, or a branch
+  // that never finished Checkout) used to still appear as a normal,
+  // selectable option in the dropdown below, which looked like a real
+  // choice even though nothing there could ever succeed. Fetched here
+  // rather than in useBusinessSelector itself, since dashboard/reports
+  // deliberately keep showing every business, subscribed or not — only
+  // this page's "which business can I actually upload into" question
+  // needs filtering.
+  const [subscriptions, setSubscriptions] = useState<Record<string, SubscriptionStatus>>({});
+  const [subscriptionsLoaded, setSubscriptionsLoaded] = useState(false);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [freshness, setFreshness] = useState<UploadFreshnessEntry[]>([]);
   const [entityType, setEntityType] = useState(ENTITY_TYPES[0].value);
@@ -132,6 +201,13 @@ export default function UploadsPage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Set on a 402 from either request_upload or run_import
+  // (app/billing/access.py::require_active_subscription) — a distinct
+  // banner with a real Subscribe action, not just another string in
+  // `error`, since "the subscription lapsed" is a whole-business state
+  // that deserves a fix, not just a retry.
+  const [subscriptionRequired, setSubscriptionRequired] = useState(false);
+  const [subscribing, setSubscribing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The upload currently going through mapping confirmation, if any.
@@ -150,6 +226,12 @@ export default function UploadsPage() {
   // to confirm-mapping once the user gets there.
   const [previewRows, setPreviewRows] = useState<string[][] | null>(null);
   const [chosenHeaderRowIndex, setChosenHeaderRowIndex] = useState<number | null>(null);
+
+  // Set when confirm-mapping comes back "needs_location_confirmation"
+  // (BD-007 anti-bypass check) — the distinct location values it found in
+  // the mapped location column. Rendered as a block-with-override prompt
+  // instead of silently saving the mapping.
+  const [locationWarning, setLocationWarning] = useState<string[] | null>(null);
 
   // Per-upload so running/undoing one row's import doesn't disable another's.
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
@@ -175,6 +257,41 @@ export default function UploadsPage() {
     }
   }, [businessId, loadUploads, loadFreshness]);
 
+  // Fetched together (Promise.all, not the per-business fire-and-forget
+  // pattern used elsewhere) specifically so `subscriptionsLoaded` flips
+  // once, not once per business — filtering the dropdown before every
+  // response is back would otherwise flash "no subscribed shop" for
+  // businesses that are actually fine.
+  useEffect(() => {
+    if (businesses.length === 0) return;
+    setSubscriptionsLoaded(false);
+    Promise.all(
+      businesses.map((b) =>
+        apiGet<SubscriptionStatus>(`/businesses/${b.id}/billing/subscription`)
+          .then((s) => [b.id, s] as const)
+          .catch(() => [b.id, { status: null, current_period_end: null }] as const)
+      )
+    ).then((entries) => {
+      setSubscriptions(Object.fromEntries(entries));
+      setSubscriptionsLoaded(true);
+    });
+  }, [businesses]);
+
+  const subscribedBusinesses = businesses.filter((b) => subscriptions[b.id]?.status === "active");
+
+  // Once subscriptions are known, a selection that isn't actually
+  // subscribed — the default-to-first-business pick from
+  // useBusinessSelector landed on an unsubscribed shop, or a stale
+  // ?business= link points at one pending payment — is corrected to the
+  // first subscribed business instead of silently staying on a dead end.
+  useEffect(() => {
+    if (!subscriptionsLoaded || subscribedBusinesses.length === 0) return;
+    if (!subscribedBusinesses.some((b) => b.id === businessId)) {
+      setBusinessId(subscribedBusinesses[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriptionsLoaded, subscribedBusinesses, businessId]);
+
   function sampleValuesFor(column: string): string[] {
     if (!detection) return [];
     for (const candidates of Object.values(detection.field_candidates)) {
@@ -197,6 +314,7 @@ export default function UploadsPage() {
 
   async function startMapping(uploadId: string, uploadEntityType: string, headerRowIndex?: number) {
     setMappingError(null);
+    setLocationWarning(null);
     setMappingEntityType(uploadEntityType);
     try {
       const body = headerRowIndex === undefined ? {} : { header_row_index: headerRowIndex };
@@ -227,8 +345,10 @@ export default function UploadsPage() {
           FIELD_ORDER[uploadEntityType].map((field) => [field, result.suggested_mapping[field] ?? NOT_PRESENT])
         )
       );
-    } catch {
-      setMappingError("Could not read this file's columns. Is the backend running?");
+    } catch (err) {
+      setMappingError(
+        err instanceof ApiError ? err.message : "Could not read this file's columns. Is the backend running?"
+      );
     }
   }
 
@@ -236,8 +356,10 @@ export default function UploadsPage() {
     if (mappingUploadId) startMapping(mappingUploadId, mappingEntityType, rowIndex);
   }
 
-  async function handleConfirmMapping(e: React.FormEvent) {
-    e.preventDefault();
+  // Shared by the normal submit and the "yes, this really is one location"
+  // override button — only the confirm_multiple_locations flag differs
+  // between the two (app/imports/service.py::confirm_mapping, BD-007).
+  async function submitMapping(confirmMultipleLocations: boolean) {
     if (!mappingUploadId) return;
     setConfirming(true);
     setMappingError(null);
@@ -245,21 +367,54 @@ export default function UploadsPage() {
       const fieldValues = Object.fromEntries(
         FIELD_ORDER[mappingEntityType].map((field) => [field, fieldMapping[field] || null])
       );
-      await apiPost<ConfirmMappingResponse>(
+      const result = await apiPost<ConfirmMappingResponse>(
         `/businesses/${businessId}/uploads/${mappingUploadId}/confirm-mapping`,
-        { field_mapping: fieldValues, header_row_index: chosenHeaderRowIndex }
+        {
+          field_mapping: fieldValues,
+          header_row_index: chosenHeaderRowIndex,
+          confirm_multiple_locations: confirmMultipleLocations,
+        }
       );
+      if (result.status === "needs_location_confirmation") {
+        // Deliberately does not clear mappingUploadId/detection — the form
+        // stays open so the user can either fix the mapping (e.g. unmap
+        // location) or use the override button rendered below it.
+        setLocationWarning(result.locations ?? []);
+        return;
+      }
+      setLocationWarning(null);
       setNotice("Mapping saved.");
       setMappingUploadId(null);
       setDetection(null);
       setPreviewRows(null);
       setChosenHeaderRowIndex(null);
       loadUploads(businessId);
-    } catch {
-      setMappingError("Could not save this mapping — check that the required fields are mapped.");
+    } catch (err) {
+      // Previously always this one guessed string regardless of the real
+      // cause — the backend already returns a specific, accurate detail
+      // per failure (missing required fields, a stale/renamed column, the
+      // upload already imported, ...); swallowing it here made every
+      // failure look like the same "check your mapping" issue even when
+      // it wasn't, which is exactly what made a genuinely-correct mapping
+      // impossible to debug from this message alone.
+      setLocationWarning(null);
+      setMappingError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not save this mapping — check that the required fields are mapped."
+      );
     } finally {
       setConfirming(false);
     }
+  }
+
+  async function handleConfirmMapping(e: React.FormEvent) {
+    e.preventDefault();
+    await submitMapping(false);
+  }
+
+  async function handleConfirmMultipleLocationsOverride() {
+    await submitMapping(true);
   }
 
   async function handleRunImport(uploadId: string) {
@@ -269,11 +424,15 @@ export default function UploadsPage() {
       await apiPost<ImportRunResponse>(`/businesses/${businessId}/uploads/${uploadId}/import`, {});
       loadUploads(businessId);
       loadFreshness(businessId);
-    } catch {
-      setActionErrors((prev) => ({
-        ...prev,
-        [uploadId]: "Could not run the import. Try again, or check the file hasn't changed.",
-      }));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        setSubscriptionRequired(true);
+      } else {
+        setActionErrors((prev) => ({
+          ...prev,
+          [uploadId]: "Could not run the import. Try again, or check the file hasn't changed.",
+        }));
+      }
     } finally {
       setRunningUploadId(null);
     }
@@ -289,8 +448,11 @@ export default function UploadsPage() {
       );
       loadUploads(businessId);
       loadFreshness(businessId);
-    } catch {
-      setActionErrors((prev) => ({ ...prev, [importRecordId]: "Could not undo this import." }));
+    } catch (err) {
+      setActionErrors((prev) => ({
+        ...prev,
+        [importRecordId]: err instanceof ApiError ? err.message : "Could not undo this import.",
+      }));
     } finally {
       setUndoingRecordId(null);
     }
@@ -323,10 +485,25 @@ export default function UploadsPage() {
       if (fileInputRef.current) fileInputRef.current.value = "";
       loadUploads(businessId);
       await startMapping(id, entityType);
-    } catch {
-      setError("Upload failed. Make sure the file is a CSV, XLS, or XLSX export.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        setSubscriptionRequired(true);
+      } else {
+        setError("Upload failed. Make sure the file is a CSV, XLS, or XLSX export.");
+      }
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleSubscribeClick() {
+    if (!businessId) return;
+    setSubscribing(true);
+    try {
+      await redirectToCheckout(businessId);
+    } catch {
+      setSubscribing(false);
+      setError("Could not start checkout. Try again shortly.");
     }
   }
 
@@ -357,10 +534,36 @@ export default function UploadsPage() {
     );
   }
 
+  if (subscriptionsLoaded && subscribedBusinesses.length === 0) {
+    // Every business on the account exists but none has an active
+    // subscription — the dropdown below only ever offers subscribed
+    // shops, so rather than render it empty, name the real reason
+    // directly and point at the one place to fix it.
+    return (
+      <main>
+        <AppNav businessId={businessId} />
+        <h1>Upload data</h1>
+        <p>
+          None of your shops has an active subscription yet, so there&apos;s nothing to upload into —{" "}
+          <a href="/onboarding">subscribe from Onboarding</a> to start uploading.
+        </p>
+      </main>
+    );
+  }
+
   return (
     <main>
       <AppNav businessId={businessId} />
       <h1>Upload data</h1>
+
+      {subscriptionRequired && (
+        <p className="status-error">
+          This shop&apos;s subscription isn&apos;t active, so uploads and imports are paused.{" "}
+          <button type="button" disabled={subscribing} onClick={handleSubscribeClick}>
+            {subscribing ? "Starting…" : "Subscribe"}
+          </button>
+        </p>
+      )}
 
       {freshness.length > 0 && (
         <ul>
@@ -375,12 +578,17 @@ export default function UploadsPage() {
         </ul>
       )}
 
-      {businesses.length > 1 && (
+      {subscribedBusinesses.length > 1 && (
         <div>
           <label htmlFor="business">Business</label>
           <br />
+          {/* Only subscribed shops are offered here — a shop pending
+              payment (unsubscribed, or a branch that never finished
+              Checkout) would 402 on every upload attempt regardless, so
+              listing it as a normal, selectable option only invited
+              picking a dead end. */}
           <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
-            {businesses.map((b) => (
+            {subscribedBusinesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
@@ -495,6 +703,22 @@ export default function UploadsPage() {
           })}
           {detection.unmapped_columns.length > 0 && (
             <p>Not used: {detection.unmapped_columns.join(", ")}</p>
+          )}
+          {locationWarning && (
+            <div className="status-warn">
+              <p>
+                This file looks like it has data from more than one location: {locationWarning.join(", ")}.
+                Each additional location is billed separately as its own branch (€30/month) — uploading
+                combined data into a single shop instead isn&apos;t supported.
+              </p>
+              <p>
+                <a href="/onboarding">Add a branch</a> for the other location, or if this really is all one
+                location — e.g. the column just repeats your shop&apos;s own name or code — confirm below.
+              </p>
+              <button type="button" disabled={confirming} onClick={handleConfirmMultipleLocationsOverride}>
+                {confirming ? "Confirming…" : "Yes, this is genuinely one location"}
+              </button>
+            </div>
           )}
           {mappingError && <p className="status-error">{mappingError}</p>}
           <button type="submit" disabled={confirming}>

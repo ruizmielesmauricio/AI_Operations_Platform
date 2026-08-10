@@ -1,6 +1,7 @@
 from datetime import date
+from decimal import Decimal
 
-from sqlalchemy import Date, ForeignKey, Integer, String, Uuid
+from sqlalchemy import DECIMAL, Date, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PKMixin, TenantScopedMixin, TimestampMixin
@@ -83,3 +84,30 @@ class InventoryMovement(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # anchors to; quantity_delta on an adjustment row stays purely
     # informational (how big the correction was) once this is set.
     resulting_quantity_on_hand: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Only ever set for reason="purchase" rows — the per-unit cost this
+    # specific purchase was made at, captured from the same optional
+    # unit_cost upload field that (also) overwrites Product.cost_price on
+    # sight. Mirrors sale_items.cost_price_at_sale's exact role: a
+    # historical, per-transaction snapshot, not derived from whatever
+    # Product.cost_price happens to be *now* — Product.cost_price is a
+    # single "current price" value, silently overwritten on every later
+    # purchase/inventory upload, so it cannot answer "what did we pay for
+    # this in period X" once the price has since changed. Feeds
+    # InventoryMovementRepository.aggregate_purchase_cost_by_product_in_range
+    # (category/product "expenses"). NULL on every row written before
+    # this column existed — no retroactive backfill possible, the data
+    # was never captured.
+    unit_cost: Mapped[Decimal | None] = mapped_column(DECIMAL(12, 2), nullable=True)
+
+    # Only ever set for reason="purchase" rows — which supplier this
+    # specific batch was bought from, captured from the purchases
+    # upload's optional supplier column (match-or-create, mirrors
+    # category's exact pattern). A per-transaction snapshot, not a
+    # product-level default, since the same product can legitimately be
+    # sourced from different suppliers over time — see
+    # app/models/supplier.py::ProductSupplier for the aggregate
+    # product<->supplier relationship this feeds.
+    supplier_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("suppliers.id"), nullable=True, index=True
+    )

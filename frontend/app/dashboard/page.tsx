@@ -1,26 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { EChartsOption } from "echarts";
-import { apiGet } from "@/lib/api/client";
+import { ApiError, apiGet } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
+import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
+import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass, workshopMarginDisplay } from "@/lib/format";
+import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
+import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type {
   Alert,
-  DailyForecast,
   DeadStockRow,
-  Finding,
   Findings,
   FinancialPerformance,
   Forecast,
+  ProductCategory,
   ProductDemandForecast,
   ProductMarginRow,
   ProductSalesRow,
-  Recommendation,
   RetailOperations,
-  StockCoverRow,
   WorkshopPerformance,
 } from "@/types";
 
@@ -28,11 +28,11 @@ import type {
 // a fetched "Business Knowledge" definitions API doesn't exist yet.
 const DEFINITIONS: Record<string, string> = {
   revenue: "Total sales recorded in the selected period.",
+  returns: "Sales rows with a negative quantity — returns/refunds — are counted as returns, not sales, and already netted out of revenue.",
   grossMargin: "Revenue minus the cost of goods sold, as a percentage of revenue with a known cost.",
   costCoverage: "Share of revenue where a cost price was actually recorded — margin below this is only an estimate.",
   taxCoverage: "Share of cost-known revenue that also has a confirmed tax figure, letting margin be computed net of tax rather than assumed.",
   stockCover: "How many days of stock are left at the recent sales rate. Blank means not enough recent sales to estimate.",
-  deadStock: "Products with stock on hand but zero sales in the selected period.",
   sellThrough: "Units sold divided by units sold plus stock still on hand — an approximation, not an exact sell-through rate.",
   workshopMargin: "Price charged minus labour cost. Parts cost isn't tracked yet, so this understates true repair cost.",
   revenueForecast:
@@ -49,6 +49,15 @@ export default function DashboardPage() {
 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  // Direct request: combine every section across this business's whole
+  // standalone-shop-plus-branches group into one view. Only offered when
+  // there's more than one business at all — the one-shop-per-account
+  // limit guarantees `businesses` here IS exactly that group already (no
+  // separate "which businesses form a group" question to ask). Backend
+  // additionally requires every business in the group to share one
+  // timezone (app/application/business_group.py) — surfaced as a plain
+  // 409 error below, not silently worked around.
+  const [allBranches, setAllBranches] = useState(false);
 
   const [financial, setFinancial] = useState<FinancialPerformance | null>(null);
   const [retail, setRetail] = useState<RetailOperations | null>(null);
@@ -59,43 +68,87 @@ export default function DashboardPage() {
   const [horizonDays, setHorizonDays] = useState(7);
   const [errors, setErrors] = useState<Partial<Record<SectionKey, string>>>({});
 
+  // One dropdown per relevant section (not a shared/global control), per
+  // direct instruction. Workshop Performance has no category filter —
+  // repairs have no product link at all. Forecast's per-product table and
+  // Findings' per-product rules are both filterable too; Forecast's own
+  // revenue-forecast figure and Findings' whole-business rules
+  // (revenue decline, low margin, incomplete cost data, high return
+  // rate) stay unfiltered regardless — see their own backend comments.
+  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [financialCategoryId, setFinancialCategoryId] = useState("");
+  const [retailCategoryId, setRetailCategoryId] = useState("");
+  const [findingsCategoryId, setFindingsCategoryId] = useState("");
+  const [forecastCategoryId, setForecastCategoryId] = useState("");
+
   useEffect(() => {
     if (!businessId) return;
-    const qs = periodQuery(startDate, endDate);
+    apiGet<ProductCategory[]>(`/businesses/${businessId}/product-categories`)
+      .then(setCategories)
+      .catch(() => setCategories([]));
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) return;
     setErrors({});
 
-    apiGet<FinancialPerformance>(`/businesses/${businessId}/analytics/financial-performance${qs}`)
+    apiGet<FinancialPerformance>(
+      `/businesses/${businessId}/analytics/financial-performance${periodQuery(startDate, endDate, financialCategoryId, allBranches)}`
+    )
       .then(setFinancial)
-      .catch(() => setErrors((prev) => ({ ...prev, financial: "Could not load financial performance." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, financial: sectionErrorMessage(err, "Could not load financial performance.") }))
+      );
 
-    apiGet<RetailOperations>(`/businesses/${businessId}/analytics/retail-operations${qs}`)
+    apiGet<RetailOperations>(
+      `/businesses/${businessId}/analytics/retail-operations${periodQuery(startDate, endDate, retailCategoryId, allBranches)}`
+    )
       .then(setRetail)
-      .catch(() => setErrors((prev) => ({ ...prev, retail: "Could not load retail operations." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, retail: sectionErrorMessage(err, "Could not load retail operations.") }))
+      );
 
-    apiGet<WorkshopPerformance>(`/businesses/${businessId}/analytics/workshop-performance${qs}`)
+    apiGet<WorkshopPerformance>(
+      `/businesses/${businessId}/analytics/workshop-performance${periodQuery(startDate, endDate, undefined, allBranches)}`
+    )
       .then(setWorkshop)
-      .catch(() => setErrors((prev) => ({ ...prev, workshop: "Could not load workshop performance." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, workshop: sectionErrorMessage(err, "Could not load workshop performance.") }))
+      );
 
-    apiGet<Findings>(`/businesses/${businessId}/analytics/findings${qs}`)
+    apiGet<Findings>(
+      `/businesses/${businessId}/analytics/findings${periodQuery(startDate, endDate, findingsCategoryId, allBranches)}`
+    )
       .then(setFindings)
-      .catch(() => setErrors((prev) => ({ ...prev, findings: "Could not load findings." })));
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, findings: sectionErrorMessage(err, "Could not load findings.") }))
+      );
 
     // Alerts aren't period-scoped (they're the current active set), unlike
-    // the four analytics endpoints above.
+    // the four analytics endpoints above — and not combined across
+    // branches either: an alert is already tied to one business's own
+    // stock, so "all branches" has no extra meaning for it here.
     apiGet<Alert[]>(`/businesses/${businessId}/alerts`)
       .then(setAlerts)
       .catch(() => setErrors((prev) => ({ ...prev, alerts: "Could not load alerts." })));
-  }, [businessId, startDate, endDate]);
+  }, [businessId, startDate, endDate, financialCategoryId, retailCategoryId, findingsCategoryId, allBranches]);
 
   // Forecast is forward-looking from "today," not the start/end period
-  // filter above — it depends only on the chosen horizon.
+  // filter above — it depends only on the chosen horizon (plus category,
+  // which only scopes the per-product table, not the horizon).
   useEffect(() => {
     if (!businessId) return;
     setErrors((prev) => ({ ...prev, forecast: undefined }));
-    apiGet<Forecast>(`/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}`)
+    const categoryQs = forecastCategoryId ? `&category_id=${forecastCategoryId}` : "";
+    const allBranchesQs = allBranches ? "&all_branches=true" : "";
+    apiGet<Forecast>(
+      `/businesses/${businessId}/analytics/forecast?horizon_days=${horizonDays}${categoryQs}${allBranchesQs}`
+    )
       .then(setForecast)
-      .catch(() => setErrors((prev) => ({ ...prev, forecast: "Could not load forecast." })));
-  }, [businessId, horizonDays]);
+      .catch((err) =>
+        setErrors((prev) => ({ ...prev, forecast: sectionErrorMessage(err, "Could not load forecast.") }))
+      );
+  }, [businessId, horizonDays, forecastCategoryId, allBranches]);
 
   if (checkingSession) {
     return (
@@ -133,13 +186,27 @@ export default function DashboardPage() {
         <div>
           <label htmlFor="business">Business</label>
           <br />
-          <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
+          <select
+            id="business"
+            value={businessId}
+            onChange={(e) => setBusinessId(e.target.value)}
+            disabled={allBranches}
+          >
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
             ))}
-          </select>
+          </select>{" "}
+          <label htmlFor="all-branches">
+            <input
+              id="all-branches"
+              type="checkbox"
+              checked={allBranches}
+              onChange={(e) => setAllBranches(e.target.checked)}
+            />{" "}
+            Combine all branches into one view
+          </label>
         </div>
       )}
 
@@ -161,11 +228,38 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <FinancialSection data={financial} error={errors.financial} />
-      <RetailSection data={retail} error={errors.retail} />
-      <WorkshopSection data={workshop} error={errors.workshop} />
-      <ForecastSection data={forecast} error={errors.forecast} horizonDays={horizonDays} setHorizonDays={setHorizonDays} />
-      <FindingsSection data={findings} error={errors.findings} />
+      <FinancialSection
+        data={financial}
+        error={errors.financial}
+        categories={categories}
+        categoryId={financialCategoryId}
+        setCategoryId={setFinancialCategoryId}
+      />
+      <RetailSection
+        data={retail}
+        error={errors.retail}
+        categories={categories}
+        categoryId={retailCategoryId}
+        setCategoryId={setRetailCategoryId}
+        businessId={businessId}
+      />
+      <WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} />
+      <ForecastSection
+        data={forecast}
+        error={errors.forecast}
+        horizonDays={horizonDays}
+        setHorizonDays={setHorizonDays}
+        categories={categories}
+        categoryId={forecastCategoryId}
+        setCategoryId={setForecastCategoryId}
+      />
+      <FindingsSection
+        data={findings}
+        error={errors.findings}
+        categories={categories}
+        categoryId={findingsCategoryId}
+        setCategoryId={setFindingsCategoryId}
+      />
       <AlertsSection alerts={alerts} error={errors.alerts} />
     </main>
   );
@@ -173,40 +267,49 @@ export default function DashboardPage() {
 
 // --- Financial Performance ---------------------------------------------
 
-function FinancialSection({ data, error }: { data: FinancialPerformance | null; error?: string }) {
-  if (error) return <Section title="Financial Performance"><p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Financial Performance"><p>Loading…</p></Section>;
+function FinancialSection({
+  data,
+  error,
+  categories,
+  categoryId,
+  setCategoryId,
+}: {
+  data: FinancialPerformance | null;
+  error?: string;
+  categories: ProductCategory[];
+  categoryId: string;
+  setCategoryId: (id: string) => void;
+}) {
+  const categoryFilter = <CategoryFilterSelect id="financial-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
+  if (error) return <Section title="Financial Performance">{categoryFilter}<p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title="Financial Performance">{categoryFilter}<p>Loading…</p></Section>;
 
   const { revenue, gross_margin: grossMargin } = data;
   const marginRows = dedupeByProduct([...data.bottom_margin_products, ...data.top_margin_products]);
+  const grossMarginDisplayed = grossMarginDisplay(grossMargin, revenue.current);
+  // grossMarginDisplay merges the net-of-tax/plain branches into one call
+  // (its note text already says which one applies) — this just picks the
+  // matching hover definition for whichever branch it picked.
+  const grossMarginNoteTitle = grossMargin.net_gross_margin_pct !== null ? DEFINITIONS.taxCoverage : DEFINITIONS.costCoverage;
 
   return (
     <Section title="Financial Performance">
+      {categoryFilter}
       <Stat label="Revenue" title={DEFINITIONS.revenue} value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
-      {grossMargin.net_gross_margin_pct !== null ? (
-        // Prefer the net-of-tax figure whenever any tax data is known —
-        // gross_margin_pct below may overstate margin for revenue sourced
-        // from a tax-inclusive total (see net_gross_margin_pct's own docs).
-        <Stat
-          label="Gross margin"
-          title={DEFINITIONS.grossMargin}
-          value={formatPct(grossMargin.net_gross_margin_pct)}
-          note={`net of tax — based on ${formatPct(grossMargin.tax_data_coverage_pct)} of cost-known revenue with confirmed tax figures`}
-          noteTitle={DEFINITIONS.taxCoverage}
-        />
-      ) : (
-        <Stat
-          label="Gross margin"
-          title={DEFINITIONS.grossMargin}
-          value={formatPct(grossMargin.gross_margin_pct)}
-          note={
-            grossMargin.cost_data_coverage_pct !== null
-              ? `based on ${formatPct(grossMargin.cost_data_coverage_pct)} of revenue with known cost — may include tax if your prices/totals are tax-inclusive`
-              : "no cost data recorded yet"
-          }
-          noteTitle={DEFINITIONS.costCoverage}
-        />
+      {Number(data.returns.returns_amount) > 0 && (
+        <p className="hint" title={DEFINITIONS.returns}>
+          Includes {data.returns.return_count} return{data.returns.return_count === 1 ? "" : "s"} totaling{" "}
+          {formatMoney(data.returns.returns_amount)} — already netted out of the revenue above (gross revenue
+          before returns: {formatMoney(data.returns.gross_revenue)}).
+        </p>
       )}
+      <Stat
+        label="Gross margin"
+        title={DEFINITIONS.grossMargin}
+        value={grossMarginDisplayed.value}
+        note={grossMarginDisplayed.note}
+        noteTitle={grossMarginNoteTitle}
+      />
       {data.products_excluded_from_ranking > 0 && (
         <p className="status-warn">
           {data.products_excluded_from_ranking} product(s) excluded from ranking — no recorded cost price.
@@ -223,19 +326,39 @@ function FinancialSection({ data, error }: { data: FinancialPerformance | null; 
 
 // --- Retail Operations ---------------------------------------------------
 
-function RetailSection({ data, error }: { data: RetailOperations | null; error?: string }) {
-  if (error) return <Section title="Retail Operations"><p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Retail Operations"><p>Loading…</p></Section>;
+function RetailSection({
+  data,
+  error,
+  categories,
+  categoryId,
+  setCategoryId,
+  businessId,
+}: {
+  data: RetailOperations | null;
+  error?: string;
+  categories: ProductCategory[];
+  categoryId: string;
+  setCategoryId: (id: string) => void;
+  businessId: string;
+}) {
+  const categoryFilter = <CategoryFilterSelect id="retail-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
+  if (error) return <Section title="Retail Operations">{categoryFilter}<p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title="Retail Operations">{categoryFilter}<p>Loading…</p></Section>;
 
   const withCover = data.stock_cover.filter((r) => r.cover_days !== null);
   const noRecentSales = data.stock_cover.filter((r) => r.cover_days === null && r.stock_on_hand > 0);
+  const salesTxHref = `/transactions?business=${businessId}&type=sales${categoryId ? `&category_id=${categoryId}` : ""}`;
 
   return (
     <Section title="Retail Operations">
+      {categoryFilter}
       <Stat label="Inventory value" value={formatMoney(data.inventory_value.value_at_cost)} />
       <Stat label="Sell-through rate" title={DEFINITIONS.sellThrough} value={formatRate(data.sell_through_rate)} />
+      <p>
+        <a href={salesTxHref}>View individual sale transactions{categoryId ? " in this category" : ""} →</a>
+      </p>
 
-      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} />
+      <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} businessId={businessId} />
 
       <h3 title={DEFINITIONS.stockCover}>Stock cover</h3>
       {withCover.length > 0 ? (
@@ -250,7 +373,8 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
         </p>
       )}
 
-      <h3 title={DEFINITIONS.deadStock}>Dead stock</h3>
+      <h3>Dead stock</h3>
+      <p className="hint">Products with stock on hand but zero sales in the selected period — worth investigating before reordering more.</p>
       {data.dead_stock.length === 0 ? (
         <p>None — every product with stock on hand sold at least once this period.</p>
       ) : (
@@ -264,7 +388,15 @@ function RetailSection({ data, error }: { data: RetailOperations | null; error?:
 // high-price, low-volume item can dominate revenue without being what's
 // actually popular) — a toggle over both, rather than one ambiguous "top
 // sellers" list ranked by whichever the backend happened to pick.
-function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byRevenue: ProductSalesRow[] }) {
+function TopSellers({
+  byUnits,
+  byRevenue,
+  businessId,
+}: {
+  byUnits: ProductSalesRow[];
+  byRevenue: ProductSalesRow[];
+  businessId: string;
+}) {
   const [sortBy, setSortBy] = useState<"units" | "revenue">("units");
   const rows = sortBy === "units" ? byUnits : byRevenue;
 
@@ -293,14 +425,23 @@ function TopSellers({ byUnits, byRevenue }: { byUnits: ProductSalesRow[]; byReve
               <th>Product</th>
               <th>Units sold</th>
               <th>Revenue</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.product_id}>
-                <td>{row.name}</td>
+                <td>
+                  {row.name}
+                  <CategoryLabel name={row.category_name} />
+                </td>
                 <td>{row.units_sold}</td>
                 <td>{formatMoney(row.revenue)}</td>
+                <td>
+                  <a href={`/transactions?business=${businessId}&type=sales&product_id=${row.product_id}`}>
+                    View transactions →
+                  </a>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -323,7 +464,10 @@ function DeadStockTable({ rows }: { rows: DeadStockRow[] }) {
       <tbody>
         {rows.map((row) => (
           <tr key={row.product_id}>
-            <td>{row.name}</td>
+            <td>
+              {row.name}
+              <CategoryLabel name={row.category_name} />
+            </td>
             <td>{row.stock_on_hand}</td>
             <td>{row.value_at_cost !== null ? formatMoney(row.value_at_cost) : "unknown"}</td>
           </tr>
@@ -333,13 +477,56 @@ function DeadStockTable({ rows }: { rows: DeadStockRow[] }) {
   );
 }
 
+function CategoryFilterSelect({
+  id,
+  categories,
+  categoryId,
+  setCategoryId,
+}: {
+  id: string;
+  categories: ProductCategory[];
+  categoryId: string;
+  setCategoryId: (id: string) => void;
+}) {
+  // Always rendered, even with zero categories — hiding it entirely made
+  // the feature undiscoverable (indistinguishable from "not built") for a
+  // business that hasn't imported any category data yet, found directly:
+  // real feedback after it looked invisible on a business with no
+  // categories.
+  return (
+    <div>
+      <label htmlFor={id}>Category</label>{" "}
+      <select id={id} value={categoryId} onChange={(e) => setCategoryId(e.target.value)} disabled={categories.length === 0}>
+        <option value="">All categories</option>
+        {categories.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+      {categories.length === 0 && (
+        <span className="hint"> — no categories yet; import a file with a "category" column to use this.</span>
+      )}
+    </div>
+  );
+}
+
 // --- Workshop Performance --------------------------------------------------
 
-function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; error?: string }) {
+function WorkshopSection({
+  data,
+  error,
+  businessId,
+}: {
+  data: WorkshopPerformance | null;
+  error?: string;
+  businessId: string;
+}) {
   if (error) return <Section title="Workshop Performance"><p className="status-error">{error}</p></Section>;
   if (!data) return <Section title="Workshop Performance"><p>Loading…</p></Section>;
 
   const { revenue, margin } = data;
+  const workshopMargin = workshopMarginDisplay(margin);
 
   return (
     <Section title="Workshop Performance">
@@ -349,12 +536,8 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
       <Stat
         label="Gross margin (labour only)"
         title={DEFINITIONS.workshopMargin}
-        value={formatPct(margin.gross_margin_pct)}
-        note={
-          margin.labour_cost_coverage_pct !== null
-            ? `based on ${formatPct(margin.labour_cost_coverage_pct)} of revenue with known labour cost — parts cost not tracked yet`
-            : "no labour cost recorded yet"
-        }
+        value={workshopMargin.value}
+        note={workshopMargin.note}
       />
       {margin.revenue_coverage_pct !== null && Number(margin.revenue_coverage_pct) < 100 && (
         <p className="status-warn">
@@ -362,6 +545,9 @@ function WorkshopSection({ data, error }: { data: WorkshopPerformance | null; er
           actual work done.
         </p>
       )}
+      <p>
+        <a href={`/transactions?business=${businessId}&type=repairs`}>View individual repairs →</a>
+      </p>
     </Section>
   );
 }
@@ -375,11 +561,17 @@ function ForecastSection({
   error,
   horizonDays,
   setHorizonDays,
+  categories,
+  categoryId,
+  setCategoryId,
 }: {
   data: Forecast | null;
   error?: string;
   horizonDays: number;
   setHorizonDays: (days: number) => void;
+  categories: ProductCategory[];
+  categoryId: string;
+  setCategoryId: (id: string) => void;
 }) {
   const title = (
     <>
@@ -432,6 +624,7 @@ function ForecastSection({
       )}
 
       <h3 title={DEFINITIONS.reorderSuggestion}>Products to watch</h3>
+      <CategoryFilterSelect id="forecast-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />
       {data.products.length === 0 ? (
         <p>No products have enough sales history yet to forecast demand.</p>
       ) : (
@@ -452,9 +645,12 @@ function ForecastSection({
             </tr>
           </thead>
           <tbody>
-            {data.products.slice(0, 15).map((row: ProductDemandForecast) => (
+            {data.products.map((row: ProductDemandForecast) => (
               <tr key={row.product_id}>
-                <td>{row.name}</td>
+                <td>
+                  {row.name}
+                  <CategoryLabel name={row.category_name} />
+                </td>
                 <td>{row.current_stock}</td>
                 <td>
                   {row.result.total_point} ({row.result.total_low}–{row.result.total_high})
@@ -478,7 +674,19 @@ function ForecastSection({
 
 // --- Findings & Recommendations -------------------------------------------
 
-function FindingsSection({ data, error }: { data: Findings | null; error?: string }) {
+function FindingsSection({
+  data,
+  error,
+  categories,
+  categoryId,
+  setCategoryId,
+}: {
+  data: Findings | null;
+  error?: string;
+  categories: ProductCategory[];
+  categoryId: string;
+  setCategoryId: (id: string) => void;
+}) {
   if (error) return <Section title="Findings & Recommendations"><p className="status-error">{error}</p></Section>;
   if (!data) return <Section title="Findings & Recommendations"><p>Loading…</p></Section>;
   if (data.recommendations.length === 0) {
@@ -489,35 +697,27 @@ function FindingsSection({ data, error }: { data: Findings | null; error?: strin
     );
   }
 
-  const findingByKey = new Map(data.findings.map((f) => [findingKey(f.type, f.evidence), f]));
+  const findingByKey = buildFindingByKey(data.findings);
+  const { businessWide, stockAndProducts } = splitRecommendations(data.recommendations);
 
   return (
     <Section title="Findings & Recommendations">
-      <ul>
-        {data.recommendations.map((rec, index) => {
-          const finding = findingByKey.get(findingKey(rec.finding_type, rec.evidence));
-          return (
-            <li key={index} className={severityClass(rec.severity)}>
-              <strong>{rec.title}</strong>
-              {finding && <> — {finding.message}</>}
-              <br />
-              <span>{rec.description}</span>
-            </li>
-          );
-        })}
-      </ul>
+      {businessWide.length > 0 && (
+        <>
+          <h3>Business performance</h3>
+          <RecommendationList recommendations={businessWide} findingByKey={findingByKey} showCategory={false} />
+        </>
+      )}
+
+      <h3>Stock &amp; products</h3>
+      <CategoryFilterSelect id="findings-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />
+      {stockAndProducts.length === 0 ? (
+        <p>Nothing to flag for this period.</p>
+      ) : (
+        <RecommendationList recommendations={stockAndProducts} findingByKey={findingByKey} showCategory={true} />
+      )}
     </Section>
   );
-}
-
-// Recommendation.evidence is the same dict as its source Finding.evidence
-// (assigned directly on the backend), so matching on finding_type plus the
-// per-product evidence key (when present) reliably pairs a recommendation
-// back to the finding it explains — the two lists are sorted differently
-// (recommendations by severity/impact, findings by evaluation order), so a
-// positional zip would pair them incorrectly.
-function findingKey(type: string, evidence: Record<string, unknown>): string {
-  return `${type}:${evidence.product_id ?? ""}`;
 }
 
 // --- Alerts ----------------------------------------------------------------
@@ -545,131 +745,28 @@ function AlertsSection({ alerts, error }: { alerts: Alert[]; error?: string }) {
   );
 }
 
-// --- Shared layout / formatting helpers -------------------------------------
+// --- Page-local helpers ------------------------------------------------
 
-function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  title,
-  trendPct,
-  note,
-  noteTitle,
-}: {
-  label: string;
-  value: string;
-  title?: string;
-  trendPct?: string | null;
-  note?: string;
-  noteTitle?: string;
-}) {
-  return (
-    <div>
-      <span title={title}>{label}</span>: <strong>{value}</strong>
-      {trendPct !== undefined && trendPct !== null && (
-        <span className={Number(trendPct) >= 0 ? "status-ok" : "status-error"}>
-          {" "}
-          ({Number(trendPct) >= 0 ? "+" : ""}
-          {trendPct}% vs previous period)
-        </span>
-      )}
-      {note && <span title={noteTitle}> — {note}</span>}
-    </div>
-  );
-}
-
-function periodQuery(start: string, end: string): string {
+function periodQuery(start: string, end: string, categoryId?: string, allBranches?: boolean): string {
   const params = new URLSearchParams();
   if (start) params.set("start", start);
   if (end) params.set("end", end);
+  if (categoryId) params.set("category_id", categoryId);
+  if (allBranches) params.set("all_branches", "true");
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
 
-function formatMoney(value: string): string {
-  const n = Number(value);
-  return `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function formatPct(value: string | null): string {
-  return value !== null ? `${value}%` : "—";
-}
-
-function formatRate(value: string | null): string {
-  return value !== null ? `${(Number(value) * 100).toFixed(1)}%` : "—";
-}
-
-function severityClass(severity: string): string {
-  if (severity === "critical") return "status-error";
-  if (severity === "warning") return "status-warn";
-  return "status-info";
+// The backend's own detail message matters here more than usual — a 409
+// ("these branches don't share one timezone") or 403 ("not a member of
+// every business in this group") is specific and actionable, not just
+// "something failed," so it's surfaced directly rather than replaced with
+// the generic per-section fallback.
+function sectionErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
 }
 
 function dedupeByProduct(rows: ProductMarginRow[]): ProductMarginRow[] {
   const byId = new Map(rows.map((r) => [r.product_id, r]));
   return Array.from(byId.values());
-}
-
-function marginBarOption(rows: ProductMarginRow[], title: string): EChartsOption {
-  const sorted = [...rows].sort((a, b) => Number(a.gross_profit) - Number(b.gross_profit));
-  return {
-    title: { text: title, textStyle: { fontSize: 13 } },
-    grid: { left: 140, right: 30, top: 40, bottom: 20 },
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", data: sorted.map((r) => r.name) },
-    series: [
-      {
-        type: "bar",
-        data: sorted.map((r) => {
-          const value = Number(r.gross_profit);
-          return { value, itemStyle: { color: value < 0 ? "#cf222e" : "#1a7f37" } };
-        }),
-      },
-    ],
-  };
-}
-
-function revenueForecastLineOption(daily: DailyForecast[]): EChartsOption {
-  const dates = daily.map((d) => d.forecast_date);
-  return {
-    grid: { left: 70, right: 30, top: 20, bottom: 30 },
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "category", data: dates },
-    yAxis: { type: "value", name: "€" },
-    series: [
-      { name: "Typical low", type: "line", data: daily.map((d) => Number(d.low)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
-      { name: "Forecast", type: "line", data: daily.map((d) => Number(d.point)), lineStyle: { color: "#0969da", width: 2 }, symbol: "circle" },
-      { name: "Typical high", type: "line", data: daily.map((d) => Number(d.high)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
-    ],
-  };
-}
-
-function stockCoverBarOption(rows: StockCoverRow[]): EChartsOption {
-  const sorted = [...rows]
-    .sort((a, b) => Number(a.cover_days) - Number(b.cover_days))
-    .slice(0, 15);
-  return {
-    grid: { left: 140, right: 30, top: 20, bottom: 20 },
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "value", name: "Days of stock left" },
-    yAxis: { type: "category", data: sorted.map((r) => r.name) },
-    series: [
-      {
-        type: "bar",
-        data: sorted.map((r) => {
-          const value = Number(r.cover_days);
-          return { value, itemStyle: { color: value <= 7 ? "#cf222e" : "#0969da" } };
-        }),
-      },
-    ],
-  };
 }

@@ -40,9 +40,21 @@ class ConfirmMappingRequest(BaseModel):
     # Must match whatever header_row_index the manual pick (if any) used
     # for detect-mapping — omitted for the normal auto-detected case.
     header_row_index: int | None = None
+    # Set true only on the retry after the user has seen
+    # "needs_location_confirmation" and explicitly confirmed this really
+    # is one location (BD-007 anti-bypass check) — omitted (defaults
+    # false) for every normal confirm-mapping call.
+    confirm_multiple_locations: bool = False
 
 
 class ConfirmMappingResponse(BaseModel):
-    import_record_id: uuid.UUID
-    mapping_profile_id: uuid.UUID
-    status: str
+    # Both None specifically when status == "needs_location_confirmation" —
+    # nothing was created, the caller must resubmit with
+    # confirm_multiple_locations=True (or fix the mapping) to get a real one.
+    import_record_id: uuid.UUID | None
+    mapping_profile_id: uuid.UUID | None
+    status: str  # "mapped" | "needs_location_confirmation"
+    # Only set when status == "needs_location_confirmation": the distinct
+    # location values found, so the frontend can show what was detected
+    # and point at "Add a branch".
+    locations: list[str] | None = None

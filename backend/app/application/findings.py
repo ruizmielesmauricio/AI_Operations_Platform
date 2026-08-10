@@ -29,6 +29,7 @@ def get_findings(
     business_id: uuid.UUID,
     start_date: date | None = None,
     end_date: date | None = None,
+    category_id: uuid.UUID | None = None,
 ) -> FindingsSummary:
     # Both calls resolve the period independently from the same
     # (business_id, start_date, end_date) inputs — resolve_period is a pure
@@ -38,13 +39,33 @@ def get_findings(
     financial = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
     retail = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
 
+    # Per-product rules (products_at_loss/low_stock/dead_stock) get a
+    # second, category-filtered pair of calls when a filter is active —
+    # never the whole-business rules (revenue_decline/low_gross_margin/
+    # incomplete_cost_data/high_return_rate), per direct instruction: a
+    # revenue-decline finding is a whole-business trend, not something
+    # that should silently change meaning depending on a stock filter.
+    # Only category_id differs between the two calls, so this is one
+    # extra pair of (already-existing) queries, not new query logic.
+    product_financial = financial
+    product_retail = retail
+    if category_id is not None:
+        product_financial = get_financial_performance(
+            db, business_id=business_id, start_date=start_date, end_date=end_date, category_id=category_id
+        )
+        product_retail = get_retail_operations(
+            db, business_id=business_id, start_date=start_date, end_date=end_date, category_id=category_id
+        )
+
     findings = evaluate_all(
         revenue=financial.revenue,
         gross_margin=financial.gross_margin,
-        top_margin_products=financial.top_margin_products,
-        bottom_margin_products=financial.bottom_margin_products,
-        stock_cover=retail.stock_cover,
-        dead_stock=retail.dead_stock,
+        top_margin_products=product_financial.top_margin_products,
+        bottom_margin_products=product_financial.bottom_margin_products,
+        all_margin_products=product_financial.all_margin_products,
+        stock_cover=product_retail.stock_cover,
+        dead_stock=product_retail.dead_stock,
+        returns=financial.returns,
     )
     recommendations = build_recommendations(findings)
 
