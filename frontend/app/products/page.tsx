@@ -6,7 +6,16 @@ import { apiGet, apiPatch } from "@/lib/api/client";
 import { formatDays } from "@/lib/format";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { ProductCategory, ProductThreshold } from "@/types";
+import type { Forecast, ProductCategory, ProductThreshold } from "@/types";
+
+// Recommended Restock reuses Stage C13's existing forecast engine's
+// suggested_reorder_quantity (confidence band's high end minus current
+// stock, over this horizon) rather than a cruder day-count formula —
+// it's the only quantity-in-units figure this app already computes
+// deterministically. 14 days is a fixed, documented default (not tied to
+// any one product's own lead time) — long enough to be a useful starting
+// order size, short enough not to over-order for a fast-moving item.
+const _RESTOCK_FORECAST_HORIZON_DAYS = 14;
 
 // Gap 1 — Product Reorder Rules: low-stock threshold UI + a deterministic
 // recommendation. ORLA/AI is never in this loop: recommendation.
@@ -36,6 +45,7 @@ export default function ProductThresholdsPage() {
 
   const [rows, setRows] = useState<ProductThreshold[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [forecastByProductId, setForecastByProductId] = useState<Record<string, number>>({});
   const [categoryId, setCategoryId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +67,20 @@ export default function ProductThresholdsPage() {
       })
       .catch(() => setError("Could not load products."))
       .finally(() => setLoading(false));
+
+    // Fetched and failed independently of the table above — Recommended
+    // Restock is a secondary enhancement (a reorder quantity suggestion
+    // on top of rows the table can already show without it); a forecast
+    // hiccup must never block the reorder-rules table itself from
+    // loading. A failure here just leaves quantities unavailable, not an
+    // error banner.
+    apiGet<Forecast>(`/businesses/${id}/analytics/forecast?horizon_days=${_RESTOCK_FORECAST_HORIZON_DAYS}`)
+      .then((forecast) =>
+        setForecastByProductId(
+          Object.fromEntries(forecast.products.map((p) => [p.product_id, p.suggested_reorder_quantity]))
+        )
+      )
+      .catch(() => setForecastByProductId({}));
   }
 
   useEffect(() => {
@@ -66,6 +90,20 @@ export default function ProductThresholdsPage() {
   const visibleRows = useMemo(
     () => (categoryId ? rows.filter((r) => r.category_id === categoryId) : rows),
     [rows, categoryId]
+  );
+
+  // Recommended Restock — "below reorder point" means current stock
+  // cover (in days) has dropped below the active reorder point (also in
+  // days); the two are the same unit, unlike a raw stock-count vs. a
+  // day-count threshold, which can't be compared directly. Scoped to
+  // visibleRows (the category-filtered set) per the requirement that
+  // this section respect the same category filter as the table below.
+  const restockRows = useMemo(
+    () =>
+      visibleRows.filter(
+        (r) => r.cover_days !== null && Number(r.cover_days) < Number(r.effective_threshold_days)
+      ),
+    [visibleRows]
   );
 
   // Deterministic counts over whatever backend data is already loaded —
@@ -148,6 +186,32 @@ export default function ProductThresholdsPage() {
             <li>{insights.needsMoreHistory} products need more sales history before ORLA can recommend a rule.</li>
           )}
         </ul>
+      )}
+
+      {!loading && businessId && rows.length > 0 && (
+        <section>
+          <h2>Recommended Restock</h2>
+          {restockRows.length === 0 ? (
+            <p>No products are below their reorder point.</p>
+          ) : (
+            <ul>
+              {restockRows.map((row) => {
+                const quantity = forecastByProductId[row.product_id];
+                const coverDays = formatDays(row.cover_days as string);
+                const thresholdDays = formatDays(row.effective_threshold_days);
+                return (
+                  <li key={row.product_id}>
+                    {quantity !== undefined && quantity > 0
+                      ? `Order ${quantity} more unit${quantity === 1 ? "" : "s"} of ${row.name}. `
+                      : `${row.name} needs restocking. `}
+                    Current stock is {row.stock_on_hand} and the reorder point is {thresholdDays}d ({coverDays}d of
+                    cover left, selling {row.units_sold_in_period} in the last 30 days).
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
       )}
 
       {!loading && businessId && (
@@ -239,7 +303,7 @@ export default function ProductThresholdsPage() {
                               disabled={savingId === row.product_id}
                               onClick={() => handleSave(row.product_id, row.name, editValue, false)}
                             >
-                              Save
+                              Save reorder point
                             </button>{" "}
                             <button type="button" onClick={() => setEditingId(null)}>
                               Cancel
@@ -256,6 +320,10 @@ export default function ProductThresholdsPage() {
                             >
                               Edit
                             </button>{" "}
+                            {/* Distinct wording from the manual Save action above — this one only
+                                ever applies ORLA's own suggested value verbatim, never a typed-in
+                                number, so it reads as "adopt ORLA's suggestion," not a second,
+                                confusingly-worded way to set an arbitrary value. */}
                             {hasDifferentRecommendation && (
                               <button
                                 type="button"
@@ -266,7 +334,7 @@ export default function ProductThresholdsPage() {
                                   )
                                 }
                               >
-                                {`Accept: set reorder point to ${recommendedDays} day${recommendedDays === "1" ? "" : "s"}`}
+                                {`Use ORLA's ${recommendedDays}d recommendation`}
                               </button>
                             )}
                           </>
