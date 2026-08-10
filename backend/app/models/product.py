@@ -32,3 +32,9 @@ class Product(Base, PKMixin, TenantScopedMixin, TimestampMixin):
     # Overrides the category-level threshold (and the global default) when
     # set. Stage C12, PR-9.3 — see resolve_low_stock_threshold.
     low_stock_threshold_days: Mapped[object | None] = mapped_column(DECIMAL(6, 2), nullable=True)
+    # "manual" | "orla_recommended" | None — where the value above came
+    # from, always set/cleared together with it (see
+    # ProductRepository.update_low_stock_threshold_days). Powers the
+    # Product Reorder Rules table's "Setting" column, distinguishing an
+    # owner's own choice from an applied ORLA recommendation.
+    low_stock_threshold_source: Mapped[str | None] = mapped_column(String(32), nullable=True)

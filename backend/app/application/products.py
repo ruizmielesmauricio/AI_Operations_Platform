@@ -55,6 +55,15 @@ class ProductThresholdRow:
     # it's currently inheriting from its category or the default, which
     # the UI shows distinctly from "explicitly set to the default value."
     product_threshold_days: Decimal | None
+    # "manual" | "orla_recommended" | None (always None when
+    # product_threshold_days is None) — where the override came from.
+    # Powers the Product Reorder Rules table's "Setting" column.
+    product_threshold_source: str | None
+    # The category's own override, if any — distinct from
+    # effective_threshold_days below: this is what lets the UI say
+    # "Category default" instead of the less specific "System default"
+    # when the product itself has no override.
+    category_threshold_days: Decimal | None
     recommendation: ThresholdRecommendation
     # Not enough sales history to say anything meaningful about how this
     # product sells yet — the UI shows this instead of a recommendation
@@ -125,6 +134,8 @@ def list_product_thresholds(
                 cover_days=cover_days,
                 effective_threshold_days=effective,
                 product_threshold_days=product.low_stock_threshold_days,
+                product_threshold_source=product.low_stock_threshold_source,
+                category_threshold_days=category.low_stock_threshold_days if category is not None else None,
                 recommendation=recommendation,
                 insufficient_data=units_sold == 0,
             )
@@ -151,7 +162,8 @@ def update_product_threshold(
     # bug, not a frontend issue. Matching the established convention here
     # instead of special-casing apiPatch for one route.
     product = ProductRepository(db).update_low_stock_threshold_days(
-        business_id=business_id, product_id=product_id, threshold_days=threshold_days
+        business_id=business_id, product_id=product_id, threshold_days=threshold_days,
+        source="orla_recommended" if accepted_recommendation else "manual",
     )
     if product is None:
         raise ProductNotFound(str(product_id))
@@ -234,7 +246,7 @@ def recalculate_thresholds_after_upload(
             recommendation = recommend_low_stock_threshold(lead_time_days=lead_time_days, current_threshold_days=None)
             product_repo.update_low_stock_threshold_days(
                 business_id=business_id, product_id=product_id,
-                threshold_days=recommendation.recommended_threshold_days,
+                threshold_days=recommendation.recommended_threshold_days, source="orla_recommended",
             )
             updated += 1
     except Exception:

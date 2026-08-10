@@ -216,7 +216,9 @@ def test_owner_can_view_and_update_a_product_threshold(client):
     # updated resource, and this one now does too. A 204 here would mean
     # the bug is back.
     assert update_response.status_code == 200
-    assert update_response.json() == {"product_id": product_id, "low_stock_threshold_days": "10.00"}
+    assert update_response.json() == {
+        "product_id": product_id, "low_stock_threshold_days": "10.00", "low_stock_threshold_source": "manual",
+    }
 
 
 def test_staff_cannot_update_a_product_threshold(client):

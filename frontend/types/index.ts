@@ -568,6 +568,14 @@ export interface ProductThreshold {
   cover_days: string | null;
   effective_threshold_days: string;
   product_threshold_days: string | null;
+  // "manual" | "orla_recommended" | null (always null when
+  // product_threshold_days is null) — where the product's own override
+  // came from, if it has one.
+  product_threshold_source: string | null;
+  // The category's own override, if any — lets the UI distinguish
+  // "Category default" from the less specific "System default" when the
+  // product itself has no override.
+  category_threshold_days: string | null;
   recommendation: ThresholdRecommendation;
   insufficient_data: boolean;
 }

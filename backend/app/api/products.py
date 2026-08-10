@@ -48,4 +48,8 @@ def update_product_threshold_route(
         )
     except ProductNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found") from exc
-    return ProductThresholdSaveOut(product_id=product.id, low_stock_threshold_days=product.low_stock_threshold_days)
+    return ProductThresholdSaveOut(
+        product_id=product.id,
+        low_stock_threshold_days=product.low_stock_threshold_days,
+        low_stock_threshold_source=product.low_stock_threshold_source,
+    )

@@ -25,6 +25,12 @@ class ProductThresholdOut(BaseModel):
     cover_days: Decimal | None
     effective_threshold_days: Decimal
     product_threshold_days: Decimal | None
+    # "manual" | "orla_recommended" | None — see Product.low_stock_
+    # threshold_source's own docstring. Powers the Product Reorder Rules
+    # table's "Setting" column (Category default / Product custom / ORLA
+    # recommended / System default).
+    product_threshold_source: str | None
+    category_threshold_days: Decimal | None
     recommendation: ThresholdRecommendationOut
     insufficient_data: bool
 
@@ -42,6 +48,7 @@ class ProductThresholdSaveOut(BaseModel):
 
     product_id: uuid.UUID
     low_stock_threshold_days: Decimal | None
+    low_stock_threshold_source: str | None
 
     model_config = {"from_attributes": True}
 

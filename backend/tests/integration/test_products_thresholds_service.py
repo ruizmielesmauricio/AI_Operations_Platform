@@ -84,19 +84,62 @@ def test_update_product_threshold_persists_and_audits_manual_edit(db_session, bu
     )
     refreshed = db_session.get(Product, product.id)
     assert refreshed.low_stock_threshold_days == Decimal("12")
+    assert refreshed.low_stock_threshold_source == "manual"
 
     log = db_session.query(AuditLog).filter_by(business_id=business_id).one()
     assert log.action == "threshold_updated"
 
 
-def test_accept_recommendation_logs_distinct_audit_action(db_session, business_id):
+def test_accept_recommendation_logs_distinct_audit_action_and_source(db_session, business_id):
     product = _make_product(db_session, business_id)
     update_product_threshold(
         db_session, business_id=business_id, product_id=product.id, threshold_days=Decimal("7"),
         editing_user_id="user-a", accepted_recommendation=True,
     )
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed.low_stock_threshold_source == "orla_recommended"
+
     log = db_session.query(AuditLog).filter_by(business_id=business_id).one()
     assert log.action == "threshold_recommendation_accepted"
+
+
+def test_clearing_a_threshold_also_clears_its_source(db_session, business_id):
+    product = _make_product(db_session, business_id)
+    update_product_threshold(
+        db_session, business_id=business_id, product_id=product.id, threshold_days=Decimal("12"),
+        editing_user_id="u",
+    )
+    update_product_threshold(
+        db_session, business_id=business_id, product_id=product.id, threshold_days=None, editing_user_id="u",
+    )
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed.low_stock_threshold_days is None
+    assert refreshed.low_stock_threshold_source is None
+
+
+def test_list_product_thresholds_exposes_setting_context(db_session, business_id):
+    from app.models.product import ProductCategory
+
+    category = ProductCategory(business_id=business_id, name="Lubricants", low_stock_threshold_days=Decimal("5"))
+    db_session.add(category)
+    db_session.commit()
+
+    with_category = _make_product(db_session, business_id, name="Has Category")
+    with_category.category_id = category.id
+    db_session.commit()
+
+    update_product_threshold(
+        db_session, business_id=business_id, product_id=with_category.id, threshold_days=Decimal("9"),
+        editing_user_id="u", accepted_recommendation=True,
+    )
+
+    without_category = _make_product(db_session, business_id, name="No Category")
+
+    rows_by_name = {r.name: r for r in list_product_thresholds(db_session, business_id=business_id)}
+    assert rows_by_name["Has Category"].product_threshold_source == "orla_recommended"
+    assert rows_by_name["Has Category"].category_threshold_days == Decimal("5")
+    assert rows_by_name["No Category"].product_threshold_source is None
+    assert rows_by_name["No Category"].category_threshold_days is None
 
 
 def test_clearing_a_threshold_reverts_to_inherited(db_session, business_id):
@@ -184,6 +227,7 @@ def test_recalculation_applies_the_recommendation_when_lead_time_is_known(db_ses
 
     refreshed = db_session.get(Product, product.id)
     assert refreshed.low_stock_threshold_days == Decimal("7.0")  # 4 + 3 buffer
+    assert refreshed.low_stock_threshold_source == "orla_recommended"
 
     log = db_session.query(AuditLog).filter_by(business_id=business_id, action="threshold_recalculation_completed").one()
     assert log.event_metadata["products_updated"] == 1

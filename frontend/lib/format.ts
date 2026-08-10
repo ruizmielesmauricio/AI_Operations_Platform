@@ -19,6 +19,20 @@ export function formatRate(value: string | null): string {
   return value !== null ? `${(Number(value) * 100).toFixed(1)}%` : "—";
 }
 
+// A day-count Decimal like "7.00" or "7.0" reads worse than a plain "7"
+// when it's a whole number — strips trailing zeros/decimal point without
+// rounding a genuine fractional value (e.g. "7.5" stays "7.5"). Used by
+// the Product Reorder Rules table (reorder point / ORLA recommends),
+// never by anything money-related — formatMoney above is untouched and
+// always keeps its 2 decimal places, which is a different, deliberate
+// convention for currency.
+export function formatDays(value: string): string {
+  // Number("7.00") === 7, and String(7) === "7" — converting through
+  // Number and back to String is enough to drop trailing zeros for a
+  // whole number while leaving a genuine fraction like "7.5" alone.
+  return String(Number(value));
+}
+
 export function severityClass(severity: string): string {
   if (severity === "critical") return "status-error";
   if (severity === "warning") return "status-warn";

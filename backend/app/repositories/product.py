@@ -166,17 +166,27 @@ class ProductRepository:
         )
 
     def update_low_stock_threshold_days(
-        self, *, business_id: uuid.UUID, product_id: uuid.UUID, threshold_days: Decimal | None
+        self,
+        *,
+        business_id: uuid.UUID,
+        product_id: uuid.UUID,
+        threshold_days: Decimal | None,
+        source: str | None = None,
     ) -> Product | None:
         """The first write path for this column since it was added at
         Stage C12 (PR-9.3) — everything before this round could only read
         it. None clears the override back to "inherit from category/
         default", same "absent means fall through" semantics
-        resolve_low_stock_threshold already has."""
+        resolve_low_stock_threshold already has — `source` is always
+        cleared to None alongside it (the caller isn't required to pass
+        one explicitly when clearing; a non-None `threshold_days` with no
+        `source` would be a caller bug, not a state this method invents
+        a default for)."""
         product = self.get_for_business(business_id, product_id)
         if product is None:
             return None
         product.low_stock_threshold_days = threshold_days
+        product.low_stock_threshold_source = source if threshold_days is not None else None
         self.session.flush()
         return product
 
