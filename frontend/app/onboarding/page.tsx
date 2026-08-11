@@ -184,6 +184,23 @@ export default function OnboardingPage() {
     }
   }, [session]);
 
+  // AppNav below only ever rendered without a businessId here, since this
+  // page has no single "selected" business the way /dashboard or
+  // /products do — that silently hid its Notifications nav item entirely
+  // for every role (found live: staff reported no way to reach
+  // Notifications from Company Profile at all, since AppNav's own item
+  // only renders when businessId is set). Picks the ?business= query
+  // param when it names one of the user's own active businesses, else
+  // the first active one — never a deleted business, which would send
+  // the badge/link nowhere useful.
+  const [navBusinessId, setNavBusinessId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const activeBusinesses = businesses.filter((b) => !b.deleted_at);
+    const requested = new URLSearchParams(window.location.search).get("business");
+    const requestedIsValid = activeBusinesses.some((b) => b.id === requested);
+    setNavBusinessId(requestedIsValid ? (requested as string) : activeBusinesses[0]?.id);
+  }, [businesses]);
+
   useEffect(() => {
     businesses.forEach((b) => {
       if (b.deleted_at) return;
@@ -533,7 +550,7 @@ export default function OnboardingPage() {
 
   return (
     <main>
-      <AppNav />
+      <AppNav notificationsBusinessId={navBusinessId} />
       <h1>Your businesses</h1>
       {billingError && <p className="status-error">{billingError}</p>}
       {deleteError && <p className="status-error">{deleteError}</p>}

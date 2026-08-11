@@ -20,9 +20,28 @@ import type { SubscriptionStatus } from "@/types";
  * onboarding page itself, so every other screen had no way to sign out
  * short of clearing cookies by hand.
  */
-export function AppNav({ businessId }: { businessId?: string }) {
+export function AppNav({
+  businessId,
+  notificationsBusinessId,
+}: {
+  businessId?: string;
+  // Falls back to businessId — only Company Profile (/onboarding) passes
+  // this separately. Found live: /onboarding never had a single
+  // "selected" business, so it always called <AppNav /> with no
+  // businessId at all — which correctly kept Thresholds/Suppliers/
+  // Transactions hidden (there's no one business to scope them to) but
+  // *also* silently hid Notifications, leaving staff with no way to
+  // reach it from Company Profile at all. Decoupling this from
+  // businessId lets /onboarding supply a real business for Notifications
+  // (its own query param, or the user's first active business) without
+  // making those other, genuinely business-scoped links appear where
+  // they'd be misleading (no single business is "selected" on that page).
+  notificationsBusinessId?: string;
+}) {
   const router = useRouter();
   const suffix = businessId ? `?business=${businessId}` : "";
+  const notificationsId = notificationsBusinessId ?? businessId;
+  const notificationsSuffix = notificationsId ? `?business=${notificationsId}` : "";
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -48,12 +67,12 @@ export function AppNav({ businessId }: { businessId?: string }) {
   // yet) is enough for a nav badge that only needs to be roughly current,
   // not real-time to the second.
   useEffect(() => {
-    if (!businessId) {
+    if (!notificationsId) {
       setUnreadCount(0);
       return;
     }
     function refresh() {
-      apiGet<{ unread_count: number }>(`/businesses/${businessId}/notifications/unread-count`)
+      apiGet<{ unread_count: number }>(`/businesses/${notificationsId}/notifications/unread-count`)
         .then((r) => setUnreadCount(r.unread_count))
         .catch(() => setUnreadCount(0));
     }
@@ -70,7 +89,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
       clearInterval(interval);
       unsubscribe();
     };
-  }, [businessId]);
+  }, [notificationsId]);
 
   const canUpload = subscriptionStatus === "active";
 
@@ -113,9 +132,9 @@ export function AppNav({ businessId }: { businessId?: string }) {
           {" · "}
         </>
       )}
-      {businessId && (
+      {notificationsId && (
         <>
-          <a href={`/notifications${suffix}`}>
+          <a href={`/notifications${notificationsSuffix}`}>
             Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
           </a>
           {" · "}
