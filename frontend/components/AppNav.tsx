@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet } from "@/lib/api/client";
+import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
 import type { SubscriptionStatus } from "@/types";
 
@@ -58,7 +59,17 @@ export function AppNav({ businessId }: { businessId?: string }) {
     }
     refresh();
     const interval = setInterval(refresh, 60_000);
-    return () => clearInterval(interval);
+    // Found live: marking read/dismissing on /notifications updated that
+    // page's own count instantly but left this badge showing the old
+    // number until the next 60s tick — a real, visible inconsistency
+    // (page said 0 unread, nav still said 1). This is a same-tab nudge to
+    // poll immediately on a real change, not a push channel — still no
+    // WebSockets/SSE.
+    const unsubscribe = onNotificationsChanged(refresh);
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
   }, [businessId]);
 
   const canUpload = subscriptionStatus === "active";

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
+import { broadcastNotificationsChanged } from "@/lib/notificationsBus";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { Notification, NotificationCategory, NotificationList } from "@/types";
 
@@ -64,7 +65,14 @@ export default function NotificationsPage() {
         setItems(result.items);
         setUnreadCount(result.unread_count);
       })
-      .catch(() => setError("Could not load notifications."))
+      .catch(() => {
+        // Found live: a failed fetch left the *previous* business/filter's
+        // items rendered underneath the error, which read as "these are
+        // still current" when they might not be — clearing avoids a
+        // notification centre showing possibly-stale unread state.
+        setItems([]);
+        setError("Could not load notifications.");
+      })
       .finally(() => setLoading(false));
   }
 
@@ -79,6 +87,7 @@ export default function NotificationsPage() {
       const updated = await apiPost<Notification>(`/businesses/${businessId}/notifications/${id}/read`, {});
       setItems((prev) => prev.map((n) => (n.id === id ? updated : n)));
       setUnreadCount((c) => Math.max(0, c - 1));
+      broadcastNotificationsChanged();
     } catch {
       setError("Could not mark this notification as read.");
     } finally {
@@ -93,6 +102,7 @@ export default function NotificationsPage() {
       await apiPost<Notification>(`/businesses/${businessId}/notifications/${id}/dismiss`, {});
       setItems((prev) => (statusFilter === "dismissed" ? prev : prev.filter((n) => n.id !== id)));
       if (wasUnread) setUnreadCount((c) => Math.max(0, c - 1));
+      broadcastNotificationsChanged();
     } catch {
       setError("Could not dismiss this notification.");
     } finally {
@@ -106,6 +116,7 @@ export default function NotificationsPage() {
       await apiPost<{ updated: number }>(`/businesses/${businessId}/notifications/mark-all-read`, {});
       setItems((prev) => prev.map((n) => (n.status === "unread" ? { ...n, status: "read" as const } : n)));
       setUnreadCount(0);
+      broadcastNotificationsChanged();
     } catch {
       setError("Could not mark all notifications as read.");
     } finally {
