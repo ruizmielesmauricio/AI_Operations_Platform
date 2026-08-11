@@ -607,28 +607,34 @@ export default function OnboardingPage() {
                   {" — "}
                   <a href={`/notifications?business=${b.id}`}>Notifications</a>
                 </div>
-                <div>
-                  {isRecoverableInPortal ? (
-                    <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
-                      {busy ? "Opening…" : "Manage billing"}
-                    </button>
-                  ) : (
-                    <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
-                      {busy
-                        ? "Starting…"
-                        : b.parent_business_id
-                          ? "Complete payment (€30/mo)"
-                          : "Subscribe"}
-                    </button>
-                  )}
-                </div>
+                {/* Payment flows are owner-only (backend now enforces this
+                    on checkout-session/portal-session too — this is UX,
+                    not the real boundary): a staff/manager member would
+                    otherwise see a live-looking button that just 403s. */}
+                {b.role === "owner" && (
+                  <div>
+                    {isRecoverableInPortal ? (
+                      <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
+                        {busy ? "Opening…" : "Manage billing"}
+                      </button>
+                    ) : (
+                      <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
+                        {busy
+                          ? "Starting…"
+                          : b.parent_business_id
+                            ? "Complete payment (€30/mo)"
+                            : "Subscribe"}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* Its own line, ahead of the more incidental actions below
                     (delete) — "we are missing the button to add more
                     branches" was reported directly after it was buried at
                     the end of one long run-on line of buttons; only shown
                     for a standalone shop, since a branch can't itself have
                     branches. */}
-                {isStandalone && (
+                {isStandalone && b.role === "owner" && (
                   <div>
                     <button
                       type="button"
@@ -640,7 +646,7 @@ export default function OnboardingPage() {
                     </button>
                   </div>
                 )}
-                {isStandalone && branchFormOpenFor === b.id && (
+                {isStandalone && b.role === "owner" && branchFormOpenFor === b.id && (
                   <form onSubmit={(e) => handleAddBranch(e, b.id)}>
                     <h3>Branch profile</h3>
                     <p className="hint">
@@ -962,25 +968,27 @@ export default function OnboardingPage() {
                     </ul>
                   </div>
                 )}
-                <div>
-                  {confirmingDeleteId === b.id ? (
-                    <span>
-                      Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
-                      your sales, products, and reports stay on record, but you&apos;ll lose access to
-                      them here.{" "}
-                      <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
-                        {deleting ? "Deleting…" : "Yes, delete"}
-                      </button>{" "}
-                      <button type="button" disabled={deleting} onClick={handleCancelDelete}>
-                        No
+                {b.role === "owner" && (
+                  <div>
+                    {confirmingDeleteId === b.id ? (
+                      <span>
+                        Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
+                        your sales, products, and reports stay on record, but you&apos;ll lose access to
+                        them here.{" "}
+                        <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
+                          {deleting ? "Deleting…" : "Yes, delete"}
+                        </button>{" "}
+                        <button type="button" disabled={deleting} onClick={handleCancelDelete}>
+                          No
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" onClick={() => handleRequestDelete(b.id)}>
+                        Delete this shop
                       </button>
-                    </span>
-                  ) : (
-                    <button type="button" onClick={() => handleRequestDelete(b.id)}>
-                      Delete this shop
-                    </button>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}

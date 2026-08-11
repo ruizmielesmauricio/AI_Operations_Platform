@@ -153,6 +153,21 @@ def test_a_non_owner_cannot_add_or_edit_an_employee(client):
     assert edit_response.status_code == 403
 
 
+def test_a_non_owner_cannot_list_employee_seats(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+
+    response = client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_staff)
+    assert response.status_code == 403
+    assert client.get(f"/businesses/{business['id']}/employee-seats", headers=headers_owner).status_code == 200
+
+
 def test_a_third_employee_is_rejected_via_the_api(client):
     headers_owner = bearer_header("user-a", "a@example.com")
     business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()

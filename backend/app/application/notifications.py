@@ -365,6 +365,15 @@ def notify_orla_insights(db: Session, *, business_id: uuid.UUID, report_id: uuid
 
 # --- Team --------------------------------------------------------------------
 
+# Owner-only (Notification Centre permissions batch): who's on the team,
+# whether their access/payment succeeded, and role changes are an
+# owner/admin management concern, not something operational staff need
+# surfaced — mirrors the same "staff seeing owner-only billing
+# notifications" restriction already applied to CATEGORY_BILLING/
+# CATEGORY_BRANCHES below. Stock/data_uploads/reports/orla_insights stay
+# unrestricted (None) — those are the operational notifications staff
+# need for daily work.
+
 
 def notify_employee_added(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, full_name: str) -> None:
     notify(
@@ -379,6 +388,7 @@ def notify_employee_added(db: Session, *, business_id: uuid.UUID, seat_id: uuid.
         action_url="/onboarding",
         related_entity_type="employee_seat",
         related_entity_id=seat_id,
+        visible_to_role="owner",
     )
 
 
@@ -395,6 +405,7 @@ def notify_employee_activated(db: Session, *, business_id: uuid.UUID, seat_id: u
         action_url="/onboarding",
         related_entity_type="employee_seat",
         related_entity_id=seat_id,
+        visible_to_role="owner",
         dedup_key=f"employee_activated:{seat_id}",
     )
 
@@ -412,6 +423,7 @@ def notify_employee_payment_failed(db: Session, *, business_id: uuid.UUID, seat_
         action_url="/onboarding",
         related_entity_type="employee_seat",
         related_entity_id=seat_id,
+        visible_to_role="owner",
         dedup_key=f"employee_payment_failed:{seat_id}",
     )
 
@@ -427,6 +439,7 @@ def notify_employee_removed(db: Session, *, business_id: uuid.UUID, seat_id: uui
         body=f"{full_name}'s access to ORLA has been removed.",
         related_entity_type="employee_seat",
         related_entity_id=seat_id,
+        visible_to_role="owner",
     )
 
 
@@ -445,6 +458,7 @@ def notify_employee_role_changed(
         action_url="/onboarding",
         related_entity_type="employee_seat",
         related_entity_id=seat_id,
+        visible_to_role="owner",
     )
 
 

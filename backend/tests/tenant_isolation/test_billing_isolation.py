@@ -68,6 +68,28 @@ def test_checkout_session_rejects_non_member(client_and_session, monkeypatch):
     assert response.status_code == 403
 
 
+def test_checkout_and_portal_session_reject_a_genuine_staff_member(client_and_session):
+    """Distinct from test_checkout_session_rejects_non_member above: user-b
+    here IS a real member of this same business (a manager), not a
+    stranger — this exercises the role check itself (Notification Centre
+    permissions batch), not get_current_membership's separate "not a
+    member at all" rejection."""
+    test_client, SessionLocal = client_and_session
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_manager = bearer_header("user-b", "b@example.com")
+    business_id = test_client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()["id"]
+
+    session = SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business_id), user_id="user-b", role="manager"))
+    session.commit()
+    session.close()
+
+    checkout = test_client.post(f"/businesses/{business_id}/billing/checkout-session", headers=headers_manager)
+    portal = test_client.post(f"/businesses/{business_id}/billing/portal-session", headers=headers_manager)
+    assert checkout.status_code == 403
+    assert portal.status_code == 403
+
+
 def test_checkout_session_uses_verified_email_not_client_input(client_and_session, monkeypatch):
     test_client, _ = client_and_session
     headers = bearer_header("user-a", "a@example.com")
