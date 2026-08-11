@@ -738,31 +738,31 @@ export default function UploadsPage() {
             const isUndoing = record ? undoingRecordId === record.id : false;
             const rowError = actionErrors[u.id] || (record ? actionErrors[record.id] : "");
             return (
-              <li key={u.id}>
-                {u.original_filename} —{" "}
-                <span className={u.status === "imported" ? "status-ok" : ""}>{u.status}</span>{" "}
-                ({new Date(u.created_at).toLocaleString()})
+              <li className="upload-record" key={u.id}>
+                <div className="upload-record__details">
+                  {u.original_filename} —{" "}
+                  <span className={u.status === "imported" ? "status-ok" : ""}>{u.status}</span>{" "}
+                  ({new Date(u.created_at).toLocaleString()})
+                </div>
+                <div className="upload-record__actions">
                 {u.status === "uploaded" && !mappingUploadId && (
-                  <>
-                    {" "}
-                    <button type="button" onClick={() => startMapping(u.id, u.entity_type)}>
-                      Map columns
-                    </button>
-                  </>
+                  <button type="button" onClick={() => startMapping(u.id, u.entity_type)}>
+                    Map columns
+                  </button>
                 )}
                 {u.status === "mapped" && !mappingUploadId && (
                   <>
-                    {" "}
                     <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
                       {isRunning ? "Running…" : "Run import"}
-                    </button>{" "}
+                    </button>
                     <button type="button" disabled={isRunning} onClick={() => startMapping(u.id, u.entity_type)}>
                       Remap
                     </button>
                   </>
                 )}
+                </div>
                 {record && record.status === "completed" && (
-                  <div>
+                  <div className="upload-record__result">
                     <span className="status-ok">
                       {record.rows_imported} of {record.rows_total} rows imported
                     </span>
@@ -770,10 +770,11 @@ export default function UploadsPage() {
                       <span className="status-warn"> — {record.rows_rejected} skipped</span>
                     )}
                     {renderRejectionSummary(record.rejection_summary)}
-                    {" "}
-                    <button type="button" disabled={isUndoing} onClick={() => handleUndo(record.id)}>
-                      {isUndoing ? "Undoing…" : "Undo import"}
-                    </button>
+                    <div className="upload-record__actions">
+                      <button type="button" disabled={isUndoing} onClick={() => handleUndo(record.id)}>
+                        {isUndoing ? "Undoing…" : "Undo import"}
+                      </button>
+                    </div>
                   </div>
                 )}
                 {record && record.status === "reversed" && (

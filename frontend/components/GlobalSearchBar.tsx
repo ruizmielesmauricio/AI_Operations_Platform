@@ -152,7 +152,7 @@ export function GlobalSearchBar({ businessId }: { businessId: string }) {
   }
 
   return (
-    <span style={{ position: "relative", display: "inline-block" }}>
+    <span className="global-search">
       <input
         ref={inputRef}
         type="search"
@@ -171,25 +171,11 @@ export function GlobalSearchBar({ businessId }: { businessId: string }) {
         // direct blur-then-click on a result would otherwise close this
         // dropdown before the click's own navigation ever fires.
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        style={{ width: "14em" }}
+        className="global-search__input"
       />
       {showDropdown && (
         <div
-          style={{
-            position: "absolute",
-            zIndex: 1,
-            top: "100%",
-            left: 0,
-            marginTop: "0.25em",
-            background: "Canvas",
-            color: "CanvasText",
-            border: "1px solid #ccc",
-            width: "26em",
-            maxWidth: "90vw",
-            maxHeight: "70vh",
-            overflowY: "auto",
-            padding: "0.5em 0",
-          }}
+          className="global-search__results"
         >
           {loading && (
             <p className="hint" style={{ margin: "0 0.75em" }}>

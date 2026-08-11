@@ -720,7 +720,7 @@ export default function OnboardingPage() {
               : null;
             const isStandalone = !b.parent_business_id;
             return (
-              <li key={b.id} style={{ marginBottom: "1em" }}>
+              <li className="company-business" key={b.id} style={{ marginBottom: "1em" }}>
                 <div>
                   <strong>
                     {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
@@ -745,7 +745,7 @@ export default function OnboardingPage() {
                     branch profile above (owner-only) or another
                     employee's row (owner-only, in the Team list below). */}
                 {b.role !== "owner" && (
-                  <div>
+                  <div className="company-profile-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -831,7 +831,7 @@ export default function OnboardingPage() {
                     not the real boundary): a staff/manager member would
                     otherwise see a live-looking button that just 403s. */}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     {isRecoverableInPortal ? (
                       <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
                         {busy ? "Opening…" : "Manage billing"}
@@ -854,7 +854,7 @@ export default function OnboardingPage() {
                     for a standalone shop, since a branch can't itself have
                     branches. */}
                 {isStandalone && b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -968,7 +968,7 @@ export default function OnboardingPage() {
                     branch" which is standalone-only: a branch is its own
                     fully separate, separately-billed entity). */}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -1188,7 +1188,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action company-owner-action--danger">
                     {confirmingDeleteId === b.id ? (
                       <span>
                         Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —

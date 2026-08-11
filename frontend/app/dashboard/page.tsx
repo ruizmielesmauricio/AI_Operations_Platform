@@ -198,8 +198,9 @@ export default function DashboardPage() {
               </option>
             ))}
           </select>{" "}
-          <label htmlFor="all-branches">
+          <label className="dashboard-branches-toggle" htmlFor="all-branches">
             <input
+              className="dashboard-branches-toggle__input"
               id="all-branches"
               type="checkbox"
               checked={allBranches}
