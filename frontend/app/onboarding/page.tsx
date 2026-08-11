@@ -604,6 +604,8 @@ export default function OnboardingPage() {
                   )}
                   {" — "}
                   <a href={`/onboarding/${b.id}`}>View profile</a>
+                  {" — "}
+                  <a href={`/notifications?business=${b.id}`}>Notifications</a>
                 </div>
                 <div>
                   {isRecoverableInPortal ? (

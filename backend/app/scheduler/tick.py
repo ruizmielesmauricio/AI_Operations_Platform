@@ -14,10 +14,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analytics.period import compute_report_period, is_report_period_due, resolve_period
-from app.application.notifications import notify_orla_insights, notify_report_failed, notify_report_ready
+from app.application.notifications import (
+    check_data_freshness,
+    notify_orla_insights,
+    notify_report_failed,
+    notify_report_ready,
+)
 from app.application.report import generate_report
 from app.models.business import Business
 from app.repositories.report import MAX_ATTEMPTS, ReportRepository
+from app.repositories.subscription import SubscriptionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,25 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
     not_yet_due = 0
 
     businesses = list(db.scalars(select(Business)))
+    subscriptions = SubscriptionRepository(db)
+    freshness_checked = 0
+
+    for business in businesses:
+        # Scoped to active-subscription businesses only — a business that
+        # never subscribed, or whose subscription has lapsed, can't even
+        # upload (require_active_subscription already blocks that route),
+        # so nudging it to "upload today's sales data" would be pure
+        # noise, not a real reminder. Matches the ORLA Notification
+        # Centre's own "when expected" framing.
+        subscription = subscriptions.get_by_business_id(business.id)
+        if subscription is not None and subscription.status == "active":
+            try:
+                check_data_freshness(db, business=business, now=resolved_now)
+                db.commit()
+                freshness_checked += 1
+            except Exception:
+                logger.exception("Failed to check data freshness for business=%s", business.id)
+
     for business in businesses:
         for report_type in REPORT_TYPES:
             try:
@@ -110,4 +135,5 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
         "already_done": already_done,
         "permanently_failed": permanently_failed,
         "not_yet_due": not_yet_due,
+        "freshness_checked": freshness_checked,
     }

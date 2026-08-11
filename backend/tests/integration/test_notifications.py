@@ -12,9 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from datetime import datetime, timedelta, timezone
+
 from app.application.alerts import refresh_low_stock_alerts
 from app.application.employee_seats import add_employee, delete_employee, try_activate_employee_seat, update_employee_profile
 from app.application.notifications import (
+    check_data_freshness,
     notify,
     notify_employee_activated,
     notify_import_completed,
@@ -23,14 +26,19 @@ from app.application.notifications import (
     notify_report_failed,
     notify_report_ready,
     notify_subscription_status_change,
+    resolve_data_freshness,
 )
 from app.billing import client as billing_client
+from app.models.business import Business
+from app.models.import_record import ImportRecord
 from app.models.membership import Membership
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem
+from app.models.upload import Upload
 from app.models.user import User
 from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.notification import NotificationRepository
+from app.scheduler.tick import run_tick
 from app.settings.config import get_settings
 
 
@@ -326,4 +334,162 @@ def test_subscription_status_change_ignores_unrecognized_statuses(db_session, bu
     )
     db_session.commit()
     rows = NotificationRepository(db_session).list_for_business(business_id, role="owner")
+    assert rows == []
+
+
+# --- Data freshness ------------------------------------------------------------
+
+
+def _make_completed_sales_import(db_session, business_id, *, days_ago: int = 0) -> ImportRecord:
+    upload = Upload(
+        business_id=business_id, storage_key="test/key.csv", original_filename="sales.csv",
+        uploaded_by="user-1", status="imported", entity_type="sales",
+    )
+    db_session.add(upload)
+    db_session.flush()
+    record = ImportRecord(
+        business_id=business_id, upload_id=upload.id, entity_type="sales",
+        status="completed", rows_total=1, rows_imported=1, rows_rejected=0,
+    )
+    db_session.add(record)
+    db_session.flush()
+    # TimestampMixin's onupdate default only fires when updated_at isn't
+    # itself part of the flush's SET clause — setting it explicitly here
+    # (to simulate an import completed N days ago) takes precedence.
+    record.updated_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    db_session.commit()
+    return record
+
+
+def test_freshness_never_uploaded_creates_no_new_data_notification(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner", category="data_uploads")
+    assert len(rows) == 1
+    assert rows[0].type_key == "no_new_data_detected"
+    assert rows[0].severity == "info"
+
+
+def test_freshness_old_import_creates_data_outdated(db_session, business_id):
+    _make_completed_sales_import(db_session, business_id, days_ago=5)
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner", category="data_uploads")
+    assert len(rows) == 1
+    assert rows[0].type_key == "data_outdated"
+    assert rows[0].severity == "warning"
+    assert "5 days" in rows[0].body
+
+
+def test_freshness_recent_import_is_no_new_data_not_yet_outdated(db_session, business_id):
+    _make_completed_sales_import(db_session, business_id, days_ago=1)
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner", category="data_uploads")
+    assert rows[0].type_key == "no_new_data_detected"
+
+
+def test_freshness_todays_import_resolves_open_notification(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    assert len(NotificationRepository(db_session).list_for_business(business_id, role="owner")) == 1
+
+    _make_completed_sales_import(db_session, business_id, days_ago=0)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+
+    assert NotificationRepository(db_session).list_for_business(business_id, role="owner") == []
+    dismissed = NotificationRepository(db_session).list_for_business(business_id, role="owner", status="dismissed")
+    assert len(dismissed) == 1
+
+
+def test_freshness_rerun_does_not_create_duplicates(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner")
+    assert len(rows) == 1
+
+
+def test_freshness_escalates_type_key_in_place_as_days_pass(db_session, business_id):
+    _make_completed_sales_import(db_session, business_id, days_ago=1)
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+    first = NotificationRepository(db_session).list_for_business(business_id, role="owner")[0]
+    assert first.type_key == "no_new_data_detected"
+
+    # Same underlying (still-1-day-old) record, checked again 3 days
+    # later — same open row, escalated classification, not a new row.
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc) + timedelta(days=3))
+    db_session.commit()
+
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner")
+    assert len(rows) == 1
+    assert rows[0].id == first.id
+    assert rows[0].type_key == "data_outdated"
+
+
+def test_resolve_data_freshness_clears_open_notification(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+
+    resolve_data_freshness(db_session, business_id=business_id, entity_type="sales")
+    db_session.commit()
+    assert NotificationRepository(db_session).list_for_business(business_id, role="owner") == []
+
+
+def test_resolve_data_freshness_ignores_other_entity_types(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    check_data_freshness(db_session, business=business, now=datetime.now(timezone.utc))
+    db_session.commit()
+
+    resolve_data_freshness(db_session, business_id=business_id, entity_type="purchases")
+    db_session.commit()
+    assert len(NotificationRepository(db_session).list_for_business(business_id, role="owner")) == 1
+
+
+def test_freshness_branch_uses_branch_data_missing_and_names_the_branch(db_session, business_id):
+    branch = Business(name="Galway", parent_business_id=business_id, timezone="Europe/Dublin")
+    db_session.add(branch)
+    db_session.commit()
+
+    check_data_freshness(db_session, business=branch, now=datetime.now(timezone.utc))
+    db_session.commit()
+
+    branch_rows = NotificationRepository(db_session).list_for_business(branch.id, role="owner")
+    assert branch_rows[0].type_key == "branch_data_missing"
+    assert "Galway" in branch_rows[0].title
+
+    # Doesn't leak into the parent's own notification list.
+    parent_rows = NotificationRepository(db_session).list_for_business(business_id, role="owner")
+    assert parent_rows == []
+
+
+def test_tick_only_checks_freshness_for_active_subscriptions(db_session, business_id):
+    from app.models.subscription import Subscription
+
+    db_session.add(Subscription(business_id=business_id, stripe_customer_id="cus_test_freshness", status="active"))
+    db_session.commit()
+
+    summary = run_tick(db_session, now=datetime(2026, 1, 5, 8, 0, tzinfo=timezone.utc))
+
+    assert summary["freshness_checked"] == 1
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner", category="data_uploads")
+    assert any(r.type_key == "no_new_data_detected" for r in rows)
+
+
+def test_tick_skips_freshness_without_an_active_subscription(db_session, business_id):
+    summary = run_tick(db_session, now=datetime(2026, 1, 5, 8, 0, tzinfo=timezone.utc))
+
+    assert summary["freshness_checked"] == 0
+    rows = NotificationRepository(db_session).list_for_business(business_id, role="owner", category="data_uploads")
     assert rows == []

@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models.membership import Membership
 from app.repositories.notification import NotificationRepository
-from app.schemas.notification import NotificationListOut, NotificationOut
+from app.schemas.notification import (
+    NotificationCategoryFilter,
+    NotificationListOut,
+    NotificationOut,
+    NotificationSeverityFilter,
+    NotificationStatusFilter,
+)
 from app.security.tenant import get_current_membership
 
 router = APIRouter(prefix="/businesses/{business_id}/notifications", tags=["notifications"])
@@ -14,9 +20,9 @@ router = APIRouter(prefix="/businesses/{business_id}/notifications", tags=["noti
 
 @router.get("", response_model=NotificationListOut)
 def list_notifications(
-    category: str | None = None,
-    status_filter: str | None = Query(default=None, alias="status"),
-    severity: str | None = None,
+    category: NotificationCategoryFilter | None = None,
+    status_filter: NotificationStatusFilter | None = Query(default=None, alias="status"),
+    severity: NotificationSeverityFilter | None = None,
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> NotificationListOut:

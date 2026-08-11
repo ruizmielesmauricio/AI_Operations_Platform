@@ -143,3 +143,21 @@ def test_mark_all_read_and_dismiss_and_filters(client):
 
     default_view = client.get(f"/businesses/{business['id']}/notifications", headers=headers)
     assert notification_id not in [n["id"] for n in default_view.json()["items"]]
+
+
+def test_invalid_filter_values_return_422(client):
+    headers = bearer_header("owner-1", "owner@example.com")
+    business = _create_business(client, headers, "Shop A")
+
+    bad_category = client.get(f"/businesses/{business['id']}/notifications?category=not_a_category", headers=headers)
+    bad_status = client.get(f"/businesses/{business['id']}/notifications?status=archived", headers=headers)
+    bad_severity = client.get(f"/businesses/{business['id']}/notifications?severity=urgent", headers=headers)
+
+    assert bad_category.status_code == 422
+    assert bad_status.status_code == 422
+    assert bad_severity.status_code == 422
+
+    # A valid value on the same route still works — the validation isn't
+    # accidentally rejecting everything.
+    ok = client.get(f"/businesses/{business['id']}/notifications?category=stock&status=unread", headers=headers)
+    assert ok.status_code == 200

@@ -113,7 +113,7 @@ class NotificationRepository:
         return notification
 
     def update_and_reopen(
-        self, notification: Notification, *, severity: str, title: str, body: str
+        self, notification: Notification, *, type_key: str, severity: str, title: str, body: str
     ) -> Notification:
         """Re-triggering the same deterministic condition (e.g. the
         low-stock count changed on a later import) updates the existing
@@ -121,7 +121,12 @@ class NotificationRepository:
         Notification Centre prompt's own grouping/spam-control
         requirement. A previously-read row surfaces as unread again, since
         the underlying situation has genuinely changed; a dismissed row is
-        never reached here (get_open_by_dedup_key excludes it)."""
+        never reached here (get_open_by_dedup_key excludes it). type_key
+        is updatable too — a freshness notification can escalate from
+        "no_new_data_detected" to "data_outdated" under the same dedup_key
+        as more days pass, which is a change in classification, not just
+        wording."""
+        notification.type_key = type_key
         notification.severity = severity
         notification.title = title
         notification.body = body

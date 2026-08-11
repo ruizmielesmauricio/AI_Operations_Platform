@@ -13,10 +13,13 @@ in this codebase) — notify() itself never calls db.commit().
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.models.business import Business
+from app.repositories.import_record import ImportRecordRepository
 from app.repositories.notification import NotificationRepository
 
 CATEGORY_STOCK = "stock"
@@ -60,7 +63,7 @@ def notify(
     if dedup_key is not None:
         existing = repo.get_open_by_dedup_key(business_id, dedup_key)
         if existing is not None:
-            return repo.update_and_reopen(existing, severity=severity, title=title, body=body)
+            return repo.update_and_reopen(existing, type_key=type_key, severity=severity, title=title, body=body)
     return repo.create(
         business_id=business_id,
         category=category,
@@ -187,6 +190,107 @@ def notify_import_completed(
             related_entity_type="import_record",
             related_entity_id=import_record_id,
         )
+
+
+# --- Data freshness -----------------------------------------------------------
+
+# Scoped to "sales" only — the one entity type every business template
+# actually has (bicycle-shop-specific "repairs" doesn't apply everywhere;
+# CLAUDE.md's "no industry-specific assumptions in core services" holds:
+# this isn't a bicycle-shop rule, "sales" is the generic revenue entity
+# every vertical will have). Matches the ORLA Notification Centre prompt's
+# own suggested copy, which is entirely about "sales data."
+_FRESHNESS_ENTITY_TYPE = "sales"
+# Past this many days with no completed sales import, the nudge escalates
+# from an info-level daily reminder to a warning that insights may be
+# stale. Deliberately stricter than the Uploads page's own passive
+# STALE_AFTER_DAYS=7 indicator (frontend/app/uploads/page.tsx) — a
+# notification is a more proactive nudge than a page you have to go look
+# at, so it fires sooner.
+_DATA_OUTDATED_AFTER_DAYS = 3
+
+
+def _freshness_dedup_key(business_id: uuid.UUID) -> str:
+    return f"data_freshness:{business_id}:{_FRESHNESS_ENTITY_TYPE}"
+
+
+def check_data_freshness(db: Session, *, business: Business, now: datetime) -> None:
+    """Called once per business per scheduler tick (app/scheduler/tick.py)
+    — idempotent by dedup_key, so a re-run within the same day just
+    updates the same open row (or is a genuine no-op once the wording
+    already matches) rather than spamming. Uses only the already-existing,
+    already-tested ImportRecordRepository.latest_completed_by_entity_type
+    — no new calculation, purely a date comparison in the business's own
+    timezone (CLAUDE.md: "UTC internally, business timezone in settings").
+    """
+    dedup_key = _freshness_dedup_key(business.id)
+    latest = ImportRecordRepository(db).latest_completed_by_entity_type(business.id)
+    last_completed_at = latest.get(_FRESHNESS_ENTITY_TYPE)
+
+    days_since: int | None = None
+    if last_completed_at is not None:
+        tz = ZoneInfo(business.timezone)
+        days_since = (now.astimezone(tz).date() - last_completed_at.astimezone(tz).date()).days
+
+    if days_since is not None and days_since <= 0:
+        # Uploaded today — resolve any open freshness notification rather
+        # than waiting for the next tick to notice (this also happens
+        # immediately on import, see resolve_data_freshness below; this
+        # branch is what catches it on the next tick regardless).
+        _clear_dedup(db, business.id, dedup_key)
+        return
+
+    is_branch = business.parent_business_id is not None
+
+    if days_since is not None and days_since >= _DATA_OUTDATED_AFTER_DAYS:
+        if is_branch:
+            notify(
+                db, business_id=business.id, category=CATEGORY_DATA_UPLOADS, type_key="branch_data_missing",
+                severity=SEVERITY_WARNING, title=f"{business.name}: sales data is outdated",
+                body=(
+                    f"{business.name}'s sales data has not been updated for {days_since} days. "
+                    "Some insights for this branch may no longer reflect its current business."
+                ),
+                action_label="Upload sales data", action_url="/uploads", dedup_key=dedup_key,
+            )
+        else:
+            notify(
+                db, business_id=business.id, category=CATEGORY_DATA_UPLOADS, type_key="data_outdated",
+                severity=SEVERITY_WARNING, title="Sales data is outdated",
+                body=(
+                    f"Your sales data has not been updated for {days_since} days. "
+                    "Some insights may no longer reflect your current business."
+                ),
+                action_label="Upload sales data", action_url="/uploads", dedup_key=dedup_key,
+            )
+        return
+
+    # Never uploaded, or uploaded 1-2 days ago — the daily "please upload
+    # today" nudge, not yet the more urgent "outdated" escalation.
+    if is_branch:
+        notify(
+            db, business_id=business.id, category=CATEGORY_DATA_UPLOADS, type_key="branch_data_missing",
+            severity=SEVERITY_INFO, title=f"No new sales data from {business.name}",
+            body=f"No new sales data has been received from {business.name} today.",
+            action_label="Upload sales data", action_url="/uploads", dedup_key=dedup_key,
+        )
+    else:
+        notify(
+            db, business_id=business.id, category=CATEGORY_DATA_UPLOADS, type_key="no_new_data_detected",
+            severity=SEVERITY_INFO, title="No new sales data today",
+            body="We have not received new sales data today. Update your data so ORLA can keep your insights current.",
+            action_label="Upload sales data", action_url="/uploads", dedup_key=dedup_key,
+        )
+
+
+def resolve_data_freshness(db: Session, *, business_id: uuid.UUID, entity_type: str) -> None:
+    """Called right after a successful import (app/imports/importer.py) so
+    an open freshness notification clears the moment fresh data actually
+    lands, rather than waiting for the next scheduler tick (up to 15
+    minutes — app/scheduler/__main__.py's TICK_INTERVAL_SECONDS)."""
+    if entity_type != _FRESHNESS_ENTITY_TYPE:
+        return
+    _clear_dedup(db, business_id, _freshness_dedup_key(business_id))
 
 
 # --- Reports & ORLA Insights -------------------------------------------------
