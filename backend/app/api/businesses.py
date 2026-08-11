@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.application.employee_seats import EmployeeSeatNotFound, get_own_employee_seat, update_own_employee_profile
 from app.application.members import list_business_members
 from app.billing.service import cancel_subscription
 from app.geocoding.service import suggest_addresses
@@ -25,6 +26,7 @@ from app.schemas.business import (
     BusinessOut,
     BusinessProfileUpdate,
 )
+from app.schemas.employee_seat import EmployeeSeatOut, SelfProfileUpdate
 from app.schemas.member import MemberOut
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
@@ -129,6 +131,54 @@ def list_members(
     return [MemberOut.model_validate(m) for m in members]
 
 
+@router.get("/{business_id}/me", response_model=EmployeeSeatOut)
+def get_my_employee_profile(
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> EmployeeSeatOut:
+    # Staff self-profile (Company Profile permissions batch) — the
+    # owner's own "profile" is the Business record's manager_first_name/
+    # manager_surname fields instead, edited through the owner-only
+    # PATCH /businesses/{id} above; an owner has no EmployeeSeat row to
+    # return here at all.
+    try:
+        seat = get_own_employee_seat(db, business_id=membership.business_id, user_id=membership.user_id)
+    except EmployeeSeatNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No employee profile found for this account"
+        ) from exc
+    return EmployeeSeatOut.from_seat(seat)
+
+
+@router.patch("/{business_id}/me", response_model=EmployeeSeatOut)
+def update_my_employee_profile(
+    payload: SelfProfileUpdate,
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> EmployeeSeatOut:
+    # Deliberately no role/status/email in SelfProfileUpdate — a staff
+    # member editing themselves can only ever change first_name/surname/
+    # address, all the way down through update_own_employee_profile and
+    # EmployeeSeatRepository.update_self_profile.
+    try:
+        seat = update_own_employee_profile(
+            db,
+            business_id=membership.business_id,
+            user_id=membership.user_id,
+            first_name=payload.first_name,
+            surname=payload.surname,
+            address_line1=payload.address_line1,
+            city=payload.city,
+            postal_code=payload.postal_code,
+            country=payload.country,
+        )
+    except EmployeeSeatNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No employee profile found for this account"
+        ) from exc
+    return EmployeeSeatOut.from_seat(seat)
+
+
 @router.patch("/{business_id}", response_model=BusinessOut)
 def update_business(
     business_id: uuid.UUID,
@@ -136,11 +186,15 @@ def update_business(
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> BusinessOut:
-    # Deliberately get_current_membership, not an owner-only check — this
-    # is descriptive contact/location record-keeping (manager name,
-    # address, phone, timezone...), not a financial or destructive action
-    # like delete or add-a-branch, so any member of the business may edit
-    # it.
+    # Owner-only (Company Profile permissions batch) — company/branch
+    # profile data was previously editable by any member; product rule is
+    # now "only owners can change anything related to the company or
+    # branches." Checked before any audit event is written, so a rejected
+    # staff attempt leaves no trace (a rejected action never happened).
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can edit the company profile"
+        )
     business = db.get(Business, business_id)
     if business is None or business.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")

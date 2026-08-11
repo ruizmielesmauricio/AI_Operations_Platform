@@ -85,6 +85,31 @@ const EMPTY_EMPLOYEE_DRAFT: EmployeeDraft = {
   country: "",
 };
 
+// A staff/manager member's own self-service profile edit (Company Profile
+// permissions batch) — deliberately just first_name/surname/address, no
+// role/email/status field exists here at all to even accidentally send;
+// the backend's own SelfProfileUpdate schema has the same restriction one
+// layer down. Plain inputs, not the live-suggestion address autocomplete
+// the owner-facing employee/branch forms use — this is a quick self-edit
+// convenience, not a first-time profile setup, so the extra UX polish
+// isn't worth the added complexity here.
+type MyProfileDraft = {
+  first_name: string;
+  surname: string;
+  address_line1: string;
+  city: string;
+  postal_code: string;
+  country: string;
+};
+const EMPTY_MY_PROFILE_DRAFT: MyProfileDraft = {
+  first_name: "",
+  surname: "",
+  address_line1: "",
+  city: "",
+  postal_code: "",
+  country: "",
+};
+
 // Mirrors statusLabel below, but for an employee seat rather than a
 // business's own subscription — deliberately not shown as "Subscribed"/
 // "Cancelled" (those already mean something specific for a business) so
@@ -172,6 +197,17 @@ export default function OnboardingPage() {
   const [employeeSubmitting, setEmployeeSubmitting] = useState(false);
   const [employeeError, setEmployeeError] = useState<string | null>(null);
   const employeeAddress = useAddressAutocomplete(employeeFormOpenFor);
+
+  // Staff/manager self-service profile edit — the business id the "Edit
+  // my profile" form is open for, if any. Separate from employeeFormOpenFor
+  // above (owner-only add/edit-any-employee) since the two must never be
+  // open at once for the same or different reasons — this one only ever
+  // reads/writes the caller's own row via /businesses/{id}/me.
+  const [myProfileFormOpenFor, setMyProfileFormOpenFor] = useState<string | null>(null);
+  const [myProfileDraft, setMyProfileDraft] = useState<MyProfileDraft>(EMPTY_MY_PROFILE_DRAFT);
+  const [myProfileSubmitting, setMyProfileSubmitting] = useState(false);
+  const [myProfileError, setMyProfileError] = useState<string | null>(null);
+  const [myProfileNotice, setMyProfileNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (session) {
@@ -525,6 +561,64 @@ export default function OnboardingPage() {
     }
   }
 
+  async function handleOpenMyProfile(businessId: string) {
+    setMyProfileFormOpenFor(businessId);
+    setMyProfileError(null);
+    setMyProfileNotice(null);
+    try {
+      const seat = await apiGet<EmployeeSeat>(`/businesses/${businessId}/me`);
+      setMyProfileDraft({
+        first_name: seat.first_name,
+        surname: seat.surname,
+        address_line1: seat.address_line1 ?? "",
+        city: seat.city ?? "",
+        postal_code: seat.postal_code ?? "",
+        country: seat.country ?? "",
+      });
+    } catch (err) {
+      setMyProfileError(err instanceof ApiError ? err.message : "Could not load your profile.");
+    }
+  }
+
+  function handleCancelMyProfile() {
+    setMyProfileFormOpenFor(null);
+    setMyProfileDraft(EMPTY_MY_PROFILE_DRAFT);
+    setMyProfileError(null);
+  }
+
+  function updateMyProfileDraft(key: keyof MyProfileDraft, value: string) {
+    setMyProfileDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSaveMyProfile(e: React.FormEvent, businessId: string) {
+    e.preventDefault();
+    setMyProfileError(null);
+    setMyProfileNotice(null);
+    setMyProfileSubmitting(true);
+    try {
+      await apiPatch<EmployeeSeat>(`/businesses/${businessId}/me`, {
+        first_name: myProfileDraft.first_name,
+        surname: myProfileDraft.surname,
+        address_line1: myProfileDraft.address_line1 || null,
+        city: myProfileDraft.city || null,
+        postal_code: myProfileDraft.postal_code || null,
+        country: myProfileDraft.country || null,
+      });
+      // The unified members list (GET .../members) shows first_name/
+      // surname too — refetch so it reflects the change immediately
+      // rather than showing the old name until the next full page load.
+      apiGet<Member[]>(`/businesses/${businessId}/members`)
+        .then((members) => setMembersByBusiness((prev) => ({ ...prev, [businessId]: members })))
+        .catch(() => undefined);
+      setMyProfileNotice("Profile saved.");
+      setMyProfileFormOpenFor(null);
+    } catch (err) {
+      setMyProfileError(err instanceof ApiError ? err.message : "Could not save your profile.");
+    } finally {
+      setMyProfileSubmitting(false);
+    }
+  }
+
   if (checkingSession) {
     return (
       <main>
@@ -613,17 +707,122 @@ export default function OnboardingPage() {
                   — {b.template} ({b.role}) —{" "}
                   <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
                 </div>
+                {/* Every operational tool, one row, same for owner and
+                    staff (Company Profile permissions batch — "do not
+                    hide operational tools from staff") — this used to be
+                    just Upload data / View profile / Notifications,
+                    missing direct links to Dashboard, Reports, Ask ORLA,
+                    Thresholds, Suppliers, and Transactions entirely. */}
                 <div>
+                  <a href={`/dashboard?business=${b.id}`}>Dashboard</a>
+                  {" — "}
                   {canUpload ? (
                     <a href={`/uploads?business=${b.id}`}>Upload data</a>
                   ) : (
                     <span className="hint">Upload data (subscribe first)</span>
                   )}
                   {" — "}
-                  <a href={`/onboarding/${b.id}`}>View profile</a>
+                  <a href={`/reports?business=${b.id}`}>Reports</a>
+                  {" — "}
+                  <a href={`/chat?business=${b.id}`}>Ask ORLA</a>
+                  {" — "}
+                  <a href={`/products?business=${b.id}`}>Thresholds</a>
+                  {" — "}
+                  <a href={`/suppliers?business=${b.id}`}>Suppliers</a>
+                  {" — "}
+                  <a href={`/transactions?business=${b.id}`}>Transactions</a>
                   {" — "}
                   <a href={`/notifications?business=${b.id}`}>Notifications</a>
+                  {" — "}
+                  <a href={`/onboarding/${b.id}`}>View profile</a>
                 </div>
+                {/* Staff self-service profile edit (Company Profile
+                    permissions batch) — a non-owner member can only ever
+                    edit their own name/address here, never the company/
+                    branch profile above (owner-only) or another
+                    employee's row (owner-only, in the Team list below). */}
+                {b.role !== "owner" && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        myProfileFormOpenFor === b.id ? handleCancelMyProfile() : handleOpenMyProfile(b.id)
+                      }
+                    >
+                      {myProfileFormOpenFor === b.id ? "Cancel" : "Edit my profile"}
+                    </button>
+                    {myProfileNotice && myProfileFormOpenFor !== b.id && (
+                      <span className="status-ok"> {myProfileNotice}</span>
+                    )}
+                  </div>
+                )}
+                {b.role !== "owner" && myProfileFormOpenFor === b.id && (
+                  <form onSubmit={(e) => handleSaveMyProfile(e, b.id)}>
+                    <div>
+                      <label htmlFor={`myprofile-first_name-${b.id}`}>First name</label>
+                      <br />
+                      <input
+                        id={`myprofile-first_name-${b.id}`}
+                        required
+                        value={myProfileDraft.first_name}
+                        onChange={(e) => updateMyProfileDraft("first_name", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-surname-${b.id}`}>Surname</label>
+                      <br />
+                      <input
+                        id={`myprofile-surname-${b.id}`}
+                        required
+                        value={myProfileDraft.surname}
+                        onChange={(e) => updateMyProfileDraft("surname", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-address_line1-${b.id}`}>Address</label>
+                      <br />
+                      <input
+                        id={`myprofile-address_line1-${b.id}`}
+                        value={myProfileDraft.address_line1}
+                        onChange={(e) => updateMyProfileDraft("address_line1", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-city-${b.id}`}>City</label>
+                      <br />
+                      <input
+                        id={`myprofile-city-${b.id}`}
+                        value={myProfileDraft.city}
+                        onChange={(e) => updateMyProfileDraft("city", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-postal_code-${b.id}`}>Postal code</label>
+                      <br />
+                      <input
+                        id={`myprofile-postal_code-${b.id}`}
+                        value={myProfileDraft.postal_code}
+                        onChange={(e) => updateMyProfileDraft("postal_code", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-country-${b.id}`}>Country</label>
+                      <br />
+                      <input
+                        id={`myprofile-country-${b.id}`}
+                        value={myProfileDraft.country}
+                        onChange={(e) => updateMyProfileDraft("country", e.target.value)}
+                      />
+                    </div>
+                    {myProfileError && <p className="status-error">{myProfileError}</p>}
+                    <button type="submit" disabled={myProfileSubmitting}>
+                      {myProfileSubmitting ? "Saving…" : "Save"}
+                    </button>{" "}
+                    <button type="button" disabled={myProfileSubmitting} onClick={handleCancelMyProfile}>
+                      Cancel
+                    </button>
+                  </form>
+                )}
                 {/* Payment flows are owner-only (backend now enforces this
                     on checkout-session/portal-session too — this is UX,
                     not the real boundary): a staff/manager member would

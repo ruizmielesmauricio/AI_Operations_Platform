@@ -169,6 +169,7 @@ export default function BusinessProfilePage() {
   }
 
   const label = statusLabel(business, subscriptionStatus);
+  const canEdit = business.role === "owner";
 
   return (
     <main>
@@ -183,6 +184,35 @@ export default function BusinessProfilePage() {
         {business.parent_business_id && " — Branch"}
       </p>
 
+      {!canEdit && (
+        // Read-only for staff/manager (Company Profile permissions
+        // batch) — the backend already 403s a non-owner PATCH here, but
+        // showing an editable form with a Save button that predictably
+        // fails is exactly the dead-end UI the product rule calls out.
+        // Same field list/order as the editable form below, read
+        // straight off `business` rather than the edit-only `form` state.
+        <dl>
+          {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel }) => (
+            <div key={key}>
+              <dt>{fieldLabel}</dt>
+              <dd>{business[key] || "—"}</dd>
+            </div>
+          ))}
+          <div>
+            <dt>Address</dt>
+            <dd>{business.address_line1 || "—"}</dd>
+          </div>
+          {PROFILE_FIELDS_AFTER_ADDRESS.map(({ key, label: fieldLabel }) => (
+            <div key={key}>
+              <dt>{fieldLabel}</dt>
+              <dd>{business[key] || "—"}</dd>
+            </div>
+          ))}
+          <p className="hint">Only the shop&apos;s owner can edit the company profile.</p>
+        </dl>
+      )}
+
+      {canEdit && (
       <form onSubmit={handleSave}>
         {PROFILE_FIELDS_BEFORE_ADDRESS.map(({ key, label: fieldLabel, type }) => (
           <div key={key}>
@@ -267,6 +297,7 @@ export default function BusinessProfilePage() {
           Cancel
         </button>
       </form>
+      )}
     </main>
   );
 }

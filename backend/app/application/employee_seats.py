@@ -241,6 +241,56 @@ def update_employee_profile(
     return seat
 
 
+def get_own_employee_seat(db: Session, *, business_id: uuid.UUID, user_id: str) -> EmployeeSeat:
+    """The staff self-profile route's read side (GET .../me). Raises
+    EmployeeSeatNotFound for an owner (who has no EmployeeSeat row at
+    all — their own profile lives on the Business record itself, edited
+    through the owner-only company-profile PATCH instead)."""
+    seat = EmployeeSeatRepository(db).get_for_business_and_user(business_id, user_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(f"No employee profile for user {user_id} at business {business_id}")
+    return seat
+
+
+def update_own_employee_profile(
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    user_id: str,
+    first_name: str,
+    surname: str,
+    address_line1: str | None,
+    city: str | None,
+    postal_code: str | None,
+    country: str | None,
+) -> EmployeeSeat:
+    """The staff self-profile route's write side (PATCH .../me) —
+    deliberately has no role/status/email parameter to pass through at
+    all, unlike update_employee_profile above: a staff member editing
+    themselves can only ever reach EmployeeSeatRepository.update_self_profile,
+    which has the same restriction built in one layer down."""
+    seats = EmployeeSeatRepository(db)
+    seat = seats.get_for_business_and_user(business_id, user_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(f"No employee profile for user {user_id} at business {business_id}")
+
+    seats.update_self_profile(
+        seat, first_name=first_name, surname=surname, address_line1=address_line1,
+        city=city, postal_code=postal_code, country=country,
+    )
+    record_audit_event(
+        db,
+        business_id=business_id,
+        user_id=user_id,
+        action="employee_self_profile_updated",
+        target_type="employee_seat",
+        target_id=str(seat.id),
+    )
+    db.commit()
+    db.refresh(seat)
+    return seat
+
+
 def delete_employee(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, deleting_user_id: str) -> EmployeeSeat:
     """Owner-only deletion/deactivation (enforced by the caller — the API
     route — not here, same split as every other route in this module).

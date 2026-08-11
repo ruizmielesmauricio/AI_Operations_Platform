@@ -174,6 +174,34 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     assert refetched["manager_first_name"] is None
 
 
+def test_a_genuine_staff_member_cannot_update_the_business_profile(client):
+    """Distinct from test_a_non_member_cannot_update_another_business_s_profile
+    above: user-b here IS a real member of this same business (staff),
+    not a stranger — exercises the owner-only role check itself
+    (Company Profile permissions batch), not get_current_membership's
+    separate "not a member at all" rejection."""
+    import uuid
+
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+
+    response = client.patch(
+        f"/businesses/{business['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_staff
+    )
+    assert response.status_code == 403
+
+    refetched = client.get(f"/businesses/{business['id']}", headers=headers_owner).json()
+    assert refetched["manager_first_name"] is None
+
+
 # --- PR-6.5: audit logging for profile changes -------------------------------
 
 
@@ -227,6 +255,30 @@ def test_a_rejected_profile_update_creates_no_audit_entry(client):
 
     session = client._SessionLocal()
     rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business_a["id"])).all()
+    session.close()
+    assert rows == []
+
+
+def test_a_genuine_staff_member_s_rejected_profile_update_creates_no_audit_entry(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+
+    response = client.patch(
+        f"/businesses/{business['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_staff
+    )
+    assert response.status_code == 403
+
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
     session.close()
     assert rows == []
 

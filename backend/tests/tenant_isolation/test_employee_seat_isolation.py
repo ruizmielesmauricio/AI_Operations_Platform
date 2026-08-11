@@ -153,6 +153,125 @@ def test_a_non_owner_cannot_add_or_edit_an_employee(client):
     assert edit_response.status_code == 403
 
 
+def _activate_employee(client, monkeypatch, headers_owner, headers_employee, business_id, *, email, first_name, surname):
+    """Shared setup for the self-profile tests below — the same "employee
+    already has an account" ordering as test_signup_before_payment_also_
+    activates_once_payment_succeeds, plus firing the payment webhook so
+    the seat ends up genuinely active with a real Membership, not just
+    linked. Returns the seat id."""
+    client.get("/businesses", headers=headers_employee)  # creates the User row for this email
+    seat = client.post(
+        f"/businesses/{business_id}/employee-seats",
+        json={"first_name": first_name, "surname": surname, "email": email, "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]
+    _fire_active_webhook(client, monkeypatch, business_id, seat["id"], event_id=f"evt_{seat['id']}")
+    return seat["id"]
+
+
+def test_staff_can_fetch_and_edit_own_profile(client, monkeypatch):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    _activate_employee(
+        client, monkeypatch, headers_owner, headers_staff, business["id"],
+        email="b@example.com", first_name="Bea", surname="O'Brien",
+    )
+
+    fetched = client.get(f"/businesses/{business['id']}/me", headers=headers_staff)
+    assert fetched.status_code == 200
+    assert fetched.json()["first_name"] == "Bea"
+    assert fetched.json()["role"] == "staff"
+
+    updated = client.patch(
+        f"/businesses/{business['id']}/me",
+        json={"first_name": "Beatrice", "surname": "O'Brien", "address_line1": "1 Main St", "city": "Cork",
+              "postal_code": "T12", "country": "Ireland"},
+        headers=headers_staff,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["first_name"] == "Beatrice"
+    assert updated.json()["city"] == "Cork"
+
+    # Persisted, not just echoed back.
+    refetched = client.get(f"/businesses/{business['id']}/me", headers=headers_staff).json()
+    assert refetched["first_name"] == "Beatrice"
+    assert refetched["city"] == "Cork"
+
+
+def test_staff_self_profile_edit_never_touches_another_employees_row(client, monkeypatch):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    headers_manager = bearer_header("user-c", "c@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    _activate_employee(
+        client, monkeypatch, headers_owner, headers_staff, business["id"],
+        email="b@example.com", first_name="Bea", surname="O'Brien",
+    )
+    _activate_employee(
+        client, monkeypatch, headers_owner, headers_manager, business["id"],
+        email="c@example.com", first_name="Cian", surname="Walsh",
+    )
+
+    client.patch(
+        f"/businesses/{business['id']}/me",
+        json={"first_name": "Beatrice", "surname": "O'Brien"},
+        headers=headers_staff,
+    )
+
+    # Only Bea's own row changed — Cian's is untouched, proving the
+    # self-profile route can never be pointed at someone else's seat
+    # (there's no seat_id anywhere in the request to redirect it with).
+    cian_profile = client.get(f"/businesses/{business['id']}/me", headers=headers_manager).json()
+    assert cian_profile["first_name"] == "Cian"
+
+
+def test_staff_self_profile_ignores_role_status_and_email_in_the_request_body(client, monkeypatch):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    _activate_employee(
+        client, monkeypatch, headers_owner, headers_staff, business["id"],
+        email="b@example.com", first_name="Bea", surname="O'Brien",
+    )
+
+    response = client.patch(
+        f"/businesses/{business['id']}/me",
+        json={
+            "first_name": "Beatrice", "surname": "O'Brien",
+            "role": "owner", "status": "active", "email": "hijacked@example.com",
+        },
+        headers=headers_staff,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # SelfProfileUpdate has no role/status/email field at all — extra
+    # keys in the request are simply not part of the schema, so they can
+    # never reach EmployeeSeatRepository.update_self_profile.
+    assert body["role"] == "staff"
+    assert body["status"] == "active"
+    assert body["email"] == "b@example.com"
+
+    # The real Membership.role is untouched too — the seat never
+    # silently became an owner-level membership.
+    session = client._SessionLocal()
+    membership = session.query(Membership).filter(Membership.user_id == "user-b").first()
+    session.close()
+    assert membership.role == "staff"
+
+
+def test_owner_has_no_self_profile_via_employee_seat_route(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    get_response = client.get(f"/businesses/{business['id']}/me", headers=headers_owner)
+    patch_response = client.patch(
+        f"/businesses/{business['id']}/me", json={"first_name": "X", "surname": "Y"}, headers=headers_owner
+    )
+    assert get_response.status_code == 404
+    assert patch_response.status_code == 404
+
+
 def test_a_non_owner_cannot_list_employee_seats(client):
     headers_owner = bearer_header("user-a", "a@example.com")
     headers_staff = bearer_header("user-b", "b@example.com")
