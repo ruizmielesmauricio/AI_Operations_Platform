@@ -157,6 +157,176 @@ label {
   max-width: 1180px;
 }
 
+.auth-page {
+  display: grid;
+  min-height: calc(100vh - 48px);
+  place-items: center;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.auth-card {
+  width: min(100%, 430px);
+  padding: 2rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  box-shadow: 0 12px 30px rgb(27 30 31 / 8%);
+}
+
+.auth-brand {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  color: var(--app-text);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.auth-brand span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--app-green);
+  color: #fff;
+  font-size: 0.78rem;
+}
+
+.auth-card form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.4rem;
+}
+
+.auth-card form > div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.auth-card input:not([type="checkbox"]) {
+  width: 100%;
+}
+
+.auth-card label:has(input[type="checkbox"]) {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  color: #34403a;
+  font-size: 0.88rem;
+}
+
+.auth-card form > button,
+.auth-secondary-action {
+  width: 100%;
+}
+
+.auth-secondary-action {
+  border-color: var(--app-border-strong);
+  background: var(--app-panel);
+  color: #34403a;
+}
+
+.auth-secondary-action:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.auth-footer {
+  margin: 1.2rem 0 0;
+  color: var(--app-muted);
+}
+
+.dashboard-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.2rem;
+}
+
+.dashboard-title-row h1 {
+  margin: 0;
+}
+
+.dashboard-section-menu-toggle {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.32rem 0.55rem;
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: #34403a;
+  font-size: 0.82rem;
+}
+
+.dashboard-section-menu-toggle:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.dashboard-section-menu-toggle span:first-child {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.dashboard-workspace {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.dashboard-section-menu {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  padding: 0.8rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.dashboard-section-menu--closed {
+  display: none;
+}
+
+.dashboard-section-menu p {
+  margin-bottom: 0.5rem;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.dashboard-section-menu nav {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.dashboard-section-menu a {
+  padding: 0.38rem 0.45rem;
+  border-radius: 5px;
+  color: #34403a;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.dashboard-section-menu a:hover {
+  background: var(--app-green-soft);
+  color: #18563f;
+}
+
+.dashboard-content {
+  min-width: 0;
+}
+
+.dashboard-content > div[id] {
+  scroll-margin-top: 16px;
+}
+
 section {
   margin: 2rem 0;
 }
@@ -667,10 +837,15 @@ button.notification-card__control:hover:not(:disabled) {
   .notifications-sidebar { display: grid; grid-template-columns: minmax(0, 230px) 1fr; gap: 0.8rem 1rem; }
   .notifications-filter-title { grid-column: 1 / -1; margin: 0.2rem 0 -0.35rem; }
   .notifications-category-list { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-workspace { grid-template-columns: 1fr; gap: 0.9rem; }
+  .dashboard-section-menu { position: static; }
+  .dashboard-section-menu nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 560px) {
   h1 { font-size: 1.65rem; }
+  .auth-page { min-height: calc(100vh - 24px); }
+  .auth-card { padding: 1.35rem; }
   .app-nav__brand { flex: 1; }
   .app-nav__logout { margin-left: auto; }
   .notifications-sidebar { display: block; }
@@ -681,6 +856,8 @@ button.notification-card__control:hover:not(:disabled) {
   .notification-card { grid-template-columns: 9px minmax(0, 1fr); }
   .notification-card__controls { grid-column: 2; }
   .notifications-pagination { justify-content: space-between; }
+  .dashboard-section-menu nav { grid-template-columns: 1fr; }
+  .dashboard-section-menu-toggle__label { display: none; }
 }
 
 @media print {
