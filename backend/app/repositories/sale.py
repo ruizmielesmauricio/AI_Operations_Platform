@@ -76,6 +76,15 @@ class SaleRepository:
         ).all()
         return [(sold_at, total_amount) for sold_at, total_amount in rows]
 
+    def earliest_sale_date(self, business_id: uuid.UUID) -> datetime | None:
+        """The business's very first recorded sale — used to gate the
+        weekly Business Performance notification's "enough reliable
+        history" requirement (ORLA Notifications/Security/Retention
+        prompt: "require at least four complete weeks unless the
+        analytics layer has a stronger confidence rule"). None for a
+        business with no sales at all yet."""
+        return self.session.scalar(select(func.min(Sale.sold_at)).where(Sale.business_id == business_id))
+
     def sum_total_amount_in_range(self, business_id: uuid.UUID, start: datetime, end: datetime) -> Decimal:
         """Total revenue for [start, end) — used as-is (Stage C9), rather
         than derived from sale_items, since a sale's total_amount is the

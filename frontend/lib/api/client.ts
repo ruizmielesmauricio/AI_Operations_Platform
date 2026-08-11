@@ -60,6 +60,24 @@ export async function apiGet<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// A binary download (report PDF/DOCX export) — same auth header handling
+// as apiGet, but the response is a file, not JSON, and the filename
+// comes from the server's own Content-Disposition header (already made
+// safe server-side — see backend/app/api/reports.py's own
+// _safe_filename_component) rather than guessed client-side.
+export async function apiGetBlob(path: string): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(`${API_URL}${path}`, {
+    cache: "no-store",
+    headers: await authHeaders(),
+  });
+  if (!response.ok) {
+    await throwApiError(response, path);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  return { blob: await response.blob(), filename: match ? match[1] : null };
+}
+
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",

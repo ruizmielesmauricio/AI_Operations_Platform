@@ -85,6 +85,31 @@ const EMPTY_EMPLOYEE_DRAFT: EmployeeDraft = {
   country: "",
 };
 
+// A staff/manager member's own self-service profile edit (Company Profile
+// permissions batch) — deliberately just first_name/surname/address, no
+// role/email/status field exists here at all to even accidentally send;
+// the backend's own SelfProfileUpdate schema has the same restriction one
+// layer down. Plain inputs, not the live-suggestion address autocomplete
+// the owner-facing employee/branch forms use — this is a quick self-edit
+// convenience, not a first-time profile setup, so the extra UX polish
+// isn't worth the added complexity here.
+type MyProfileDraft = {
+  first_name: string;
+  surname: string;
+  address_line1: string;
+  city: string;
+  postal_code: string;
+  country: string;
+};
+const EMPTY_MY_PROFILE_DRAFT: MyProfileDraft = {
+  first_name: "",
+  surname: "",
+  address_line1: "",
+  city: "",
+  postal_code: "",
+  country: "",
+};
+
 // Mirrors statusLabel below, but for an employee seat rather than a
 // business's own subscription — deliberately not shown as "Subscribed"/
 // "Cancelled" (those already mean something specific for a business) so
@@ -173,6 +198,17 @@ export default function OnboardingPage() {
   const [employeeError, setEmployeeError] = useState<string | null>(null);
   const employeeAddress = useAddressAutocomplete(employeeFormOpenFor);
 
+  // Staff/manager self-service profile edit — the business id the "Edit
+  // my profile" form is open for, if any. Separate from employeeFormOpenFor
+  // above (owner-only add/edit-any-employee) since the two must never be
+  // open at once for the same or different reasons — this one only ever
+  // reads/writes the caller's own row via /businesses/{id}/me.
+  const [myProfileFormOpenFor, setMyProfileFormOpenFor] = useState<string | null>(null);
+  const [myProfileDraft, setMyProfileDraft] = useState<MyProfileDraft>(EMPTY_MY_PROFILE_DRAFT);
+  const [myProfileSubmitting, setMyProfileSubmitting] = useState(false);
+  const [myProfileError, setMyProfileError] = useState<string | null>(null);
+  const [myProfileNotice, setMyProfileNotice] = useState<string | null>(null);
+
   useEffect(() => {
     if (session) {
       // include_deleted=true — this list is now the "Company Profile"
@@ -183,6 +219,32 @@ export default function OnboardingPage() {
       apiGet<Business[]>("/businesses?include_deleted=true").then(setBusinesses).catch(() => undefined);
     }
   }, [session]);
+
+  // AppNav's own businessId — Company Profile has no single "selected"
+  // business the way /dashboard or /products do, so it resolves one
+  // itself and passes it in: every app-section link (Dashboard, Uploads,
+  // Reports, Ask ORLA, Thresholds, Suppliers, Transactions, Notifications)
+  // belongs in that one top nav, not repeated under each business/branch
+  // row below (found live: an earlier version of this fix put them under
+  // every row instead, which duplicated navigation and got messy the
+  // moment branches existed). Defaults to the ?business= query param when
+  // it names one of the user's own active businesses, else their first
+  // active one (`businesses` already only ever contains businesses the
+  // caller has a real Membership on — GET /businesses is user-scoped —
+  // so a staff member can never land on a sibling branch they don't
+  // belong to just from this default). The selector below lets either
+  // role switch it manually without losing that pick on every unrelated
+  // businesses-list update (create/delete elsewhere on this same page).
+  const [navBusinessId, setNavBusinessId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const activeBusinesses = businesses.filter((b) => !b.deleted_at);
+    setNavBusinessId((current) => {
+      if (current && activeBusinesses.some((b) => b.id === current)) return current;
+      const requested = new URLSearchParams(window.location.search).get("business");
+      const requestedIsValid = activeBusinesses.some((b) => b.id === requested);
+      return requestedIsValid ? (requested as string) : activeBusinesses[0]?.id;
+    });
+  }, [businesses]);
 
   useEffect(() => {
     businesses.forEach((b) => {
@@ -508,6 +570,64 @@ export default function OnboardingPage() {
     }
   }
 
+  async function handleOpenMyProfile(businessId: string) {
+    setMyProfileFormOpenFor(businessId);
+    setMyProfileError(null);
+    setMyProfileNotice(null);
+    try {
+      const seat = await apiGet<EmployeeSeat>(`/businesses/${businessId}/me`);
+      setMyProfileDraft({
+        first_name: seat.first_name,
+        surname: seat.surname,
+        address_line1: seat.address_line1 ?? "",
+        city: seat.city ?? "",
+        postal_code: seat.postal_code ?? "",
+        country: seat.country ?? "",
+      });
+    } catch (err) {
+      setMyProfileError(err instanceof ApiError ? err.message : "Could not load your profile.");
+    }
+  }
+
+  function handleCancelMyProfile() {
+    setMyProfileFormOpenFor(null);
+    setMyProfileDraft(EMPTY_MY_PROFILE_DRAFT);
+    setMyProfileError(null);
+  }
+
+  function updateMyProfileDraft(key: keyof MyProfileDraft, value: string) {
+    setMyProfileDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSaveMyProfile(e: React.FormEvent, businessId: string) {
+    e.preventDefault();
+    setMyProfileError(null);
+    setMyProfileNotice(null);
+    setMyProfileSubmitting(true);
+    try {
+      await apiPatch<EmployeeSeat>(`/businesses/${businessId}/me`, {
+        first_name: myProfileDraft.first_name,
+        surname: myProfileDraft.surname,
+        address_line1: myProfileDraft.address_line1 || null,
+        city: myProfileDraft.city || null,
+        postal_code: myProfileDraft.postal_code || null,
+        country: myProfileDraft.country || null,
+      });
+      // The unified members list (GET .../members) shows first_name/
+      // surname too — refetch so it reflects the change immediately
+      // rather than showing the old name until the next full page load.
+      apiGet<Member[]>(`/businesses/${businessId}/members`)
+        .then((members) => setMembersByBusiness((prev) => ({ ...prev, [businessId]: members })))
+        .catch(() => undefined);
+      setMyProfileNotice("Profile saved.");
+      setMyProfileFormOpenFor(null);
+    } catch (err) {
+      setMyProfileError(err instanceof ApiError ? err.message : "Could not save your profile.");
+    } finally {
+      setMyProfileSubmitting(false);
+    }
+  }
+
   if (checkingSession) {
     return (
       <main>
@@ -530,11 +650,33 @@ export default function OnboardingPage() {
   // now shows deleted businesses too, so this must filter them out
   // itself or a deleted shop would wrongly keep the create form hidden).
   const hasStandaloneShop = businesses.some((b) => !b.parent_business_id && !b.deleted_at);
+  const activeBusinessesForNav = businesses.filter((b) => !b.deleted_at);
 
   return (
     <main>
-      <AppNav />
+      <AppNav businessId={navBusinessId} />
       <h1>Your businesses</h1>
+      {/* Drives every link in the top nav above — same list GET /businesses
+          already scopes to the caller's own memberships, so a staff
+          member can only ever pick a business/branch they're actually
+          assigned to, never a sibling branch they don't belong to. */}
+      {activeBusinessesForNav.length > 0 && (
+        <p>
+          <label htmlFor="nav-business-select">Business context for navigation</label>
+          <br />
+          <select
+            id="nav-business-select"
+            value={navBusinessId ?? ""}
+            onChange={(e) => setNavBusinessId(e.target.value || undefined)}
+          >
+            {activeBusinessesForNav.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.parent_business_id ? `↳ ${b.name}` : b.name}
+              </option>
+            ))}
+          </select>
+        </p>
+      )}
       {billingError && <p className="status-error">{billingError}</p>}
       {deleteError && <p className="status-error">{deleteError}</p>}
       {businesses.length === 0 ? (
@@ -577,15 +719,6 @@ export default function OnboardingPage() {
               ? businesses.find((p) => p.id === b.parent_business_id)
               : null;
             const isStandalone = !b.parent_business_id;
-            // The upload/import routes are already hard-gated server-side
-            // (require_active_subscription, 402 without an active
-            // subscription) — this link used to render unconditionally
-            // regardless of status, which looked like real access from
-            // here even though the actual upload would be rejected.
-            // Matching the link's visibility to the real gate closes that
-            // false impression rather than just leaving it to a 402 the
-            // user only discovers after clicking through.
-            const canUpload = label === "Subscribed";
             return (
               <li key={b.id} style={{ marginBottom: "1em" }}>
                 <div>
@@ -596,37 +729,131 @@ export default function OnboardingPage() {
                   — {b.template} ({b.role}) —{" "}
                   <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
                 </div>
+                {/* Company Profile rows are about the profile record
+                    itself, not a second navigation menu — every
+                    app-section link lives in the top nav above (driven by
+                    the business-context selector), never repeated per
+                    row. "View profile" stays because it's specifically
+                    about this Company Profile record (owner-editable,
+                    staff-read-only), not a general app section. */}
                 <div>
-                  {canUpload ? (
-                    <a href={`/uploads?business=${b.id}`}>Upload data</a>
-                  ) : (
-                    <span className="hint">Upload data (subscribe first)</span>
-                  )}
-                  {" — "}
                   <a href={`/onboarding/${b.id}`}>View profile</a>
                 </div>
-                <div>
-                  {isRecoverableInPortal ? (
-                    <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
-                      {busy ? "Opening…" : "Manage billing"}
+                {/* Staff self-service profile edit (Company Profile
+                    permissions batch) — a non-owner member can only ever
+                    edit their own name/address here, never the company/
+                    branch profile above (owner-only) or another
+                    employee's row (owner-only, in the Team list below). */}
+                {b.role !== "owner" && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        myProfileFormOpenFor === b.id ? handleCancelMyProfile() : handleOpenMyProfile(b.id)
+                      }
+                    >
+                      {myProfileFormOpenFor === b.id ? "Cancel" : "Edit my profile"}
                     </button>
-                  ) : (
-                    <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
-                      {busy
-                        ? "Starting…"
-                        : b.parent_business_id
-                          ? "Complete payment (€30/mo)"
-                          : "Subscribe"}
+                    {myProfileNotice && myProfileFormOpenFor !== b.id && (
+                      <span className="status-ok"> {myProfileNotice}</span>
+                    )}
+                  </div>
+                )}
+                {b.role !== "owner" && myProfileFormOpenFor === b.id && (
+                  <form onSubmit={(e) => handleSaveMyProfile(e, b.id)}>
+                    <div>
+                      <label htmlFor={`myprofile-first_name-${b.id}`}>First name</label>
+                      <br />
+                      <input
+                        id={`myprofile-first_name-${b.id}`}
+                        required
+                        value={myProfileDraft.first_name}
+                        onChange={(e) => updateMyProfileDraft("first_name", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-surname-${b.id}`}>Surname</label>
+                      <br />
+                      <input
+                        id={`myprofile-surname-${b.id}`}
+                        required
+                        value={myProfileDraft.surname}
+                        onChange={(e) => updateMyProfileDraft("surname", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-address_line1-${b.id}`}>Address</label>
+                      <br />
+                      <input
+                        id={`myprofile-address_line1-${b.id}`}
+                        value={myProfileDraft.address_line1}
+                        onChange={(e) => updateMyProfileDraft("address_line1", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-city-${b.id}`}>City</label>
+                      <br />
+                      <input
+                        id={`myprofile-city-${b.id}`}
+                        value={myProfileDraft.city}
+                        onChange={(e) => updateMyProfileDraft("city", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-postal_code-${b.id}`}>Postal code</label>
+                      <br />
+                      <input
+                        id={`myprofile-postal_code-${b.id}`}
+                        value={myProfileDraft.postal_code}
+                        onChange={(e) => updateMyProfileDraft("postal_code", e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`myprofile-country-${b.id}`}>Country</label>
+                      <br />
+                      <input
+                        id={`myprofile-country-${b.id}`}
+                        value={myProfileDraft.country}
+                        onChange={(e) => updateMyProfileDraft("country", e.target.value)}
+                      />
+                    </div>
+                    {myProfileError && <p className="status-error">{myProfileError}</p>}
+                    <button type="submit" disabled={myProfileSubmitting}>
+                      {myProfileSubmitting ? "Saving…" : "Save"}
+                    </button>{" "}
+                    <button type="button" disabled={myProfileSubmitting} onClick={handleCancelMyProfile}>
+                      Cancel
                     </button>
-                  )}
-                </div>
+                  </form>
+                )}
+                {/* Payment flows are owner-only (backend now enforces this
+                    on checkout-session/portal-session too — this is UX,
+                    not the real boundary): a staff/manager member would
+                    otherwise see a live-looking button that just 403s. */}
+                {b.role === "owner" && (
+                  <div>
+                    {isRecoverableInPortal ? (
+                      <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
+                        {busy ? "Opening…" : "Manage billing"}
+                      </button>
+                    ) : (
+                      <button type="button" disabled={busy} onClick={() => handleSubscribe(b.id)}>
+                        {busy
+                          ? "Starting…"
+                          : b.parent_business_id
+                            ? "Complete payment (€30/mo)"
+                            : "Subscribe"}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* Its own line, ahead of the more incidental actions below
                     (delete) — "we are missing the button to add more
                     branches" was reported directly after it was buried at
                     the end of one long run-on line of buttons; only shown
                     for a standalone shop, since a branch can't itself have
                     branches. */}
-                {isStandalone && (
+                {isStandalone && b.role === "owner" && (
                   <div>
                     <button
                       type="button"
@@ -638,7 +865,7 @@ export default function OnboardingPage() {
                     </button>
                   </div>
                 )}
-                {isStandalone && branchFormOpenFor === b.id && (
+                {isStandalone && b.role === "owner" && branchFormOpenFor === b.id && (
                   <form onSubmit={(e) => handleAddBranch(e, b.id)}>
                     <h3>Branch profile</h3>
                     <p className="hint">
@@ -960,25 +1187,27 @@ export default function OnboardingPage() {
                     </ul>
                   </div>
                 )}
-                <div>
-                  {confirmingDeleteId === b.id ? (
-                    <span>
-                      Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
-                      your sales, products, and reports stay on record, but you&apos;ll lose access to
-                      them here.{" "}
-                      <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
-                        {deleting ? "Deleting…" : "Yes, delete"}
-                      </button>{" "}
-                      <button type="button" disabled={deleting} onClick={handleCancelDelete}>
-                        No
+                {b.role === "owner" && (
+                  <div>
+                    {confirmingDeleteId === b.id ? (
+                      <span>
+                        Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
+                        your sales, products, and reports stay on record, but you&apos;ll lose access to
+                        them here.{" "}
+                        <button type="button" disabled={deleting} onClick={() => handleConfirmDelete(b)}>
+                          {deleting ? "Deleting…" : "Yes, delete"}
+                        </button>{" "}
+                        <button type="button" disabled={deleting} onClick={handleCancelDelete}>
+                          No
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" onClick={() => handleRequestDelete(b.id)}>
+                        Delete this shop
                       </button>
-                    </span>
-                  ) : (
-                    <button type="button" onClick={() => handleRequestDelete(b.id)}>
-                      Delete this shop
-                    </button>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}

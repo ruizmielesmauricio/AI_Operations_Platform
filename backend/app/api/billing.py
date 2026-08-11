@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -30,6 +30,11 @@ def create_checkout_session(
     current_user: AuthenticatedUser = Depends(get_current_user_synced),
     db: Session = Depends(get_db),
 ) -> CheckoutSessionResponse:
+    # Starting a real payment flow is an owner-only action (Notification
+    # Centre permissions batch) — matches the same role check already on
+    # employee-seat and branch/delete-business routes.
+    if membership.role != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can manage billing")
     checkout_url = service.start_checkout(
         db=db, business_id=membership.business_id, business_email=current_user.email
     )
@@ -41,6 +46,8 @@ def create_portal_session(
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> PortalSessionResponse:
+    if membership.role != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can manage billing")
     subscription = SubscriptionRepository(db).get_by_business_id(membership.business_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No subscription for this business")

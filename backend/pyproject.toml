@@ -21,6 +21,15 @@ dependencies = [
     # network call, no extra provider dependency, and no second vendor's
     # timezone guess to reconcile against Geoapify's own address match.
     "timezonefinder>=6.5",
+    # Real, server-generated report exports (ORLA Notifications/Security/
+    # Retention prompt, section 7) — replacing the existing "Download
+    # PDF" button's browser-print (frontend/app/reports/[id]/page.tsx,
+    # v1.28) with an actual file the backend enforces permissions on, not
+    # just a client-side print dialog. Both are pure-Python wheels — no
+    # native system libraries (e.g. no cairo/pango, unlike weasyprint),
+    # so no Docker image changes needed.
+    "reportlab>=4.2",
+    "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]

@@ -11,6 +11,7 @@ from app.models.import_record import ImportMappingProfile, ImportRecord
 from app.models.inventory_lot import InventoryLot
 from app.models.inventory_movement import InventoryMovement
 from app.models.membership import Membership
+from app.models.notification import Notification
 from app.models.prescription_detail import PrescriptionDetail
 from app.models.product import Product, ProductCategory
 from app.models.production_event import ProductionEvent, ProductionEventInput, ProductionEventOutput
@@ -37,6 +38,7 @@ __all__ = [
     "InventoryLot",
     "InventoryMovement",
     "Membership",
+    "Notification",
     "PrescriptionDetail",
     "ProcessedStripeEvent",
     "Product",

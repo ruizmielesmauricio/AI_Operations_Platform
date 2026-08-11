@@ -2,11 +2,13 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analytics.types import RepairPeriodTotals
 from app.models.production_event import ProductionEvent
+
+_SEARCH_LIMIT = 5
 
 
 class ProductionEventRepository:
@@ -94,6 +96,32 @@ class ProductionEventRepository:
             )
         ).all()
         return {(ref, description, price_charged, labour_cost) for ref, description, price_charged, labour_cost in rows}
+
+    def search_repairs(
+        self, business_id: uuid.UUID, query: str, *, limit: int = _SEARCH_LIMIT
+    ) -> list[ProductionEvent]:
+        """Backs the global search bar's "repairs" group — OR across
+        repair_reference and description, unlike find_repairs below
+        (ORLA chat lookup), which ANDs whichever single filter the
+        classifier named. No customer PII: customer_id is never selected
+        here, and description is free text from the shop's own repair
+        log, not a customer record."""
+        needle = f"%{query.strip()}%"
+        return list(
+            self.session.scalars(
+                select(ProductionEvent)
+                .where(
+                    ProductionEvent.business_id == business_id,
+                    ProductionEvent.event_type == "repair",
+                    or_(
+                        ProductionEvent.repair_reference.ilike(needle),
+                        ProductionEvent.description.ilike(needle),
+                    ),
+                )
+                .order_by(ProductionEvent.completed_at.desc(), ProductionEvent.id.desc())
+                .limit(limit)
+            )
+        )
 
     def find_repairs(
         self,

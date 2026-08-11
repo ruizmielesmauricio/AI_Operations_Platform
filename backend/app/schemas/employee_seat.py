@@ -31,6 +31,21 @@ class EmployeeSeatUpdate(BaseModel):
     country: str | None = Field(default=None, max_length=128)
 
 
+class SelfProfileUpdate(BaseModel):
+    """PATCH .../businesses/{business_id}/me — a staff member editing
+    their own profile. Deliberately has no role/status/email field at
+    all (unlike EmployeeSeatUpdate above, which the owner-only route
+    uses) — there's no way for a client to even send those values here,
+    let alone have them applied."""
+
+    first_name: str = Field(min_length=1, max_length=128)
+    surname: str = Field(min_length=1, max_length=128)
+    address_line1: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=128)
+    postal_code: str | None = Field(default=None, max_length=32)
+    country: str | None = Field(default=None, max_length=128)
+
+
 class EmployeeSeatOut(BaseModel):
     id: uuid.UUID
     first_name: str

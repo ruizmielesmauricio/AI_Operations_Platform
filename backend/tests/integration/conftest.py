@@ -13,6 +13,7 @@ from app.models import (
     ImportRecord,
     InventoryMovement,
     Membership,
+    Notification,
     ProcessedStripeEvent,
     Product,
     ProductCategory,
@@ -53,6 +54,7 @@ def db_session(_engine):
     session.rollback()
     session.query(AIRequest).delete()
     session.query(Report).delete()
+    session.query(Notification).delete()
     session.query(Alert).delete()
     session.query(ProductionEvent).delete()
     session.query(InventoryMovement).delete()

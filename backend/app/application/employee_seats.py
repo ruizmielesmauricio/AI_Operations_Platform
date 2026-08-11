@@ -22,6 +22,12 @@ from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
+from app.application.notifications import (
+    notify_employee_activated,
+    notify_employee_added,
+    notify_employee_removed,
+    notify_employee_role_changed,
+)
 from app.billing import client as billing_client
 from app.email.service import send_employee_invite_email
 from app.models.business import Business
@@ -137,6 +143,7 @@ def add_employee(
         target_id=str(seat.id),
         metadata={"role": role, "linked_immediately": existing_user is not None},
     )
+    notify_employee_added(db, business_id=business_id, seat_id=seat.id, full_name=f"{first_name} {surname}")
     # Only a real invite when nobody with this email exists yet — an
     # already-existing, already-linked account doesn't need a "come
     # register" email, since reconciliation already happened at creation
@@ -193,6 +200,7 @@ def update_employee_profile(
     seat = seats.get_for_business(seat_id, business_id)
     if seat is None:
         raise EmployeeSeatNotFound(str(seat_id))
+    previous_role = seat.role
 
     seats.update_profile(
         seat,
@@ -204,6 +212,10 @@ def update_employee_profile(
         postal_code=postal_code,
         country=country,
     )
+    if previous_role != role:
+        notify_employee_role_changed(
+            db, business_id=business_id, seat_id=seat.id, full_name=f"{first_name} {surname}", new_role=role
+        )
     # If the seat is already active, its live Membership.role must track
     # the edit too — otherwise editing a seat's role would silently stop
     # meaning anything once payment had already succeeded.
@@ -223,6 +235,56 @@ def update_employee_profile(
         target_type="employee_seat",
         target_id=str(seat.id),
         metadata={"role": role},
+    )
+    db.commit()
+    db.refresh(seat)
+    return seat
+
+
+def get_own_employee_seat(db: Session, *, business_id: uuid.UUID, user_id: str) -> EmployeeSeat:
+    """The staff self-profile route's read side (GET .../me). Raises
+    EmployeeSeatNotFound for an owner (who has no EmployeeSeat row at
+    all — their own profile lives on the Business record itself, edited
+    through the owner-only company-profile PATCH instead)."""
+    seat = EmployeeSeatRepository(db).get_for_business_and_user(business_id, user_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(f"No employee profile for user {user_id} at business {business_id}")
+    return seat
+
+
+def update_own_employee_profile(
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    user_id: str,
+    first_name: str,
+    surname: str,
+    address_line1: str | None,
+    city: str | None,
+    postal_code: str | None,
+    country: str | None,
+) -> EmployeeSeat:
+    """The staff self-profile route's write side (PATCH .../me) —
+    deliberately has no role/status/email parameter to pass through at
+    all, unlike update_employee_profile above: a staff member editing
+    themselves can only ever reach EmployeeSeatRepository.update_self_profile,
+    which has the same restriction built in one layer down."""
+    seats = EmployeeSeatRepository(db)
+    seat = seats.get_for_business_and_user(business_id, user_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(f"No employee profile for user {user_id} at business {business_id}")
+
+    seats.update_self_profile(
+        seat, first_name=first_name, surname=surname, address_line1=address_line1,
+        city=city, postal_code=postal_code, country=country,
+    )
+    record_audit_event(
+        db,
+        business_id=business_id,
+        user_id=user_id,
+        action="employee_self_profile_updated",
+        target_type="employee_seat",
+        target_id=str(seat.id),
     )
     db.commit()
     db.refresh(seat)
@@ -262,6 +324,7 @@ def delete_employee(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, 
         target_type="employee_seat",
         target_id=str(seat.id),
     )
+    notify_employee_removed(db, business_id=business_id, seat_id=seat.id, full_name=f"{seat.first_name} {seat.surname}")
     db.commit()
     db.refresh(seat)
     return seat
@@ -286,6 +349,9 @@ def try_activate_employee_seat(db: Session, seat: EmployeeSeat) -> bool:
     if existing is not None:
         return False
     db.add(Membership(business_id=seat.business_id, user_id=seat.user_id, role=seat.role))
+    notify_employee_activated(
+        db, business_id=seat.business_id, seat_id=seat.id, full_name=f"{seat.first_name} {seat.surname}"
+    )
     db.flush()
     return True
 

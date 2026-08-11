@@ -37,6 +37,38 @@ function settingLabel(row: ProductThreshold): string {
   return row.category_threshold_days !== null ? "Category default" : "System default";
 }
 
+// Deep-link target for the weekly Stock Review notification's single
+// action link (backend/app/application/notifications.py::notify_stock_
+// review, ?stock_filter=out_of_stock|stale|excess on this page's own
+// URL). The two thresholds below must stay in sync with backend/app/
+// analytics/stock_review.py's own SLOW_MOVER_MIN_COVER_DAYS (imported
+// from retail.py) and EXCESS_STOCK_COVER_MULTIPLIER — duplicated here
+// rather than fetched, same precedent as every other backend-Literal
+// mirrored into a frontend constant in this codebase (e.g.
+// NotificationCategoryFilter).
+const STOCK_FILTER_LABELS: Record<string, string> = {
+  out_of_stock: "Out of stock",
+  stale: "Stale",
+  excess: "Overstocked",
+};
+const SLOW_MOVER_MIN_COVER_DAYS = 60;
+const EXCESS_STOCK_COVER_MULTIPLIER = 3;
+
+function matchesStockFilter(row: ProductThreshold, filter: string): boolean {
+  if (filter === "out_of_stock") return row.stock_on_hand <= 0;
+  if (filter === "stale") {
+    // Dead stock (real stock on hand, zero sales this lookback window —
+    // cover_days is null exactly in that case) or a known slow mover.
+    if (row.cover_days === null) return row.stock_on_hand > 0;
+    return Number(row.cover_days) >= SLOW_MOVER_MIN_COVER_DAYS;
+  }
+  if (filter === "excess") {
+    if (row.cover_days === null) return false; // no real sales evidence to judge "too much" against
+    return Number(row.cover_days) >= Number(row.effective_threshold_days) * EXCESS_STOCK_COVER_MULTIPLIER;
+  }
+  return true;
+}
+
 export default function ProductThresholdsPage() {
   const { session, checkingSession } = useRequireSession();
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
@@ -47,6 +79,12 @@ export default function ProductThresholdsPage() {
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [forecastByProductId, setForecastByProductId] = useState<Record<string, number>>({});
   const [categoryId, setCategoryId] = useState("");
+  // Deep-linked from the weekly Stock Review notification
+  // (?stock_filter=out_of_stock|stale|excess) — same initial-URL-read
+  // pattern as frontend/app/transactions/page.tsx's own txType.
+  const initialStockFilter =
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("stock_filter") ?? "" : "";
+  const [stockFilter, setStockFilter] = useState(initialStockFilter);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -87,10 +125,11 @@ export default function ProductThresholdsPage() {
     if (businessId) load(businessId);
   }, [businessId]);
 
-  const visibleRows = useMemo(
-    () => (categoryId ? rows.filter((r) => r.category_id === categoryId) : rows),
-    [rows, categoryId]
-  );
+  const visibleRows = useMemo(() => {
+    let filtered = categoryId ? rows.filter((r) => r.category_id === categoryId) : rows;
+    if (stockFilter) filtered = filtered.filter((r) => matchesStockFilter(r, stockFilter));
+    return filtered;
+  }, [rows, categoryId, stockFilter]);
 
   // Recommended Restock — "below reorder point" means current stock
   // cover (in days) has dropped below the active reorder point (also in
@@ -230,11 +269,25 @@ export default function ProductThresholdsPage() {
               </option>
             ))}
           </select>
+          {" "}
+          <label htmlFor="stock-filter">Stock status</label>{" "}
+          <select id="stock-filter" value={stockFilter} onChange={(e) => setStockFilter(e.target.value)}>
+            <option value="">All products</option>
+            {Object.entries(STOCK_FILTER_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
       {!loading && businessId && visibleRows.length === 0 && (
-        <p>{rows.length === 0 ? "No products yet." : "No products match this category."}</p>
+        <p>
+          {rows.length === 0
+            ? "No products yet."
+            : `No products match ${categoryId && stockFilter ? "this category and status" : categoryId ? "this category" : "this status"}.`}
+        </p>
       )}
 
       {!loading && businessId && visibleRows.length > 0 && (

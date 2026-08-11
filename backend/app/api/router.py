@@ -10,9 +10,11 @@ from app.api import (
     employee_seats,
     health,
     imports,
+    notifications,
     product_categories,
     products,
     reports,
+    search,
     suppliers,
     transactions,
     uploads,
@@ -29,9 +31,11 @@ api_router.include_router(uploads.router)
 api_router.include_router(imports.router)
 api_router.include_router(analytics.router)
 api_router.include_router(alerts.router)
+api_router.include_router(notifications.router)
 api_router.include_router(reports.router)
 api_router.include_router(ai.router)
 api_router.include_router(product_categories.router)
 api_router.include_router(products.router)
 api_router.include_router(suppliers.router)
 api_router.include_router(transactions.router)
+api_router.include_router(search.router)

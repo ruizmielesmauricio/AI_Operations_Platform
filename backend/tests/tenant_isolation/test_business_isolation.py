@@ -174,6 +174,34 @@ def test_a_non_member_cannot_update_another_business_s_profile(client):
     assert refetched["manager_first_name"] is None
 
 
+def test_a_genuine_staff_member_cannot_update_the_business_profile(client):
+    """Distinct from test_a_non_member_cannot_update_another_business_s_profile
+    above: user-b here IS a real member of this same business (staff),
+    not a stranger — exercises the owner-only role check itself
+    (Company Profile permissions batch), not get_current_membership's
+    separate "not a member at all" rejection."""
+    import uuid
+
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+
+    response = client.patch(
+        f"/businesses/{business['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_staff
+    )
+    assert response.status_code == 403
+
+    refetched = client.get(f"/businesses/{business['id']}", headers=headers_owner).json()
+    assert refetched["manager_first_name"] is None
+
+
 # --- PR-6.5: audit logging for profile changes -------------------------------
 
 
@@ -227,6 +255,30 @@ def test_a_rejected_profile_update_creates_no_audit_entry(client):
 
     session = client._SessionLocal()
     rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business_a["id"])).all()
+    session.close()
+    assert rows == []
+
+
+def test_a_genuine_staff_member_s_rejected_profile_update_creates_no_audit_entry(client):
+    import uuid
+
+    from app.models.audit_log import AuditLog
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+
+    response = client.patch(
+        f"/businesses/{business['id']}", json={"manager_first_name": "Not Owner"}, headers=headers_staff
+    )
+    assert response.status_code == 403
+
+    rows = session.query(AuditLog).filter(AuditLog.business_id == uuid.UUID(business["id"])).all()
     session.close()
     assert rows == []
 
@@ -314,3 +366,72 @@ def test_include_deleted_only_ever_shows_the_caller_s_own_archived_businesses(cl
     # ...but never to a different user, opted in or not.
     other_list = client.get("/businesses?include_deleted=true", headers=headers_b).json()
     assert other_list == []
+
+
+# --- Branch-scoped access (Company Profile nav placement batch) ------------
+
+
+def test_staff_assigned_to_one_branch_cannot_access_a_sibling_branch_by_url(client):
+    """A branch is just another Business row (app/models/business.py's
+    parent_business_id) — membership is still per-business, so a staff
+    member added to Branch A's own employee-seats never gets a Membership
+    on Branch B just because they share a parent. Proves this the same
+    way an owner's own access is proven: hitting a real protected route
+    (financial-performance), not just GET /businesses/{id} itself."""
+    import uuid
+
+    from app.models.membership import Membership
+
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    primary = client.post("/businesses", json={"name": "Test Bike Shop"}, headers=headers_owner).json()
+    branch_a = client.post(
+        f"/businesses/{primary['id']}/branches", json={"name": "Branch A"}, headers=headers_owner
+    ).json()
+    branch_b = client.post(
+        f"/businesses/{primary['id']}/branches", json={"name": "Branch B"}, headers=headers_owner
+    ).json()
+
+    # Assigned to Branch A only — not the primary shop, not Branch B.
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(branch_a["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+
+    own_branch = client.get(
+        f"/businesses/{branch_a['id']}/analytics/financial-performance", headers=headers_staff
+    )
+    sibling_branch = client.get(
+        f"/businesses/{branch_b['id']}/analytics/financial-performance", headers=headers_staff
+    )
+    primary_shop = client.get(
+        f"/businesses/{primary['id']}/analytics/financial-performance", headers=headers_staff
+    )
+
+    assert own_branch.status_code == 200
+    assert sibling_branch.status_code == 403
+    assert primary_shop.status_code == 403
+
+    # The staff member's own /businesses list only ever shows what they're
+    # actually assigned to — never the sibling branch or the primary shop,
+    # even though all three are visible to (and owned by) the same owner.
+    staff_list = {row["id"] for row in client.get("/businesses", headers=headers_staff).json()}
+    assert staff_list == {branch_a["id"]}
+
+
+def test_owner_can_access_every_branch_they_own(client):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    primary = client.post("/businesses", json={"name": "Test Bike Shop"}, headers=headers_owner).json()
+    branch_a = client.post(
+        f"/businesses/{primary['id']}/branches", json={"name": "Branch A"}, headers=headers_owner
+    ).json()
+    branch_b = client.post(
+        f"/businesses/{primary['id']}/branches", json={"name": "Branch B"}, headers=headers_owner
+    ).json()
+
+    for business_id in (primary["id"], branch_a["id"], branch_b["id"]):
+        response = client.get(f"/businesses/{business_id}/analytics/financial-performance", headers=headers_owner)
+        assert response.status_code == 200
+
+    owner_list = {row["id"] for row in client.get("/businesses", headers=headers_owner).json()}
+    assert owner_list == {primary["id"], branch_a["id"], branch_b["id"]}

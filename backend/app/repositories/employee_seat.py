@@ -53,6 +53,18 @@ class EmployeeSeatRepository:
             select(EmployeeSeat).where(EmployeeSeat.id == seat_id, EmployeeSeat.business_id == business_id)
         )
 
+    def get_for_business_and_user(self, business_id: uuid.UUID, user_id: str) -> EmployeeSeat | None:
+        # The staff self-profile route's own lookup (GET/PATCH .../me) —
+        # by definition reachable only once a Membership already exists
+        # for this (business_id, user_id) pair (get_current_membership),
+        # and a seat only ever produces a Membership once status=="active",
+        # so a row found here is always the caller's own, currently-active
+        # employee profile — never a stale pending/canceled one, without
+        # needing an explicit status filter.
+        return self.session.scalar(
+            select(EmployeeSeat).where(EmployeeSeat.business_id == business_id, EmployeeSeat.user_id == user_id)
+        )
+
     def get_by_id(self, seat_id: uuid.UUID) -> EmployeeSeat | None:
         # Not business-scoped — used only from the webhook handler
         # (app/billing/service.py), which trusts Stripe's own
@@ -132,6 +144,29 @@ class EmployeeSeatRepository:
         seat.first_name = first_name
         seat.surname = surname
         seat.role = role
+        seat.address_line1 = address_line1
+        seat.city = city
+        seat.postal_code = postal_code
+        seat.country = country
+        self.session.flush()
+
+    def update_self_profile(
+        self,
+        seat: EmployeeSeat,
+        *,
+        first_name: str,
+        surname: str,
+        address_line1: str | None,
+        city: str | None,
+        postal_code: str | None,
+        country: str | None,
+    ) -> None:
+        # Deliberately narrower than update_profile above: no role, no
+        # status, no email — a staff member editing their own profile can
+        # never touch any of those, by construction (there's no parameter
+        # here to pass them through even if a caller tried).
+        seat.first_name = first_name
+        seat.surname = surname
         seat.address_line1 = address_line1
         seat.city = city
         seat.postal_code = postal_code

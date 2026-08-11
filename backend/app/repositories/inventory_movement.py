@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analytics.types import ProductPurchaseCostAggregate
@@ -12,6 +12,7 @@ from app.models.supplier import Supplier
 
 _STOCK_AFFECTING_REASONS = ("sale", "purchase", "return", "production_consumption", "production_output")
 _LOOKUP_LIMIT = 10
+_SEARCH_LIMIT = 5
 
 
 class InventoryMovementRepository:
@@ -282,6 +283,37 @@ class InventoryMovementRepository:
             )
         )
         return set(rows)
+
+    def search_purchases(
+        self, business_id: uuid.UUID, query: str, *, limit: int = _SEARCH_LIMIT
+    ) -> list[tuple[InventoryMovement, Product | None, Supplier | None]]:
+        """Backs the global search bar's "purchases" group — OR across
+        purchase_reference, the related product's name/SKU, and the
+        related supplier's name. Deliberately separate from list_purchases
+        above (ORLA chat lookup — a single named filter, never OR'd
+        together) and list_purchases_paginated (the Transactions page's
+        AND-per-filter shape) — a search bar has one field."""
+        needle = f"%{query.strip()}%"
+        return [
+            (movement, product, supplier)
+            for movement, product, supplier in self.session.execute(
+                select(InventoryMovement, Product, Supplier)
+                .outerjoin(Product, Product.id == InventoryMovement.product_id)
+                .outerjoin(Supplier, Supplier.id == InventoryMovement.supplier_id)
+                .where(
+                    InventoryMovement.business_id == business_id,
+                    InventoryMovement.reason == "purchase",
+                    or_(
+                        InventoryMovement.purchase_reference.ilike(needle),
+                        Product.name.ilike(needle),
+                        Product.sku.ilike(needle),
+                        Supplier.name.ilike(needle),
+                    ),
+                )
+                .order_by(InventoryMovement.event_date.desc(), InventoryMovement.id.desc())
+                .limit(limit)
+            ).all()
+        ]
 
     def list_purchases_paginated(
         self,

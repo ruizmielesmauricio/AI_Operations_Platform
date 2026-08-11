@@ -626,3 +626,114 @@ export interface PaginatedResult<T> {
   limit: number;
   offset: number;
 }
+
+// --- ORLA Notification Centre -----------------------------------------------
+
+export type NotificationCategory =
+  | "stock"
+  | "data_uploads"
+  | "reports"
+  | "orla_insights"
+  | "team"
+  | "billing"
+  | "branches"
+  | "security_account";
+
+export type NotificationSeverity = "info" | "success" | "warning" | "critical";
+
+export interface Notification {
+  id: string;
+  category: NotificationCategory;
+  type_key: string;
+  severity: NotificationSeverity;
+  title: string;
+  body: string;
+  action_label: string | null;
+  action_url: string | null;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  status: "unread" | "read" | "dismissed";
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface SystemStatus {
+  has_active_incident: boolean;
+  incidents: Notification[];
+}
+
+export interface NotificationList {
+  items: Notification[];
+  total: number;
+  limit: number;
+  offset: number;
+  // Always the caller's full, role-scoped unread total — never re-
+  // filtered by this same request's own category/severity/date_filter
+  // (see backend NotificationListOut's own docstring). Switching to
+  // "Today" never makes an existing unread backlog look like it vanished.
+  unread_count: number;
+}
+
+export type NotificationDateFilter = "today" | "7d" | "30d" | "custom";
+
+// --- Global search bar (GET /businesses/{id}/search?q=...) ----------------
+//
+// Grouped by result type, matching app/schemas/search.py exactly. Each
+// group is independently capped server-side (`limit`, default 5) — this
+// is a quick-jump bar, not a full search-results page, so no pagination
+// shape here.
+
+export interface ProductSearchResult {
+  id: string;
+  name: string;
+  sku: string | null;
+  category_name: string | null;
+  current_stock: number | null;
+}
+
+export interface SaleSearchResult {
+  id: string;
+  sold_at: string;
+  product_id: string | null;
+  product_name: string | null;
+  sku: string | null;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  order_reference: string | null;
+}
+
+export interface PurchaseSearchResult {
+  id: string;
+  event_date: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  sku: string | null;
+  supplier_name: string | null;
+  quantity_delta: number;
+  purchase_reference: string | null;
+}
+
+export interface SupplierSearchResult {
+  id: string;
+  name: string;
+  contact_info: string | null;
+  status: string;
+}
+
+export interface RepairSearchResult {
+  id: string;
+  completed_at: string | null;
+  description: string | null;
+  repair_reference: string | null;
+  price_charged: string | null;
+}
+
+export interface GlobalSearchResult {
+  query: string;
+  products: ProductSearchResult[];
+  sales: SaleSearchResult[];
+  purchases: PurchaseSearchResult[];
+  suppliers: SupplierSearchResult[];
+  repairs: RepairSearchResult[];
+}
