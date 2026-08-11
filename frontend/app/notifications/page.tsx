@@ -33,6 +33,14 @@ const SEVERITY_LABELS: Record<string, string> = {
   critical: "Critical",
 };
 
+// Mirrors the backend's own visible_to_role="owner" set exactly
+// (app/application/notifications.py — CATEGORY_TEAM/BILLING/BRANCHES,
+// and the one CATEGORY_SECURITY_ACCOUNT type that's owner-only). The
+// backend already blocks these rows for staff; this is purely UI
+// polish so staff never sees a filter option that could only ever
+// return nothing for them.
+const OWNER_ONLY_CATEGORIES: NotificationCategory[] = ["team", "billing", "branches", "security_account"];
+
 function timeAgo(value: string): string {
   return new Date(value).toLocaleString();
 }
@@ -51,6 +59,22 @@ export default function NotificationsPage() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState(""); // "" = active (unread + read), matching the backend default
+
+  const business = businesses.find((b) => b.id === businessId);
+  const isOwner = business?.role === "owner";
+  const visibleCategoryEntries = Object.entries(CATEGORY_LABELS).filter(
+    ([value]) => isOwner || !OWNER_ONLY_CATEGORIES.includes(value as NotificationCategory)
+  );
+
+  // If a non-owner somehow has an owner-only category selected (e.g. they
+  // picked it while still resolving as owner, then switched to a business
+  // where they're staff) — reset rather than silently keep querying a
+  // filter value that could only ever come back empty for them.
+  useEffect(() => {
+    if (!isOwner && OWNER_ONLY_CATEGORIES.includes(categoryFilter as NotificationCategory)) {
+      setCategoryFilter("");
+    }
+  }, [isOwner, categoryFilter]);
 
   function load(id: string) {
     setLoading(true);
@@ -131,8 +155,9 @@ export default function NotificationsPage() {
       <AppNav businessId={businessId} />
       <h1>Notification Centre</h1>
       <p className="hint">
-        Everything ORLA thinks you should know about — stock, uploads, reports, insights, team, and billing — in one
-        place. Each notification links straight to the page it's about.
+        {isOwner
+          ? "Everything ORLA thinks you should know about — stock, uploads, reports, insights, team, and billing — in one place. Each notification links straight to the page it's about."
+          : "Everything ORLA thinks you should know about your branch operations — stock, uploads, reports, and insights — in one place. Each notification links straight to the page it's about."}
       </p>
 
       <label>
@@ -153,7 +178,7 @@ export default function NotificationsPage() {
               Category
               <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                 <option value="">All categories</option>
-                {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                {visibleCategoryEntries.map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>

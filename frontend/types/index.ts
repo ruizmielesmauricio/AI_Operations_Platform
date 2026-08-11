@@ -661,3 +661,65 @@ export interface NotificationList {
   items: Notification[];
   unread_count: number;
 }
+
+// --- Global search bar (GET /businesses/{id}/search?q=...) ----------------
+//
+// Grouped by result type, matching app/schemas/search.py exactly. Each
+// group is independently capped server-side (`limit`, default 5) — this
+// is a quick-jump bar, not a full search-results page, so no pagination
+// shape here.
+
+export interface ProductSearchResult {
+  id: string;
+  name: string;
+  sku: string | null;
+  category_name: string | null;
+  current_stock: number | null;
+}
+
+export interface SaleSearchResult {
+  id: string;
+  sold_at: string;
+  product_id: string | null;
+  product_name: string | null;
+  sku: string | null;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  order_reference: string | null;
+}
+
+export interface PurchaseSearchResult {
+  id: string;
+  event_date: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  sku: string | null;
+  supplier_name: string | null;
+  quantity_delta: number;
+  purchase_reference: string | null;
+}
+
+export interface SupplierSearchResult {
+  id: string;
+  name: string;
+  contact_info: string | null;
+  status: string;
+}
+
+export interface RepairSearchResult {
+  id: string;
+  completed_at: string | null;
+  description: string | null;
+  repair_reference: string | null;
+  price_charged: string | null;
+}
+
+export interface GlobalSearchResult {
+  query: string;
+  products: ProductSearchResult[];
+  sales: SaleSearchResult[];
+  purchases: PurchaseSearchResult[];
+  suppliers: SupplierSearchResult[];
+  repairs: RepairSearchResult[];
+}

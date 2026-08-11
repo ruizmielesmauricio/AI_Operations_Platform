@@ -2,12 +2,14 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analytics.types import ProductPeriodAggregate
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem
+
+_SEARCH_LIMIT = 5
 
 
 class SaleItemRepository:
@@ -153,6 +155,39 @@ class SaleItemRepository:
             )
         ).all()
         return [(product_id, sold_at, quantity) for product_id, sold_at, quantity in rows]
+
+    def search_sales(
+        self, business_id: uuid.UUID, query: str, *, limit: int = _SEARCH_LIMIT
+    ) -> list[tuple[SaleItem, Sale, Product | None]]:
+        """Backs the global search bar's "sales/orders" group — a single
+        free-text term matched with OR across order_reference, the
+        related product's name, and its SKU (deliberately OR, not the
+        AND-per-named-filter shape list_paginated_for_business uses,
+        since a search bar has exactly one field to type into, not
+        several). Parameterized ILIKE only, same as every other search
+        method in this codebase — never raw SQL. No customer PII: Sale
+        carries no customer name/email, only a nullable customer_id FK
+        that's never selected here.
+        """
+        needle = f"%{query.strip()}%"
+        return [
+            (item, sale, product)
+            for item, sale, product in self.session.execute(
+                select(SaleItem, Sale, Product)
+                .join(Sale, Sale.id == SaleItem.sale_id)
+                .outerjoin(Product, Product.id == SaleItem.product_id)
+                .where(
+                    SaleItem.business_id == business_id,
+                    or_(
+                        Sale.order_reference.ilike(needle),
+                        Product.name.ilike(needle),
+                        Product.sku.ilike(needle),
+                    ),
+                )
+                .order_by(Sale.sold_at.desc(), SaleItem.id.desc())
+                .limit(limit)
+            ).all()
+        ]
 
     def list_paginated_for_business(
         self,

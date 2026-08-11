@@ -1,11 +1,13 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.inventory_movement import InventoryMovement
 from app.models.supplier import ProductSupplier, Supplier
+
+_SEARCH_LIMIT = 5
 
 
 class SupplierRepository:
@@ -26,6 +28,25 @@ class SupplierRepository:
     def get_for_business(self, business_id: uuid.UUID, supplier_id: uuid.UUID) -> Supplier | None:
         return self.session.scalar(
             select(Supplier).where(Supplier.business_id == business_id, Supplier.id == supplier_id)
+        )
+
+    def search_by_name(self, business_id: uuid.UUID, query: str, *, limit: int = _SEARCH_LIMIT) -> list[Supplier]:
+        """Backs the global search bar's "suppliers" group. Same
+        active/not-merged exclusion as list_for_business — a deleted or
+        merged-away supplier is never a useful search hit, only a stale
+        record a caller could otherwise mistake for a real one."""
+        needle = f"%{query.strip()}%"
+        return list(
+            self.session.scalars(
+                select(Supplier)
+                .where(
+                    Supplier.business_id == business_id,
+                    Supplier.status == "active",
+                    or_(Supplier.name.ilike(needle), Supplier.contact_info.ilike(needle)),
+                )
+                .order_by(Supplier.name)
+                .limit(limit)
+            )
         )
 
     def create(

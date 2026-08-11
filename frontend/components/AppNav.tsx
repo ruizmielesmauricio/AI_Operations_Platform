@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { GlobalSearchBar } from "@/components/GlobalSearchBar";
 import { apiGet } from "@/lib/api/client";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
@@ -121,6 +122,17 @@ export function AppNav({ businessId }: { businessId?: string }) {
           <a href={`/notifications${suffix}`}>
             Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
           </a>
+          {" · "}
+        </>
+      )}
+      {/* Global search (notification_staff_filters_global_search_prompt,
+          Part 2) — same businessId gate as every other business-scoped
+          link above: hidden entirely with no business selected, since
+          there'd be nothing to search. Searches only this business/
+          branch, never siblings (see GlobalSearchBar's own comment). */}
+      {businessId && (
+        <>
+          <GlobalSearchBar businessId={businessId} />
           {" · "}
         </>
       )}

@@ -14,6 +14,7 @@ from app.api import (
     product_categories,
     products,
     reports,
+    search,
     suppliers,
     transactions,
     uploads,
@@ -37,3 +38,4 @@ api_router.include_router(product_categories.router)
 api_router.include_router(products.router)
 api_router.include_router(suppliers.router)
 api_router.include_router(transactions.router)
+api_router.include_router(search.router)
