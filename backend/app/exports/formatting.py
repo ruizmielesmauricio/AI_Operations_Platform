@@ -10,7 +10,7 @@ the dashboard, in the app/reports/[id] page, or in a downloaded file.
 from decimal import Decimal, InvalidOperation
 
 
-def safe_str(value: object, default: str = "—") -> str:
+def safe_str(value: object, default: str = "-") -> str:
     if value is None:
         return default
     return str(value)
@@ -18,18 +18,29 @@ def safe_str(value: object, default: str = "—") -> str:
 
 def format_money(value: object) -> str:
     if value is None:
-        return "—"
+        return "-"
     try:
         amount = Decimal(str(value))
     except (InvalidOperation, ValueError):
-        return "—"
+        return "-"
     return f"€{amount:,.2f}"
 
 
 def format_pct(value: object) -> str:
     if value is None:
-        return "—"
+        return "-"
     return f"{value}%"
+
+
+def format_rate(value: object) -> str:
+    """Format a stored 0..1 ratio the same way as frontend formatRate."""
+    if value is None:
+        return "-"
+    try:
+        rate = Decimal(str(value)) * Decimal("100")
+    except (InvalidOperation, ValueError):
+        return "-"
+    return f"{rate:.1f}%"
 
 
 def safe_get(payload: dict, *path: str, default=None):
