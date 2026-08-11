@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.analytics.findings import evaluate_low_stock, resolve_low_stock_threshold
 from app.analytics.period import resolve_period
 from app.analytics.retail import StockCoverRow, build_stock_cover_report
+from app.application.notifications import notify_low_stock_summary
 from app.models.business import Business
 from app.repositories.alert import AlertRepository
 from app.repositories.inventory_movement import InventoryMovementRepository
@@ -100,5 +101,17 @@ def refresh_low_stock_alerts(db: Session, *, business_id: uuid.UUID, product_ids
                 alert_repo.update_payload(existing, payload)
         elif existing is not None:
             alert_repo.resolve(existing)
+
+    # A grouped, whole-business notification, not one per product (ORLA
+    # Notification Centre's own spam-control requirement) — reuses the
+    # exact same active-alert count app/application/report.py already
+    # reads for its own "N products low on stock" figure, not just the
+    # touched-product subset above, so the summary is always the real
+    # total regardless of how many products this particular import
+    # happened to touch.
+    active_low_stock_count = len(
+        [a for a in alert_repo.list_active_for_business(business_id) if a.alert_type == _ALERT_TYPE]
+    )
+    notify_low_stock_summary(db, business_id=business_id, low_stock_count=active_low_stock_count)
 
     db.commit()

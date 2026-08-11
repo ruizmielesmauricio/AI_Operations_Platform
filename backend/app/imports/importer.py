@@ -28,6 +28,7 @@ from app.imports.file_parser import normalize_cell
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
 from app.application.alerts import refresh_low_stock_alerts
+from app.application.notifications import notify_import_completed
 from app.application.products import recalculate_thresholds_after_upload
 from app.models.business import Business
 from app.models.import_record import ImportRecord
@@ -1328,6 +1329,23 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
         )
     except Exception:
         logger.exception("Failed to recalculate low-stock thresholds after import for business: %s", upload.business_id)
+
+    # ORLA Notification Centre (Data & Uploads category) — same
+    # "only after the main commit succeeds, log-and-continue on failure"
+    # posture as the two try/except blocks above; owns its own commit
+    # since it runs after the transaction-scoping commit further up.
+    try:
+        notify_import_completed(
+            db,
+            business_id=upload.business_id,
+            import_record_id=import_record.id,
+            entity_type=upload.entity_type,
+            rows_imported=rows_imported,
+            rows_rejected=len(rejections),
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to create import-completed notification for business: %s", upload.business_id)
 
     return ImportResult(
         import_record_id=import_record.id,

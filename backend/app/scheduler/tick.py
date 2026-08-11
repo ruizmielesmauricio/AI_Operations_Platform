@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analytics.period import compute_report_period, is_report_period_due, resolve_period
+from app.application.notifications import notify_orla_insights, notify_report_failed, notify_report_ready
 from app.application.report import generate_report
 from app.models.business import Business
 from app.repositories.report import MAX_ATTEMPTS, ReportRepository
@@ -70,6 +71,11 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
                         existing.last_error,
                     )
                     permanently_failed += 1
+                    try:
+                        notify_report_failed(db, business_id=business.id, report_type=report_type, period_start=start_date)
+                        db.commit()
+                    except Exception:
+                        logger.exception("Failed to create report-failed notification: business=%s type=%s", business.id, report_type)
                     continue
 
                 report = generate_report(db, business_id=business.id, report_type=report_type, now=resolved_now)
@@ -78,6 +84,18 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
                     logger.info(
                         "Generated report business=%s type=%s period_start=%s", business.id, report_type, period.start
                     )
+                    try:
+                        notify_report_ready(
+                            db, business_id=business.id, report_id=report.id, report_type=report_type,
+                            period_start=start_date, period_end=end_date,
+                        )
+                        recommendation_count = len(report.payload.get("findings", {}).get("recommendations", []))
+                        notify_orla_insights(
+                            db, business_id=business.id, report_id=report.id, recommendation_count=recommendation_count
+                        )
+                        db.commit()
+                    except Exception:
+                        logger.exception("Failed to create report-ready notification: business=%s type=%s", business.id, report_type)
                 # A "failed" result here (attempts just incremented, still
                 # under the cap) is deliberately not logged again —
                 # generate_report already logged the exception itself.

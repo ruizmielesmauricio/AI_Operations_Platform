@@ -626,3 +626,38 @@ export interface PaginatedResult<T> {
   limit: number;
   offset: number;
 }
+
+// --- ORLA Notification Centre -----------------------------------------------
+
+export type NotificationCategory =
+  | "stock"
+  | "data_uploads"
+  | "reports"
+  | "orla_insights"
+  | "team"
+  | "billing"
+  | "branches"
+  | "security_account";
+
+export type NotificationSeverity = "info" | "success" | "warning" | "critical";
+
+export interface Notification {
+  id: string;
+  category: NotificationCategory;
+  type_key: string;
+  severity: NotificationSeverity;
+  title: string;
+  body: string;
+  action_label: string | null;
+  action_url: string | null;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  status: "unread" | "read" | "dismissed";
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationList {
+  items: Notification[];
+  unread_count: number;
+}

@@ -23,6 +23,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
   const router = useRouter();
   const suffix = businessId ? `?business=${businessId}` : "";
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // "Upload data" used to render unconditionally here regardless of the
   // selected business's subscription status — the upload/import routes
@@ -39,6 +40,25 @@ export function AppNav({ businessId }: { businessId?: string }) {
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
       .then((s) => setSubscriptionStatus(s.status))
       .catch(() => setSubscriptionStatus(null));
+  }, [businessId]);
+
+  // Notification Centre's unread badge — a lightweight poll (not a
+  // websocket/SSE stream, which doesn't exist anywhere in this codebase
+  // yet) is enough for a nav badge that only needs to be roughly current,
+  // not real-time to the second.
+  useEffect(() => {
+    if (!businessId) {
+      setUnreadCount(0);
+      return;
+    }
+    function refresh() {
+      apiGet<{ unread_count: number }>(`/businesses/${businessId}/notifications/unread-count`)
+        .then((r) => setUnreadCount(r.unread_count))
+        .catch(() => setUnreadCount(0));
+    }
+    refresh();
+    const interval = setInterval(refresh, 60_000);
+    return () => clearInterval(interval);
   }, [businessId]);
 
   const canUpload = subscriptionStatus === "active";
@@ -79,6 +99,14 @@ export function AppNav({ businessId }: { businessId?: string }) {
           <a href={`/suppliers${suffix}`}>Suppliers</a>
           {" · "}
           <a href={`/transactions${suffix}`}>Transactions</a>
+          {" · "}
+        </>
+      )}
+      {businessId && (
+        <>
+          <a href={`/notifications${suffix}`}>
+            Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
+          </a>
           {" · "}
         </>
       )}

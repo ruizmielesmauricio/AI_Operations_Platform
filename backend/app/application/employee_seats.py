@@ -22,6 +22,12 @@ from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
+from app.application.notifications import (
+    notify_employee_activated,
+    notify_employee_added,
+    notify_employee_removed,
+    notify_employee_role_changed,
+)
 from app.billing import client as billing_client
 from app.email.service import send_employee_invite_email
 from app.models.business import Business
@@ -137,6 +143,7 @@ def add_employee(
         target_id=str(seat.id),
         metadata={"role": role, "linked_immediately": existing_user is not None},
     )
+    notify_employee_added(db, business_id=business_id, seat_id=seat.id, full_name=f"{first_name} {surname}")
     # Only a real invite when nobody with this email exists yet — an
     # already-existing, already-linked account doesn't need a "come
     # register" email, since reconciliation already happened at creation
@@ -193,6 +200,7 @@ def update_employee_profile(
     seat = seats.get_for_business(seat_id, business_id)
     if seat is None:
         raise EmployeeSeatNotFound(str(seat_id))
+    previous_role = seat.role
 
     seats.update_profile(
         seat,
@@ -204,6 +212,10 @@ def update_employee_profile(
         postal_code=postal_code,
         country=country,
     )
+    if previous_role != role:
+        notify_employee_role_changed(
+            db, business_id=business_id, seat_id=seat.id, full_name=f"{first_name} {surname}", new_role=role
+        )
     # If the seat is already active, its live Membership.role must track
     # the edit too — otherwise editing a seat's role would silently stop
     # meaning anything once payment had already succeeded.
@@ -262,6 +274,7 @@ def delete_employee(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, 
         target_type="employee_seat",
         target_id=str(seat.id),
     )
+    notify_employee_removed(db, business_id=business_id, seat_id=seat.id, full_name=f"{seat.first_name} {seat.surname}")
     db.commit()
     db.refresh(seat)
     return seat
@@ -286,6 +299,9 @@ def try_activate_employee_seat(db: Session, seat: EmployeeSeat) -> bool:
     if existing is not None:
         return False
     db.add(Membership(business_id=seat.business_id, user_id=seat.user_id, role=seat.role))
+    notify_employee_activated(
+        db, business_id=seat.business_id, seat_id=seat.id, full_name=f"{seat.first_name} {seat.surname}"
+    )
     db.flush()
     return True
 

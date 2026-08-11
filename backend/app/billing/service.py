@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.application.notifications import notify_employee_payment_failed, notify_subscription_status_change
 from app.billing import client
 from app.billing.exceptions import EmployeeSeatPriceNotConfigured
 from app.billing.status import (
@@ -186,6 +187,7 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
                 status=status,
             )
             return
+        previous_status = _current_subscription_status(subscriptions, business_id)
         subscriptions.upsert_from_stripe(
             business_id=business_id,
             stripe_customer_id=obj["customer"],
@@ -193,6 +195,7 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
             status=status,
             current_period_end=_subscription_period_end(obj),
         )
+        _notify_business_subscription_change(db, business_id=business_id, previous_status=previous_status, new_status=status)
         return
 
     # invoice.paid / invoice.payment_failed. Newer Stripe API versions moved
@@ -218,6 +221,7 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
             status=status,
         )
         return
+    previous_status = _current_subscription_status(subscriptions, business_id)
     subscriptions.upsert_from_stripe(
         business_id=business_id,
         stripe_customer_id=obj["customer"],
@@ -225,6 +229,7 @@ def _apply_event(db: Session, event_type: str, obj: dict) -> None:
         status=status,
         current_period_end=_invoice_period_end(obj),
     )
+    _notify_business_subscription_change(db, business_id=business_id, previous_status=previous_status, new_status=status)
 
 
 def _apply_employee_seat_event(
@@ -308,6 +313,10 @@ def _apply_employee_seat_event(
             target_id=str(seat.id),
             metadata={"stripe_status": status},
         )
+        if new_status == "payment_failed":
+            notify_employee_payment_failed(
+                db, business_id=seat.business_id, seat_id=seat.id, full_name=f"{seat.first_name} {seat.surname}"
+            )
     seats.set_status(seat, new_status, stripe_subscription_id=stripe_subscription_id)
 
 
@@ -326,3 +335,34 @@ def _invoice_period_end(invoice_object: dict) -> datetime | None:
     lines = invoice_object.get("lines", {}).get("data", [])
     ts = lines[0].get("period", {}).get("end") if lines else None
     return datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
+
+
+def _current_subscription_status(subscriptions: SubscriptionRepository, business_id: uuid.UUID) -> str | None:
+    """Read before upsert_from_stripe overwrites it — the only way to
+    detect a real transition (e.g. active -> past_due) rather than
+    notifying on every webhook delivery for a status that hasn't
+    actually changed."""
+    existing = subscriptions.get_by_business_id(business_id)
+    return existing.status if existing is not None else None
+
+
+def _notify_business_subscription_change(
+    db: Session, *, business_id: uuid.UUID, previous_status: str | None, new_status: str | None
+) -> None:
+    """ORLA Notification Centre — Billing (main shop) / Branches (a second
+    Business row with parent_business_id set, per the branch-groundwork
+    schema) share this exact mechanism, since a branch is just another
+    Business with its own Stripe subscription; the only difference is
+    which category/wording applies, decided by parent_business_id."""
+    if new_status is None or new_status == previous_status:
+        return
+    business = db.get(Business, business_id)
+    if business is None:
+        return
+    notify_subscription_status_change(
+        db,
+        business_id=business_id,
+        business_name=business.name,
+        is_branch=business.parent_business_id is not None,
+        new_status=new_status,
+    )
