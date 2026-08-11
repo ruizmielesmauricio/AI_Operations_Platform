@@ -220,21 +220,30 @@ export default function OnboardingPage() {
     }
   }, [session]);
 
-  // AppNav below only ever rendered without a businessId here, since this
-  // page has no single "selected" business the way /dashboard or
-  // /products do — that silently hid its Notifications nav item entirely
-  // for every role (found live: staff reported no way to reach
-  // Notifications from Company Profile at all, since AppNav's own item
-  // only renders when businessId is set). Picks the ?business= query
-  // param when it names one of the user's own active businesses, else
-  // the first active one — never a deleted business, which would send
-  // the badge/link nowhere useful.
+  // AppNav's own businessId — Company Profile has no single "selected"
+  // business the way /dashboard or /products do, so it resolves one
+  // itself and passes it in: every app-section link (Dashboard, Uploads,
+  // Reports, Ask ORLA, Thresholds, Suppliers, Transactions, Notifications)
+  // belongs in that one top nav, not repeated under each business/branch
+  // row below (found live: an earlier version of this fix put them under
+  // every row instead, which duplicated navigation and got messy the
+  // moment branches existed). Defaults to the ?business= query param when
+  // it names one of the user's own active businesses, else their first
+  // active one (`businesses` already only ever contains businesses the
+  // caller has a real Membership on — GET /businesses is user-scoped —
+  // so a staff member can never land on a sibling branch they don't
+  // belong to just from this default). The selector below lets either
+  // role switch it manually without losing that pick on every unrelated
+  // businesses-list update (create/delete elsewhere on this same page).
   const [navBusinessId, setNavBusinessId] = useState<string | undefined>(undefined);
   useEffect(() => {
     const activeBusinesses = businesses.filter((b) => !b.deleted_at);
-    const requested = new URLSearchParams(window.location.search).get("business");
-    const requestedIsValid = activeBusinesses.some((b) => b.id === requested);
-    setNavBusinessId(requestedIsValid ? (requested as string) : activeBusinesses[0]?.id);
+    setNavBusinessId((current) => {
+      if (current && activeBusinesses.some((b) => b.id === current)) return current;
+      const requested = new URLSearchParams(window.location.search).get("business");
+      const requestedIsValid = activeBusinesses.some((b) => b.id === requested);
+      return requestedIsValid ? (requested as string) : activeBusinesses[0]?.id;
+    });
   }, [businesses]);
 
   useEffect(() => {
@@ -641,11 +650,33 @@ export default function OnboardingPage() {
   // now shows deleted businesses too, so this must filter them out
   // itself or a deleted shop would wrongly keep the create form hidden).
   const hasStandaloneShop = businesses.some((b) => !b.parent_business_id && !b.deleted_at);
+  const activeBusinessesForNav = businesses.filter((b) => !b.deleted_at);
 
   return (
     <main>
-      <AppNav notificationsBusinessId={navBusinessId} />
+      <AppNav businessId={navBusinessId} />
       <h1>Your businesses</h1>
+      {/* Drives every link in the top nav above — same list GET /businesses
+          already scopes to the caller's own memberships, so a staff
+          member can only ever pick a business/branch they're actually
+          assigned to, never a sibling branch they don't belong to. */}
+      {activeBusinessesForNav.length > 0 && (
+        <p>
+          <label htmlFor="nav-business-select">Business context for navigation</label>
+          <br />
+          <select
+            id="nav-business-select"
+            value={navBusinessId ?? ""}
+            onChange={(e) => setNavBusinessId(e.target.value || undefined)}
+          >
+            {activeBusinessesForNav.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.parent_business_id ? `↳ ${b.name}` : b.name}
+              </option>
+            ))}
+          </select>
+        </p>
+      )}
       {billingError && <p className="status-error">{billingError}</p>}
       {deleteError && <p className="status-error">{deleteError}</p>}
       {businesses.length === 0 ? (
@@ -688,15 +719,6 @@ export default function OnboardingPage() {
               ? businesses.find((p) => p.id === b.parent_business_id)
               : null;
             const isStandalone = !b.parent_business_id;
-            // The upload/import routes are already hard-gated server-side
-            // (require_active_subscription, 402 without an active
-            // subscription) — this link used to render unconditionally
-            // regardless of status, which looked like real access from
-            // here even though the actual upload would be rejected.
-            // Matching the link's visibility to the real gate closes that
-            // false impression rather than just leaving it to a 402 the
-            // user only discovers after clicking through.
-            const canUpload = label === "Subscribed";
             return (
               <li key={b.id} style={{ marginBottom: "1em" }}>
                 <div>
@@ -707,33 +729,14 @@ export default function OnboardingPage() {
                   — {b.template} ({b.role}) —{" "}
                   <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
                 </div>
-                {/* Every operational tool, one row, same for owner and
-                    staff (Company Profile permissions batch — "do not
-                    hide operational tools from staff") — this used to be
-                    just Upload data / View profile / Notifications,
-                    missing direct links to Dashboard, Reports, Ask ORLA,
-                    Thresholds, Suppliers, and Transactions entirely. */}
+                {/* Company Profile rows are about the profile record
+                    itself, not a second navigation menu — every
+                    app-section link lives in the top nav above (driven by
+                    the business-context selector), never repeated per
+                    row. "View profile" stays because it's specifically
+                    about this Company Profile record (owner-editable,
+                    staff-read-only), not a general app section. */}
                 <div>
-                  <a href={`/dashboard?business=${b.id}`}>Dashboard</a>
-                  {" — "}
-                  {canUpload ? (
-                    <a href={`/uploads?business=${b.id}`}>Upload data</a>
-                  ) : (
-                    <span className="hint">Upload data (subscribe first)</span>
-                  )}
-                  {" — "}
-                  <a href={`/reports?business=${b.id}`}>Reports</a>
-                  {" — "}
-                  <a href={`/chat?business=${b.id}`}>Ask ORLA</a>
-                  {" — "}
-                  <a href={`/products?business=${b.id}`}>Thresholds</a>
-                  {" — "}
-                  <a href={`/suppliers?business=${b.id}`}>Suppliers</a>
-                  {" — "}
-                  <a href={`/transactions?business=${b.id}`}>Transactions</a>
-                  {" — "}
-                  <a href={`/notifications?business=${b.id}`}>Notifications</a>
-                  {" — "}
                   <a href={`/onboarding/${b.id}`}>View profile</a>
                 </div>
                 {/* Staff self-service profile edit (Company Profile

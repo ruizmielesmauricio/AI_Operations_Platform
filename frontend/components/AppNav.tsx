@@ -20,28 +20,9 @@ import type { SubscriptionStatus } from "@/types";
  * onboarding page itself, so every other screen had no way to sign out
  * short of clearing cookies by hand.
  */
-export function AppNav({
-  businessId,
-  notificationsBusinessId,
-}: {
-  businessId?: string;
-  // Falls back to businessId — only Company Profile (/onboarding) passes
-  // this separately. Found live: /onboarding never had a single
-  // "selected" business, so it always called <AppNav /> with no
-  // businessId at all — which correctly kept Thresholds/Suppliers/
-  // Transactions hidden (there's no one business to scope them to) but
-  // *also* silently hid Notifications, leaving staff with no way to
-  // reach it from Company Profile at all. Decoupling this from
-  // businessId lets /onboarding supply a real business for Notifications
-  // (its own query param, or the user's first active business) without
-  // making those other, genuinely business-scoped links appear where
-  // they'd be misleading (no single business is "selected" on that page).
-  notificationsBusinessId?: string;
-}) {
+export function AppNav({ businessId }: { businessId?: string }) {
   const router = useRouter();
   const suffix = businessId ? `?business=${businessId}` : "";
-  const notificationsId = notificationsBusinessId ?? businessId;
-  const notificationsSuffix = notificationsId ? `?business=${notificationsId}` : "";
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -67,12 +48,12 @@ export function AppNav({
   // yet) is enough for a nav badge that only needs to be roughly current,
   // not real-time to the second.
   useEffect(() => {
-    if (!notificationsId) {
+    if (!businessId) {
       setUnreadCount(0);
       return;
     }
     function refresh() {
-      apiGet<{ unread_count: number }>(`/businesses/${notificationsId}/notifications/unread-count`)
+      apiGet<{ unread_count: number }>(`/businesses/${businessId}/notifications/unread-count`)
         .then((r) => setUnreadCount(r.unread_count))
         .catch(() => setUnreadCount(0));
     }
@@ -89,7 +70,7 @@ export function AppNav({
       clearInterval(interval);
       unsubscribe();
     };
-  }, [notificationsId]);
+  }, [businessId]);
 
   const canUpload = subscriptionStatus === "active";
 
@@ -102,9 +83,8 @@ export function AppNav({
     <nav>
       <a href={`/dashboard${suffix}`}>Dashboard</a>
       {" · "}
-      {/* No businessId at all (onboarding) — nothing to link to yet,
-          onboarding's own per-business list already has the real,
-          correctly-gated links. */}
+      {/* No businessId at all — no business selected yet (e.g. Company
+          Profile with no active businesses), nothing real to link to. */}
       {businessId ? (
         canUpload ? (
           <a href={`/uploads${suffix}`}>Upload data</a>
@@ -121,7 +101,11 @@ export function AppNav({
       {" · "}
       {/* Product-management surfaces (Gaps 1/4/5) — business-scoped like
           Reports/Chat above; nothing to show without a selected business,
-          same reasoning as those two. */}
+          same reasoning as those two. Company Profile (/onboarding) is
+          the one page that has no single business of its own, so it
+          resolves one itself (its own query param, or the user's first
+          active business) and passes it in here — every app-section link
+          belongs in this one top nav, never repeated per business row. */}
       {businessId && (
         <>
           <a href={`/products${suffix}`}>Thresholds</a>
@@ -132,9 +116,9 @@ export function AppNav({
           {" · "}
         </>
       )}
-      {notificationsId && (
+      {businessId && (
         <>
-          <a href={`/notifications${notificationsSuffix}`}>
+          <a href={`/notifications${suffix}`}>
             Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
           </a>
           {" · "}
