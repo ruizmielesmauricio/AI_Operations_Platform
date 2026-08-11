@@ -6,12 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.models.notification import Notification
 
-# Bounded list, matching this codebase's one other list route
-# (AuditLogRepository) rather than a full pagination framework — a
-# notification centre at this app's current scale never has thousands of
-# open rows, and dismissed/read history isn't meant to be an infinite
-# archive.
-_DEFAULT_LIST_LIMIT = 100
+# Real limit/offset pagination (ORLA Notifications/Security/Retention
+# prompt's "the endpoint never returns an unbounded notification
+# history") — matches this codebase's established Transactions-drill-down
+# style (app/application/transactions.py's PaginatedResult/MAX_PAGE_SIZE
+# pattern) rather than inventing a second pagination shape.
+_DEFAULT_LIST_LIMIT = 25
+MAX_LIST_LIMIT = 100
+
+# The customer-impacting "incident" type_keys (ORLA Notifications/
+# Security/Retention prompt, section 3) — a blocking condition worth a
+# visible in-app banner while it's still open, not just a Notification
+# Centre entry someone has to go look at. Kept as a fixed tuple here
+# (mirrored nowhere else) since it's purely a query-shape concern, not a
+# notification-content one.
+_SYSTEM_STATUS_TYPE_KEYS = ("report_failed", "report_delayed", "import_failed", "ai_insights_unavailable")
 
 
 class NotificationRepository:
@@ -28,16 +37,17 @@ class NotificationRepository:
             return query
         return query.where(Notification.visible_to_role.is_(None))
 
-    def list_for_business(
+    def _filtered_query(
         self,
         business_id: uuid.UUID,
         *,
         role: str,
-        category: str | None = None,
-        status: str | None = None,
-        severity: str | None = None,
-        limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> list[Notification]:
+        category: str | None,
+        status: str | None,
+        severity: str | None,
+        start_at: datetime | None,
+        end_at: datetime | None,
+    ):
         query = select(Notification).where(Notification.business_id == business_id)
         query = self._role_filter(query, role)
         if category is not None:
@@ -51,8 +61,92 @@ class NotificationRepository:
             # "active list" convention in this codebase (Alert's own
             # list_active_for_business hides resolved rows by default).
             query = query.where(Notification.status != "dismissed")
-        query = query.order_by(Notification.created_at.desc()).limit(limit)
+        # Half-open [start_at, end_at) — same convention as
+        # app/analytics/period.py's MetricPeriod, resolved from the
+        # caller's Today/7d/30d/custom selection before it ever reaches
+        # here (app/application/notifications.py::resolve_notification_
+        # date_range). Both None means "no date filter."
+        if start_at is not None:
+            query = query.where(Notification.created_at >= start_at)
+        if end_at is not None:
+            query = query.where(Notification.created_at < end_at)
+        return query
+
+    def list_active_incidents(self, business_id: uuid.UUID, *, role: str) -> list[Notification]:
+        """Backs the in-app system-status banner (ORLA Notifications/
+        Security/Retention prompt, section 3: "show a visible in-app
+        status/banner while a blocking incident is active"). "Active" =
+        still open (not dismissed) — read/unread doesn't matter here,
+        unlike the unread badge; a customer having already seen the
+        warning doesn't mean the underlying condition resolved. Ordered
+        newest first, no limit — there are only ever a handful of
+        possible type_keys, so this can never return an unbounded list.
+        """
+        query = select(Notification).where(
+            Notification.business_id == business_id,
+            Notification.type_key.in_(_SYSTEM_STATUS_TYPE_KEYS),
+            Notification.status != "dismissed",
+        )
+        query = self._role_filter(query, role)
+        query = query.order_by(Notification.created_at.desc())
         return list(self.session.scalars(query))
+
+    def list_for_business(
+        self,
+        business_id: uuid.UUID,
+        *,
+        role: str,
+        category: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        limit: int = _DEFAULT_LIST_LIMIT,
+        offset: int = 0,
+    ) -> tuple[list[Notification], int]:
+        """Returns (page of items, total matching rows) — the total is a
+        second, cheap count() query, not len(items), so pagination
+        metadata is correct even on a page that isn't full (e.g. the last
+        page). Deterministic ordering (created_at desc, id desc as a
+        tie-breaker for same-timestamp rows) so two pages never overlap
+        or skip a row."""
+        query = self._filtered_query(
+            business_id, role=role, category=category, status=status, severity=severity,
+            start_at=start_at, end_at=end_at,
+        )
+        total = self.session.scalar(select(func.count()).select_from(query.subquery())) or 0
+        page = list(
+            self.session.scalars(
+                query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).offset(offset)
+            )
+        )
+        return page, total
+
+    def list_items_for_business(
+        self,
+        business_id: uuid.UUID,
+        *,
+        role: str,
+        category: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        limit: int = MAX_LIST_LIMIT,
+        offset: int = 0,
+    ) -> list[Notification]:
+        """Convenience wrapper over list_for_business for a caller that
+        only wants the page of rows, not the pagination total — every
+        internal (non-API) caller in this codebase today (tests, and any
+        future "just give me the open notifications" use). Defaults to
+        MAX_LIST_LIMIT, not the smaller page-sized default, since callers
+        of this method were never expecting to need to page through
+        results at all before pagination existed."""
+        items, _ = self.list_for_business(
+            business_id, role=role, category=category, status=status, severity=severity,
+            start_at=start_at, end_at=end_at, limit=limit, offset=offset,
+        )
+        return items
 
     def count_unread(self, business_id: uuid.UUID, *, role: str) -> int:
         query = select(func.count()).select_from(Notification).where(

@@ -45,6 +45,22 @@ class AIRequestRepository:
         self.session.commit()
         return request
 
+    def recent_platform_wide_success_flags(self, *, since: datetime, limit: int = 10) -> list[bool]:
+        """Ops signal for the "ORLA insights temporarily unavailable"
+        system-status check (app/scheduler/tick.py) — the most recent AI
+        provider calls across *every* business, newest first, capped
+        small since this only needs to answer "is the provider itself
+        currently down," not analyse usage. Deliberately platform-wide,
+        not scoped to one business: a single business's failed call could
+        be many things (their own malformed question, that business's
+        own rate limit); a run of failures across every business in a
+        row is the actual shape a real provider outage takes.
+        """
+        rows = self.session.execute(
+            select(AIRequest.success).where(AIRequest.created_at >= since).order_by(AIRequest.created_at.desc()).limit(limit)
+        ).scalars().all()
+        return list(rows)
+
     def count_today_for_business(self, business_id: uuid.UUID, *, now: datetime) -> int:
         """PR-5.5's usage-cap check — a rolling 24-hour window ending
         "now" (not a calendar-day boundary, which would let a business

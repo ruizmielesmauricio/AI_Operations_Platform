@@ -303,3 +303,124 @@ def test_invalid_filter_values_return_422(client):
     # accidentally rejecting everything.
     ok = client.get(f"/businesses/{business['id']}/notifications?category=stock&status=unread", headers=headers)
     assert ok.status_code == 200
+
+
+def test_pagination_metadata_and_limit_cap(client):
+    headers = bearer_header("owner-1", "owner@example.com")
+    business = _create_business(client, headers, "Shop A")
+    for _ in range(3):
+        _seed_notification(client, business["id"])
+
+    page = client.get(f"/businesses/{business['id']}/notifications?limit=2&offset=0", headers=headers)
+    assert page.status_code == 200
+    body = page.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+    # A caller asking for more than the cap never gets more than it —
+    # FastAPI's Query(le=MAX_LIST_LIMIT) rejects it outright, same
+    # enforcement point as the Transactions drill-down's own pagination cap.
+    over_cap = client.get(f"/businesses/{business['id']}/notifications?limit=99999", headers=headers)
+    assert over_cap.status_code == 422
+
+
+def test_date_filter_query_params_validation(client):
+    headers = bearer_header("owner-1", "owner@example.com")
+    business = _create_business(client, headers, "Shop A")
+    _seed_notification(client, business["id"])
+
+    ok_today = client.get(f"/businesses/{business['id']}/notifications?date_filter=today", headers=headers)
+    assert ok_today.status_code == 200
+    assert len(ok_today.json()["items"]) == 1
+
+    ok_custom = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=custom&start_date=2026-01-01&end_date=2026-06-01",
+        headers=headers,
+    )
+    assert ok_custom.status_code == 200
+
+    reversed_range = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=custom&start_date=2026-01-10&end_date=2026-01-01",
+        headers=headers,
+    )
+    assert reversed_range.status_code == 422
+
+    excessive_range = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=custom&start_date=2000-01-01&end_date=2026-01-01",
+        headers=headers,
+    )
+    assert excessive_range.status_code == 422
+
+    missing_end_date = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=custom&start_date=2026-01-01", headers=headers
+    )
+    assert missing_end_date.status_code == 422
+
+    dates_without_custom = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=today&start_date=2026-01-01", headers=headers
+    )
+    assert dates_without_custom.status_code == 422
+
+    invalid_date_value = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=custom&start_date=not-a-date&end_date=2026-01-01",
+        headers=headers,
+    )
+    assert invalid_date_value.status_code == 422
+
+    unsupported_filter = client.get(
+        f"/businesses/{business['id']}/notifications?date_filter=last_year", headers=headers
+    )
+    assert unsupported_filter.status_code == 422
+
+
+def test_date_filter_excludes_notifications_outside_the_range(client):
+    headers = bearer_header("owner-1", "owner@example.com")
+    business = _create_business(client, headers, "Shop A")
+    old_id = _seed_notification(client, business["id"])
+
+    # Backdate the seeded notification well outside "today".
+    from datetime import datetime, timedelta, timezone
+
+    db = client._SessionLocal()
+    from app.models.notification import Notification
+
+    row = db.get(Notification, uuid.UUID(old_id))
+    row.created_at = datetime.now(timezone.utc) - timedelta(days=90)
+    db.commit()
+    db.close()
+
+    today_view = client.get(f"/businesses/{business['id']}/notifications?date_filter=today", headers=headers)
+    assert today_view.json()["items"] == []
+
+    all_time_view = client.get(f"/businesses/{business['id']}/notifications", headers=headers)
+    assert len(all_time_view.json()["items"]) == 1
+
+
+def test_system_status_reports_an_active_incident_and_is_tenant_scoped(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = _create_business(client, headers_a, "Shop A")
+    business_b = _create_business(client, headers_b, "Shop B")
+    _seed_notification(
+        client, business_a["id"], category="reports", type_key="report_delayed", severity="warning",
+        title="delayed", body="...",
+    )
+
+    quiet = client.get(f"/businesses/{business_a['id']}/notifications/system-status", headers=headers_a)
+    assert quiet.status_code == 200
+    assert quiet.json()["has_active_incident"] is True
+    assert len(quiet.json()["incidents"]) == 1
+
+    other_business = client.get(f"/businesses/{business_b['id']}/notifications/system-status", headers=headers_b)
+    assert other_business.json()["has_active_incident"] is False
+
+
+def test_system_status_ignores_non_incident_notification_types(client):
+    headers = bearer_header("owner-1", "owner@example.com")
+    business = _create_business(client, headers, "Shop A")
+    _seed_notification(client, business["id"])  # default low_stock_summary — not an incident type_key
+
+    response = client.get(f"/businesses/{business['id']}/notifications/system-status", headers=headers)
+    assert response.json() == {"has_active_incident": False, "incidents": []}

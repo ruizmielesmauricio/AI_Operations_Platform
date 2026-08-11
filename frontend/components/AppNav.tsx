@@ -6,7 +6,7 @@ import { GlobalSearchBar } from "@/components/GlobalSearchBar";
 import { apiGet } from "@/lib/api/client";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
-import type { SubscriptionStatus } from "@/types";
+import type { SubscriptionStatus, SystemStatus } from "@/types";
 
 /**
  * The first shared nav in this frontend — everything up to now
@@ -26,6 +26,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
   const suffix = businessId ? `?business=${businessId}` : "";
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
 
   // "Upload data" used to render unconditionally here regardless of the
   // selected business's subscription status — the upload/import routes
@@ -73,6 +74,31 @@ export function AppNav({ businessId }: { businessId?: string }) {
     };
   }, [businessId]);
 
+  // ORLA System status banner (ORLA Notifications/Security/Retention
+  // prompt, section 3) — same lightweight-poll pattern as the unread
+  // badge above, not a push channel. Independent of whatever page is
+  // currently open, so a blocking incident (a stuck/failed report, ORLA
+  // insights being down) stays visible everywhere, not just on the
+  // Notification Centre itself.
+  useEffect(() => {
+    if (!businessId) {
+      setSystemStatus(null);
+      return;
+    }
+    function refresh() {
+      apiGet<SystemStatus>(`/businesses/${businessId}/notifications/system-status`)
+        .then(setSystemStatus)
+        .catch(() => setSystemStatus(null));
+    }
+    refresh();
+    const interval = setInterval(refresh, 60_000);
+    const unsubscribe = onNotificationsChanged(refresh);
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
+  }, [businessId]);
+
   const canUpload = subscriptionStatus === "active";
 
   async function handleLogout() {
@@ -80,8 +106,27 @@ export function AppNav({ businessId }: { businessId?: string }) {
     router.push("/login");
   }
 
+  const activeIncident = systemStatus?.has_active_incident ? systemStatus.incidents[0] : null;
+
   return (
-    <nav>
+    <>
+      {/* Visible while a blocking incident is active (report_failed/
+          report_delayed/import_failed/ai_insights_unavailable) — the
+          Notification Centre entry stays as history regardless of this
+          banner ("retain the Notification Centre entry as history").
+          Shows only the single most recent open incident; the rest are
+          still all in the Notification Centre as normal. */}
+      {activeIncident && (
+        <div role="status" className="status-warn" style={{ padding: "0.5em 0", borderBottom: "1px solid currentColor" }}>
+          {activeIncident.title} —{" "}
+          <a href={`/notifications${suffix}`}>
+            {systemStatus && systemStatus.incidents.length > 1
+              ? `View details (${systemStatus.incidents.length} active)`
+              : "View details"}
+          </a>
+        </div>
+      )}
+      <nav>
       <a href={`/dashboard${suffix}`}>Dashboard</a>
       {" · "}
       {/* No businessId at all — no business selected yet (e.g. Company
@@ -148,6 +193,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
       <button type="button" onClick={handleLogout}>
         Log out
       </button>
-    </nav>
+      </nav>
+    </>
   );
 }

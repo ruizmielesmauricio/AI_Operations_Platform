@@ -6,7 +6,16 @@ import { apiGet, apiPost } from "@/lib/api/client";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { broadcastNotificationsChanged } from "@/lib/notificationsBus";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { Notification, NotificationCategory, NotificationList } from "@/types";
+import type { Notification, NotificationCategory, NotificationDateFilter, NotificationList } from "@/types";
+
+const DATE_FILTER_LABELS: Record<NotificationDateFilter, string> = {
+  today: "Today",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  custom: "Custom range",
+};
+
+const PAGE_SIZE = 25;
 
 // The ORLA Notification Centre — one place for every category (stock,
 // uploads, reports, ORLA insights, team, billing, branches, security &
@@ -50,6 +59,7 @@ export default function NotificationsPage() {
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
 
   const [items, setItems] = useState<Notification[]>([]);
+  const [total, setTotal] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +69,13 @@ export default function NotificationsPage() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState(""); // "" = active (unread + read), matching the backend default
+  const [dateFilter, setDateFilter] = useState<NotificationDateFilter | "">("");
+  // Only meaningful while dateFilter === "custom" — kept as separate draft
+  // fields rather than committing on every keystroke, since a half-typed
+  // date would otherwise fire an invalid request on each character.
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [offset, setOffset] = useState(0);
 
   const business = businesses.find((b) => b.id === businessId);
   const isOwner = business?.role === "owner";
@@ -76,17 +93,29 @@ export default function NotificationsPage() {
     }
   }, [isOwner, categoryFilter]);
 
-  function load(id: string) {
+  // A custom range isn't ready to query until both ends are picked — while
+  // only one is filled in, this stays false and the effect below simply
+  // doesn't fire a (necessarily invalid, and pointlessly repeated) request.
+  const customRangeReady = dateFilter !== "custom" || (customStart !== "" && customEnd !== "");
+
+  function load(id: string, currentOffset: number) {
     setLoading(true);
     setError(null);
     const params = new URLSearchParams();
     if (categoryFilter) params.set("category", categoryFilter);
     if (severityFilter) params.set("severity", severityFilter);
     if (statusFilter) params.set("status", statusFilter);
-    const query = params.toString() ? `?${params.toString()}` : "";
-    apiGet<NotificationList>(`/businesses/${id}/notifications${query}`)
+    if (dateFilter) params.set("date_filter", dateFilter);
+    if (dateFilter === "custom") {
+      params.set("start_date", customStart);
+      params.set("end_date", customEnd);
+    }
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(currentOffset));
+    apiGet<NotificationList>(`/businesses/${id}/notifications?${params.toString()}`)
       .then((result) => {
         setItems(result.items);
+        setTotal(result.total);
         setUnreadCount(result.unread_count);
       })
       .catch(() => {
@@ -95,15 +124,24 @@ export default function NotificationsPage() {
         // still current" when they might not be — clearing avoids a
         // notification centre showing possibly-stale unread state.
         setItems([]);
+        setTotal(0);
         setError("Could not load notifications.");
       })
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    if (businessId) load(businessId);
+    if (businessId && customRangeReady) load(businessId, offset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessId, categoryFilter, severityFilter, statusFilter]);
+  }, [businessId, categoryFilter, severityFilter, statusFilter, dateFilter, customStart, customEnd, offset]);
+
+  // Same convention as frontend/app/transactions/page.tsx: each filter
+  // control resets offset itself (not a second effect keyed on the same
+  // filters) — one page fetch per real change, not two.
+  function updateFilter(setter: (value: string) => void, value: string) {
+    setter(value);
+    setOffset(0);
+  }
 
   async function handleMarkRead(id: string) {
     setBusyId(id);
@@ -176,7 +214,10 @@ export default function NotificationsPage() {
           <div>
             <label>
               Category
-              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+              <select
+                value={categoryFilter}
+                onChange={(e) => updateFilter(setCategoryFilter, e.target.value)}
+              >
                 <option value="">All categories</option>
                 {visibleCategoryEntries.map(([value, label]) => (
                   <option key={value} value={value}>
@@ -188,7 +229,10 @@ export default function NotificationsPage() {
             {" "}
             <label>
               Severity
-              <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+              <select
+                value={severityFilter}
+                onChange={(e) => updateFilter(setSeverityFilter, e.target.value)}
+              >
                 <option value="">All severities</option>
                 {Object.entries(SEVERITY_LABELS).map(([value, label]) => (
                   <option key={value} value={value}>
@@ -200,7 +244,10 @@ export default function NotificationsPage() {
             {" "}
             <label>
               Status
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <select
+                value={statusFilter}
+                onChange={(e) => updateFilter(setStatusFilter, e.target.value)}
+              >
                 <option value="">Unread &amp; read</option>
                 <option value="unread">Unread only</option>
                 <option value="read">Read only</option>
@@ -208,45 +255,125 @@ export default function NotificationsPage() {
               </select>
             </label>
             {" "}
+            <label>
+              Date
+              <select
+                value={dateFilter}
+                onChange={(e) => {
+                  const next = e.target.value as NotificationDateFilter | "";
+                  setDateFilter(next);
+                  if (next !== "custom") {
+                    setCustomStart("");
+                    setCustomEnd("");
+                  }
+                  setOffset(0);
+                }}
+              >
+                <option value="">All time</option>
+                {Object.entries(DATE_FILTER_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {dateFilter === "custom" && (
+              <>
+                {" "}
+                <label>
+                  From
+                  <input
+                    type="date"
+                    value={customStart}
+                    max={customEnd || undefined}
+                    onChange={(e) => updateFilter(setCustomStart, e.target.value)}
+                  />
+                </label>
+                {" "}
+                <label>
+                  To
+                  <input
+                    type="date"
+                    value={customEnd}
+                    min={customStart || undefined}
+                    onChange={(e) => updateFilter(setCustomEnd, e.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            {" "}
             <button type="button" onClick={handleMarkAllRead} disabled={markingAll || unreadCount === 0}>
               Mark all read ({unreadCount} unread)
             </button>
           </div>
 
-          {error && <p className="status-error">{error}</p>}
+          {error && (
+            <p className="status-error">
+              {error} <button type="button" onClick={() => load(businessId, offset)}>Retry</button>
+            </p>
+          )}
+          {dateFilter === "custom" && !customRangeReady && (
+            <p className="hint">Pick both a start and end date to apply the custom range.</p>
+          )}
           {loading ? (
             <p>Loading…</p>
           ) : items.length === 0 ? (
-            <p>No notifications to show{statusFilter || categoryFilter || severityFilter ? " for this filter." : "."}</p>
+            <p>
+              No notifications to show
+              {statusFilter || categoryFilter || severityFilter || dateFilter ? " for this filter." : "."}
+            </p>
           ) : (
-            <ul>
-              {items.map((n) => (
-                <li key={n.id} className={n.status === "unread" ? "status-unread" : undefined}>
-                  <strong>{n.title}</strong> — <span>{SEVERITY_LABELS[n.severity] ?? n.severity}</span>
-                  {" · "}
-                  <span>{CATEGORY_LABELS[n.category] ?? n.category}</span>
-                  {" · "}
-                  <span>{timeAgo(n.created_at)}</span>
-                  <p>{n.body}</p>
-                  {n.action_url && n.action_label && (
-                    <a href={`${n.action_url}${n.action_url.includes("?") ? "&" : "?"}business=${businessId}`}>
-                      {n.action_label}
-                    </a>
-                  )}
-                  {" "}
-                  {n.status === "unread" && (
-                    <button type="button" disabled={busyId === n.id} onClick={() => handleMarkRead(n.id)}>
-                      Mark read
-                    </button>
-                  )}
-                  {n.status !== "dismissed" && (
-                    <button type="button" disabled={busyId === n.id} onClick={() => handleDismiss(n.id)}>
-                      Dismiss
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul>
+                {items.map((n) => (
+                  <li key={n.id} className={n.status === "unread" ? "status-unread" : undefined}>
+                    <strong>{n.title}</strong> — <span>{SEVERITY_LABELS[n.severity] ?? n.severity}</span>
+                    {" · "}
+                    <span>{CATEGORY_LABELS[n.category] ?? n.category}</span>
+                    {" · "}
+                    <span>{timeAgo(n.created_at)}</span>
+                    <p>{n.body}</p>
+                    {n.action_url && n.action_label && (
+                      <a href={`${n.action_url}${n.action_url.includes("?") ? "&" : "?"}business=${businessId}`}>
+                        {n.action_label}
+                      </a>
+                    )}
+                    {" "}
+                    {n.status === "unread" && (
+                      <button type="button" disabled={busyId === n.id} onClick={() => handleMarkRead(n.id)}>
+                        Mark read
+                      </button>
+                    )}
+                    {n.status !== "dismissed" && (
+                      <button type="button" disabled={busyId === n.id} onClick={() => handleDismiss(n.id)}>
+                        Dismiss
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <nav aria-label="Notification pages">
+                <button
+                  type="button"
+                  disabled={offset === 0 || loading}
+                  onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                >
+                  Previous
+                </button>
+                {" "}
+                <span aria-live="polite">
+                  {Math.min(offset + 1, total)}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+                </span>
+                {" "}
+                <button
+                  type="button"
+                  disabled={offset + PAGE_SIZE >= total || loading}
+                  onClick={() => setOffset(offset + PAGE_SIZE)}
+                >
+                  Next
+                </button>
+              </nav>
+            </>
           )}
         </>
       )}

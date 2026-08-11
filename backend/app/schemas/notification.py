@@ -16,6 +16,9 @@ NotificationCategoryFilter = Literal[
 ]
 NotificationSeverityFilter = Literal["info", "success", "warning", "critical"]
 NotificationStatusFilter = Literal["unread", "read", "dismissed"]
+# Must stay in sync with app/application/notifications.py's own
+# NOTIFICATION_DATE_FILTERS tuple.
+NotificationDateFilterOption = Literal["today", "7d", "30d", "custom"]
 
 
 class NotificationOut(BaseModel):
@@ -38,4 +41,22 @@ class NotificationOut(BaseModel):
 
 class NotificationListOut(BaseModel):
     items: list[NotificationOut]
+    total: int
+    limit: int
+    offset: int
+    # Always the caller's role-scoped total unread count across every
+    # category/severity/date — deliberately *not* re-filtered by this
+    # same request's category/severity/date_filter params, so switching
+    # to "Today" never makes a real backlog of unread notifications from
+    # other days look like it silently disappeared. Matches the dedicated
+    # GET .../unread-count route's own always-unfiltered behaviour
+    # (app/api/notifications.py), which AppNav's badge polls independently.
     unread_count: int
+
+
+class SystemStatusOut(BaseModel):
+    has_active_incident: bool
+    # Small (a handful of possible type_keys at most) — the banner shows
+    # the most recent one; the rest stay available in the Notification
+    # Centre as always.
+    incidents: list[NotificationOut]

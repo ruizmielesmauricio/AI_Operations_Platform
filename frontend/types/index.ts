@@ -657,10 +657,24 @@ export interface Notification {
   read_at: string | null;
 }
 
+export interface SystemStatus {
+  has_active_incident: boolean;
+  incidents: Notification[];
+}
+
 export interface NotificationList {
   items: Notification[];
+  total: number;
+  limit: number;
+  offset: number;
+  // Always the caller's full, role-scoped unread total — never re-
+  // filtered by this same request's own category/severity/date_filter
+  // (see backend NotificationListOut's own docstring). Switching to
+  // "Today" never makes an existing unread backlog look like it vanished.
   unread_count: number;
 }
+
+export type NotificationDateFilter = "today" | "7d" | "30d" | "custom";
 
 // --- Global search bar (GET /businesses/{id}/search?q=...) ----------------
 //

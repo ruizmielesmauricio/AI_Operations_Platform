@@ -144,6 +144,18 @@ def compute_report_period(
 REPORT_GENERATION_HOUR = 8
 
 
+def report_generation_moment(business_timezone: str, period_end_date: date) -> datetime:
+    """The exact instant (08:00 local on the calendar day immediately
+    after period_end_date) a report becomes due — factored out of
+    is_report_period_due so app/scheduler/tick.py's "materially delayed"
+    system-status check (ORLA Notifications/Security/Retention prompt,
+    section 3) can measure *how far* past due a still-incomplete report
+    is, not just whether it's due at all yet."""
+    tz = ZoneInfo(business_timezone)
+    generation_date = period_end_date + timedelta(days=1)
+    return datetime.combine(generation_date, time(REPORT_GENERATION_HOUR, 0), tzinfo=tz)
+
+
 def is_report_period_due(business_timezone: str, period_end_date: date, *, now: datetime) -> bool:
     """True once "now" is at or after the period's own generation moment —
     08:00 local on the calendar day immediately after period_end_date
@@ -155,8 +167,5 @@ def is_report_period_due(business_timezone: str, period_end_date: date, *, now: 
     missed-report recovery (PR-8.10) automatic rather than needing a
     separate mechanism from generation itself.
     """
-    tz = ZoneInfo(business_timezone)
-    local_now = now.astimezone(tz)
-    generation_date = period_end_date + timedelta(days=1)
-    generation_moment = datetime.combine(generation_date, time(REPORT_GENERATION_HOUR, 0), tzinfo=tz)
-    return local_now >= generation_moment
+    local_now = now.astimezone(ZoneInfo(business_timezone))
+    return local_now >= report_generation_moment(business_timezone, period_end_date)

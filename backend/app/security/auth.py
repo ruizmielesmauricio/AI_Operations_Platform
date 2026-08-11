@@ -1,3 +1,57 @@
+"""Auth ownership map (ORLA Notifications/Security/Retention prompt,
+section 4's own "first inspect the authentication architecture and
+determine which authentication methods ORLA owns versus delegates"
+requirement) — recorded here since this module is the actual boundary.
+
+ORLA owns NOTHING about authentication itself, only tenant-scoping on
+top of an already-authenticated identity (see app/security/tenant.py):
+
+- Sign-up, sign-in (email/password AND Google OAuth), password reset
+  (frontend/app/forgot-password, /reset-password, /login), session
+  issuance/refresh, and token verification (the JWKS check right below)
+  are all 100% Supabase Auth (ADR-013: "Supabase's database/storage
+  products are never used" — Auth is the one exception, used in full).
+  No password hash, reset token, or session table exists anywhere in
+  this backend's own schema — decode_supabase_jwt below is the entire
+  extent of this backend's involvement: verify a token Supabase already
+  issued, never issue or store one itself.
+- The password-reset flow's every literal requirement in this prompt
+  (generic non-enumerating response, a cryptographically secure single-
+  use token stored only as a hash, 15-30 minute expiry, rate limiting by
+  account/IP, session invalidation semantics on the provider side) is
+  therefore already satisfied by Supabase's own implementation, not
+  something to rebuild in parallel — a second, homemade token system
+  alongside Supabase's own would be redundant risk, not extra safety.
+
+What's genuinely NOT built, and why, disclosed here rather than silently
+skipped:
+- Explicit "revoke every other active session after a successful
+  password reset" needs Supabase's Admin API, which needs a
+  SUPABASE_SERVICE_ROLE_KEY — no such setting exists anywhere in
+  app/settings/config.py or this deployment's environment today. Not
+  something this backend can fabricate; needs the account owner to
+  provision that secret first.
+- A server-side audit-log entry or notification on "password changed" /
+  "email changed" needs Supabase Auth Hooks (a webhook, configured in
+  the Supabase project dashboard, outside this codebase and outside API
+  access) POSTing to a new receiver route here — the receiver is real,
+  buildable code, but activating it needs a dashboard setting only the
+  account owner can make, the same category of gap as the Stripe
+  webhook secret already disclosed elsewhere in this project's history.
+- Repeated-failed-sign-in/lockout and new-device/new-location sign-in
+  are both explicitly conditional in this prompt ("if reliable data
+  already exists" / "if it can be implemented reliably") — no failed-
+  attempt log or session/device/IP history exists anywhere in this
+  stateless-JWT backend, so neither precondition holds; correctly not
+  built, per the prompt's own instruction, rather than guessed at.
+- MFA enable/disable/recovery: conditional on "if MFA exists" — no MFA
+  flow exists anywhere in frontend/app/login or Supabase's configured
+  providers for this project, so there is nothing to notify about.
+- "Owner/administrator account changed": no ownership-transfer feature
+  exists anywhere in this codebase (a business's owner is fixed at
+  creation, via its first Membership row) — nothing to notify about.
+"""
+
 from dataclasses import dataclass
 from functools import lru_cache
 

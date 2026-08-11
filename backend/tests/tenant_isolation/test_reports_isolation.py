@@ -88,3 +88,103 @@ def test_cannot_fetch_another_business_s_report_by_id(client):
     cross_business = _create_business(client, headers_c, "Shop C")
     cross_response = client.get(f"/businesses/{cross_business['id']}/reports/{report_id}", headers=headers_c)
     assert cross_response.status_code == 404
+
+
+# --- Report downloads (PDF/DOCX) -------------------------------------------
+
+
+def test_owner_can_download_pdf_and_docx(client):
+    headers = bearer_header("user-a", "a@example.com")
+    business = _create_business(client, headers, "Shop A")
+
+    db = client._SessionLocal()
+    report = generate_report(db, business_id=uuid.UUID(business["id"]), report_type="weekly", now=_NOW)
+    report_id = str(report.id)
+    db.close()
+
+    pdf_response = client.get(f"/businesses/{business['id']}/reports/{report_id}/download.pdf", headers=headers)
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"] == "application/pdf"
+    assert pdf_response.content[:4] == b"%PDF"
+    assert "attachment" in pdf_response.headers["content-disposition"]
+
+    docx_response = client.get(f"/businesses/{business['id']}/reports/{report_id}/download.docx", headers=headers)
+    assert docx_response.status_code == 200
+    assert docx_response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert docx_response.content[:2] == b"PK"  # a .docx is a zip archive
+    assert "attachment" in docx_response.headers["content-disposition"]
+
+
+def test_download_filename_is_safe_and_identifiable(client):
+    headers = bearer_header("user-a", "a@example.com")
+    # A name with characters that must never reach a Content-Disposition
+    # header unescaped (quotes, path separators) — the safe-filename
+    # helper must strip these, not just hope none ever appear.
+    business = _create_business(client, headers, 'Shop "A"/../evil')
+
+    db = client._SessionLocal()
+    report = generate_report(db, business_id=uuid.UUID(business["id"]), report_type="weekly", now=_NOW)
+    report_id = str(report.id)
+    db.close()
+
+    response = client.get(f"/businesses/{business['id']}/reports/{report_id}/download.pdf", headers=headers)
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    filename = disposition.split("filename=", 1)[1].strip('"')
+    # The unsafe characters from the business name above are all gone —
+    # neither a header-injection risk nor a path-traversal-shaped string
+    # ever reaches the response.
+    assert '"' not in filename
+    assert ".." not in filename
+    assert "/" not in filename
+    assert "weekly" in filename
+    assert filename.endswith(".pdf")
+
+
+def test_cannot_download_another_business_s_report(client):
+    headers_a = bearer_header("user-a", "a@example.com")
+    headers_b = bearer_header("user-b", "b@example.com")
+    business_a = _create_business(client, headers_a, "Shop A")
+    _create_business(client, headers_b, "Shop B")
+
+    db = client._SessionLocal()
+    report = generate_report(db, business_id=uuid.UUID(business_a["id"]), report_type="weekly", now=_NOW)
+    report_id = str(report.id)
+    db.close()
+
+    headers_c = bearer_header("user-c", "c@example.com")
+    cross_business = _create_business(client, headers_c, "Shop C")
+    cross_pdf = client.get(f"/businesses/{cross_business['id']}/reports/{report_id}/download.pdf", headers=headers_c)
+    assert cross_pdf.status_code == 404
+    cross_docx = client.get(f"/businesses/{cross_business['id']}/reports/{report_id}/download.docx", headers=headers_c)
+    assert cross_docx.status_code == 404
+
+
+def test_cannot_download_a_nonexistent_report(client):
+    headers = bearer_header("user-a", "a@example.com")
+    business = _create_business(client, headers, "Shop A")
+
+    response = client.get(
+        f"/businesses/{business['id']}/reports/{uuid.uuid4()}/download.pdf", headers=headers
+    )
+    assert response.status_code == 404
+
+
+def test_download_requires_real_membership_not_just_a_hidden_button(client):
+    """The prompt's own explicit requirement: permission must be enforced
+    server-side, never only a frontend button being hidden. A stranger
+    with no Membership on the business at all gets 403 before the report
+    lookup even runs."""
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_stranger = bearer_header("user-stranger", "stranger@example.com")
+    business = _create_business(client, headers_owner, "Shop A")
+
+    db = client._SessionLocal()
+    report = generate_report(db, business_id=uuid.UUID(business["id"]), report_type="weekly", now=_NOW)
+    report_id = str(report.id)
+    db.close()
+
+    response = client.get(f"/businesses/{business['id']}/reports/{report_id}/download.pdf", headers=headers_stranger)
+    assert response.status_code == 403

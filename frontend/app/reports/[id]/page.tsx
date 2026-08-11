@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { apiGet } from "@/lib/api/client";
+import { apiGet, apiGetBlob } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
@@ -67,12 +67,22 @@ export default function ReportDetailPage() {
       <AppNav businessId={businessId} />
       {error && <p className="status-error">{error}</p>}
       {!error && !report && <p>Loading…</p>}
-      {!error && report && report.payload && <ReportView report={report} payload={report.payload} />}
+      {!error && report && report.payload && (
+        <ReportView report={report} payload={report.payload} businessId={businessId} />
+      )}
     </main>
   );
 }
 
-function ReportView({ report, payload }: { report: ReportDetail; payload: NonNullable<ReportDetail["payload"]> }) {
+function ReportView({
+  report,
+  payload,
+  businessId,
+}: {
+  report: ReportDetail;
+  payload: NonNullable<ReportDetail["payload"]>;
+  businessId: string;
+}) {
   const { executive_summary: summary, financial_performance: financial, retail_operations: retail, inventory_health: inventory, forecast, findings, workshop_performance: workshop, category_breakdown: categoryBreakdown } = payload;
   const marginRows = dedupeByProduct([...financial.bottom_margin_products, ...financial.top_margin_products]);
   const withCover = retail.stock_cover.filter((r) => r.cover_days !== null);
@@ -105,9 +115,7 @@ function ReportView({ report, payload }: { report: ReportDetail; payload: NonNul
   return (
     <>
       <div className="no-print" style={{ float: "right" }}>
-        <button type="button" onClick={() => window.print()}>
-          Download PDF
-        </button>
+        <ReportDownloadButtons businessId={businessId} reportId={report.id} />
       </div>
       <h1>
         {payload.report_type === "weekly" ? "Weekly" : "Monthly"} Report — {payload.business_name}
@@ -467,4 +475,57 @@ function dedupeByProduct(rows: ProductMarginRow[]): ProductMarginRow[] {
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleDateString();
+}
+
+type DownloadFormat = "pdf" | "docx";
+
+// Real, server-generated files (ORLA Notifications/Security/Retention
+// prompt, section 7) — replaces the previous single "Download PDF"
+// button's browser-print (window.print(), removed) with two buttons
+// that fetch an actual file the backend controls end to end (auth +
+// membership + report-availability all enforced server-side, per
+// backend/app/api/reports.py's own _get_available_report_or_404 — never
+// only this button being visible). Each format tracks its own loading/
+// error state independently, so clicking PDF doesn't disable DOCX.
+function ReportDownloadButtons({ businessId, reportId }: { businessId: string; reportId: string }) {
+  const [loading, setLoading] = useState<DownloadFormat | null>(null);
+  const [error, setError] = useState<DownloadFormat | null>(null);
+
+  async function handleDownload(reportFormat: DownloadFormat) {
+    setLoading(reportFormat);
+    setError(null);
+    try {
+      const { blob, filename } = await apiGetBlob(
+        `/businesses/${businessId}/reports/${reportId}/download.${reportFormat}`
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename ?? `report.${reportFormat}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError(reportFormat);
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <div>
+      <button type="button" onClick={() => handleDownload("pdf")} disabled={loading !== null}>
+        {loading === "pdf" ? "Preparing PDF…" : "Download PDF"}
+      </button>{" "}
+      <button type="button" onClick={() => handleDownload("docx")} disabled={loading !== null}>
+        {loading === "docx" ? "Preparing DOCX…" : "Download DOCX"}
+      </button>
+      {error && (
+        <p className="status-error">
+          Could not download the {error.toUpperCase()} — try again.
+        </p>
+      )}
+    </div>
+  );
 }
