@@ -677,6 +677,17 @@ _WARNING_MESSAGE_TEMPLATES = {
         "this purchase's date is on or before your last stock count, so its quantity isn't counted "
         "toward current stock — it's presumably already included in that count"
     ),
+    # Sales-specific mirror of the purchases warning above (Sales
+    # Backdating/Stock Integrity audit) — covers both an ordinary sale and
+    # a return, since both are written from the same row here and both are
+    # excluded from current stock by the same date rule. The sale/return
+    # itself is still recorded in full (Sale/SaleItem/InventoryMovement,
+    # revenue, returns summary) — only the derived current-stock number is
+    # unaffected, same "recorded, not discarded" posture as purchases.
+    "sale_excluded_from_current_stock": (
+        "this transaction's date is on or before your last stock count, so it isn't counted again "
+        "toward current stock — it's presumably already included in that count"
+    ),
 }
 
 
@@ -814,6 +825,15 @@ def _write_sales(
     matcher = ProductMatcher(product_repo.list_for_business(upload.business_id))
     category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
     existing_refs = sale_repo.list_existing_order_references(upload.business_id)
+    # Informational only, same "never reject or suppress" posture as
+    # _write_purchases' identical lookup — sum_by_product_ids's date-aware
+    # calculation already excludes a sale/return dated on/before a later
+    # stock count from current stock, automatically and correctly,
+    # regardless of upload order. This exists purely so the client
+    # understands why a transaction it can see in Sales History isn't
+    # moving the stock number (Sales Backdating/Stock Integrity audit —
+    # purchases already had this warning, sales never did).
+    latest_adjustment_by_product = movement_repo.list_latest_adjustment_event_dates(upload.business_id)
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
@@ -896,6 +916,15 @@ def _write_sales(
                     refund_amount=abs(row.quantity * row.unit_price),
                 )
             if product_id is not None:
+                sale_event_date = sale.sold_at.date()
+                # Same boundary as _write_purchases' identical check: on-or-
+                # before (not strictly-before) the count's date is "already
+                # reflected in it," matching a shop's own daily routine of
+                # exporting sales and a stock count together, the count
+                # representing the end of that day.
+                last_count_date = latest_adjustment_by_product.get(product_id)
+                if last_count_date is not None and sale_event_date <= last_count_date:
+                    warnings["sale_excluded_from_current_stock"].append({"row_number": row.row_number})
                 movement_repo.create(
                     business_id=upload.business_id,
                     product_id=product_id,
@@ -913,7 +942,7 @@ def _write_sales(
                     # recovers that original calendar date exactly, no
                     # timezone conversion needed (it was never a real
                     # wall-clock time to begin with).
-                    event_date=sale.sold_at.date(),
+                    event_date=sale_event_date,
                 )
                 touched_product_ids.add(product_id)
             rows_imported += 1
