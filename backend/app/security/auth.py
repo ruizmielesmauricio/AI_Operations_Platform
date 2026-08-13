@@ -64,6 +64,7 @@ skipped:
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import jwt
@@ -87,6 +88,8 @@ bearer_scheme = HTTPBearer(auto_error=False)
 class AuthenticatedUser:
     id: str
     email: str
+    session_id: str | None = None
+    issued_at: datetime | None = None
 
 
 @lru_cache
@@ -120,6 +123,7 @@ def decode_supabase_jwt(token: str) -> dict:
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
     """Verifies the bearer token only — no database access. Use this for
     anything that just needs to know who's asking, without needing a
@@ -128,7 +132,28 @@ def get_current_user(
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     claims = decode_supabase_jwt(credentials.credentials)
-    return AuthenticatedUser(id=claims["sub"], email=claims.get("email", ""))
+    issued_at = datetime.fromtimestamp(claims["iat"], tz=timezone.utc) if isinstance(claims.get("iat"), int) else None
+    current_user = AuthenticatedUser(
+        id=claims["sub"],
+        email=claims.get("email", ""),
+        session_id=claims.get("session_id"),
+        issued_at=issued_at,
+    )
+    local_user = db.get(User, current_user.id)
+    revoked_after = local_user.session_revoked_after if local_user is not None else None
+    # SQLite (used by the isolation suite) round-trips DateTime(timezone=True)
+    # without tzinfo, while Postgres preserves it. Normalize at the auth
+    # boundary so both databases enforce the same UTC revocation rule.
+    if revoked_after is not None and revoked_after.tzinfo is None:
+        revoked_after = revoked_after.replace(tzinfo=timezone.utc)
+    if (
+        local_user is not None
+        and revoked_after is not None
+        and current_user.session_id != local_user.session_exception_id
+        and (current_user.issued_at is None or current_user.issued_at <= revoked_after)
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session was revoked after a password reset")
+    return current_user
 
 
 def get_current_user_synced(

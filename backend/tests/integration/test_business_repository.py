@@ -10,6 +10,7 @@ from app.models.membership import Membership
 from app.models.product import Product
 from app.repositories.business import (
     BusinessLimitReached,
+    ExistingMemberCannotCreateBusiness,
     NotBusinessOwner,
     count_owned_standalone_businesses,
     create_branch_business,
@@ -44,6 +45,19 @@ def test_create_business_with_owner_rejects_a_second_standalone_business(db_sess
 
     # The rejected attempt must not have partially created anything.
     assert count_owned_standalone_businesses(db_session, user_id="user-a") == 1
+
+
+def test_staff_member_cannot_create_a_separate_business(db_session):
+    business = create_business_with_owner(
+        db_session, name="Shop A", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="owner-a"
+    )
+    db_session.add(Membership(business_id=business.id, user_id="staff-a", role="staff"))
+    db_session.commit()
+
+    with pytest.raises(ExistingMemberCannotCreateBusiness):
+        create_business_with_owner(
+            db_session, name="Staff Shop", template="bicycle_shop", timezone="Europe/Dublin", owner_user_id="staff-a"
+        )
 
 
 def test_a_branch_does_not_count_toward_the_standalone_limit(db_session):

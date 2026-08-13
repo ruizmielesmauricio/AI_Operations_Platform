@@ -8,6 +8,7 @@ app.security.auth._jwks_client to hand back the public half instead of
 fetching a real JWKS document.
 """
 
+import time
 import uuid
 
 import jwt
@@ -37,7 +38,13 @@ def patch_jwks(monkeypatch) -> None:
 
 def bearer_header(user_id: str, email: str) -> dict:
     token = jwt.encode(
-        {"sub": user_id, "email": email, "aud": "authenticated"},
+        {
+            "sub": user_id,
+            "email": email,
+            "aud": "authenticated",
+            "iat": int(time.time()),
+            "session_id": str(uuid.uuid4()),
+        },
         _private_key,
         algorithm="ES256",
     )

@@ -7,6 +7,7 @@ import { redirectToCheckout } from "@/lib/billing";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
+import { useRouter } from "next/navigation";
 import type {
   AddressSuggestion,
   Business,
@@ -138,6 +139,7 @@ function statusLabel(business: Business, subscriptionStatus: string | null): str
 }
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const { session, checkingSession } = useRequireSession();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [subscriptions, setSubscriptions] = useState<Record<string, SubscriptionStatus>>({});
@@ -245,6 +247,16 @@ export default function OnboardingPage() {
       return requestedIsValid ? (requested as string) : activeBusinesses[0]?.id;
     });
   }, [businesses]);
+
+  // A paid, active staff membership is an invitation into a real business,
+  // not a prompt to create a separate one. Send staff/manager users directly
+  // to their assigned branch as soon as the memberships list resolves.
+  useEffect(() => {
+    const activeBusinesses = businesses.filter((b) => !b.deleted_at);
+    if (activeBusinesses.length > 0 && activeBusinesses.every((b) => b.role !== "owner")) {
+      router.replace(`/dashboard?business=${activeBusinesses[0].id}`);
+    }
+  }, [businesses, router]);
 
   useEffect(() => {
     businesses.forEach((b) => {
@@ -651,6 +663,11 @@ export default function OnboardingPage() {
   // itself or a deleted shop would wrongly keep the create form hidden).
   const hasStandaloneShop = businesses.some((b) => !b.parent_business_id && !b.deleted_at);
   const activeBusinessesForNav = businesses.filter((b) => !b.deleted_at);
+  const isExistingStaffOnly = activeBusinessesForNav.length > 0 && activeBusinessesForNav.every((b) => b.role !== "owner");
+
+  if (isExistingStaffOnly) {
+    return <main><p>Opening your workspace…</p></main>;
+  }
 
   return (
     <main>
@@ -1214,7 +1231,7 @@ export default function OnboardingPage() {
         </ul>
       )}
 
-      {hasStandaloneShop ? (
+      {hasStandaloneShop || activeBusinessesForNav.length > 0 ? (
         <p className="hint">
           One standalone shop per account — delete your existing shop above to create a different one, or
           use "Add a branch" on it to add another location for €30/month.
