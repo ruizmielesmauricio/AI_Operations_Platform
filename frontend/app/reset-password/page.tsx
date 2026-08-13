@@ -36,10 +36,26 @@ export default function ResetPasswordPage() {
     }
     setSubmitting(true);
     try {
-      const { error: updateError } = await requireSupabase().auth.updateUser({ password });
+      const client = requireSupabase();
+      const { error: updateError } = await client.auth.updateUser({ password });
       if (updateError) {
         setError(updateError.message);
         return;
+      }
+      // Explicitly revoke every other session's refresh token now that the
+      // password has changed — this account may still be signed in on
+      // another device, and that device should not stay usable past this
+      // point. `scope: "others"` is Supabase's own documented, provider-
+      // native mechanism for exactly this (see ADR-024): it uses the
+      // recovery session established by the reset link itself, so it needs
+      // no new secret and no backend involvement, and it deliberately
+      // leaves *this* session (the one that just set the new password)
+      // alone. Best-effort: the password is already saved at this point,
+      // so a transient failure here shouldn't trap the user on this page —
+      // it's logged for the operator, not surfaced as a blocking error.
+      const { error: revokeError } = await client.auth.signOut({ scope: "others" });
+      if (revokeError) {
+        console.error("Failed to revoke other sessions after password reset:", revokeError.message);
       }
       router.push("/onboarding");
     } catch (err) {

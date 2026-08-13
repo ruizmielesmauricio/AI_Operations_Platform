@@ -25,19 +25,30 @@ top of an already-authenticated identity (see app/security/tenant.py):
 
 What's genuinely NOT built, and why, disclosed here rather than silently
 skipped:
-- Explicit "revoke every other active session after a successful
-  password reset" needs Supabase's Admin API, which needs a
-  SUPABASE_SERVICE_ROLE_KEY — no such setting exists anywhere in
-  app/settings/config.py or this deployment's environment today. Not
-  something this backend can fabricate; needs the account owner to
-  provision that secret first.
+- ~~Explicit "revoke every other active session after a successful
+  password reset"~~ — **closed (ADR-024)**, without a service-role key.
+  `frontend/app/reset-password/page.tsx` calls Supabase's own
+  `auth.signOut({ scope: "others" })` right after `updateUser({password})`
+  succeeds — a documented, provider-native client SDK method that
+  revokes every *other* session's refresh token using the recovery
+  session already established by the reset link, and deliberately
+  leaves the current one alone. No `SUPABASE_SERVICE_ROLE_KEY` or Admin
+  API involvement needed; this backend still touches nothing here.
 - A server-side audit-log entry or notification on "password changed" /
-  "email changed" needs Supabase Auth Hooks (a webhook, configured in
-  the Supabase project dashboard, outside this codebase and outside API
-  access) POSTing to a new receiver route here — the receiver is real,
-  buildable code, but activating it needs a dashboard setting only the
-  account owner can make, the same category of gap as the Stripe
-  webhook secret already disclosed elsewhere in this project's history.
+  "email changed" still isn't built, and correctly so: Supabase Auth
+  Hooks are flow-interception points (e.g. the Send Email Hook, which
+  runs *instead of* Supabase's own email send), not a general post-event
+  webhook — there is no reliable Auth Hook that fires *after* a password
+  or email change actually commits, so there's nothing here to receive
+  such an event even in principle. Supabase's own built-in security
+  notification emails (Password Changed / Email Changed) and its Auth
+  Audit Logs (`auth.audit_log_entries`, `user_updated_password` /
+  `user_recovery_requested` actions) are the real, correct source of
+  truth for this instead — see `docs/governance/20_Supabase_Security_Runbook.md`
+  for the dashboard configuration this still needs (project-level
+  toggles only the account owner can set) and where to review the
+  provider's own record. ORLA does not fabricate a local `AuditLog` row
+  from a browser confirmation it can't prove the provider committed.
 - Repeated-failed-sign-in/lockout and new-device/new-location sign-in
   are both explicitly conditional in this prompt ("if reliable data
   already exists" / "if it can be implemented reliably") — no failed-
