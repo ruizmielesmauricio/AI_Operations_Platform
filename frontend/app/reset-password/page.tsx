@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { requireSupabase, supabase } from "@/lib/supabase/client";
+import { apiPost } from "@/lib/api/client";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
@@ -36,9 +37,28 @@ export default function ResetPasswordPage() {
     }
     setSubmitting(true);
     try {
-      const { error: updateError } = await requireSupabase().auth.updateUser({ password });
+      const client = requireSupabase();
+      const { error: updateError } = await client.auth.updateUser({ password });
       if (updateError) {
         setError(updateError.message);
+        return;
+      }
+      // Immediately revoke ORLA API access for old access JWTs. The
+      // provider's refresh-token revocation below remains necessary, but
+      // its effect otherwise waits for another browser's access token to
+      // expire. This endpoint trusts only this verified recovery session.
+      await apiPost<{ revoked: boolean }>("/account/security/revoke-other-sessions", {});
+      // Explicitly revoke every other session's refresh token now that the
+      // password has changed — this account may still be signed in on
+      // another device, and that device should not stay usable past this
+      // point. `scope: "others"` is Supabase's own documented, provider-
+      // native mechanism for exactly this (see ADR-024): it uses the
+      // recovery session established by the reset link itself, so it needs
+      // no new secret and it deliberately leaves *this* session (the one
+      // that just set the new password) alone.
+      const { error: revokeError } = await client.auth.signOut({ scope: "others" });
+      if (revokeError) {
+        setError("Your password was changed, but we could not sign out your other sessions. Request a new reset link and try again.");
         return;
       }
       router.push("/onboarding");

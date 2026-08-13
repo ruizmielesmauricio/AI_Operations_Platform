@@ -191,192 +191,118 @@ export default function NotificationsPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
-      <h1>Notification Centre</h1>
-      <p className="hint">
-        {isOwner
-          ? "Everything ORLA thinks you should know about — stock, uploads, reports, insights, team, and billing — in one place. Each notification links straight to the page it's about."
-          : "Everything ORLA thinks you should know about your branch operations — stock, uploads, reports, and insights — in one place. Each notification links straight to the page it's about."}
-      </p>
+      <div className="notifications-shell">
+        <aside className="notifications-sidebar" aria-label="Notification filters">
+          <label className="notifications-shop-label">
+            Shop
+            <select value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
+              {businesses.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </label>
+          <p className="notifications-filter-title">Categories</p>
+          <div className="notifications-category-list">
+            <button className="notifications-category" type="button" aria-pressed={categoryFilter === ""} onClick={() => updateFilter(setCategoryFilter, "")}>
+              <span>All notifications</span><span className="notifications-category__count">{unreadCount || ""}</span>
+            </button>
+            {visibleCategoryEntries.map(([value, label]) => (
+              <button key={value} className="notifications-category" type="button" aria-pressed={categoryFilter === value} onClick={() => updateFilter(setCategoryFilter, value)}>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
 
-      <label>
-        Shop
-        <select value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
-          {businesses.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {businessId && (
-        <>
-          <div>
-            <label>
-              Category
-              <select
-                value={categoryFilter}
-                onChange={(e) => updateFilter(setCategoryFilter, e.target.value)}
-              >
-                <option value="">All categories</option>
-                {visibleCategoryEntries.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {" "}
-            <label>
-              Severity
-              <select
-                value={severityFilter}
-                onChange={(e) => updateFilter(setSeverityFilter, e.target.value)}
-              >
-                <option value="">All severities</option>
-                {Object.entries(SEVERITY_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {" "}
-            <label>
-              Status
-              <select
-                value={statusFilter}
-                onChange={(e) => updateFilter(setStatusFilter, e.target.value)}
-              >
-                <option value="">Unread &amp; read</option>
-                <option value="unread">Unread only</option>
-                <option value="read">Read only</option>
-                <option value="dismissed">Dismissed</option>
-              </select>
-            </label>
-            {" "}
-            <label>
-              Date
-              <select
-                value={dateFilter}
-                onChange={(e) => {
-                  const next = e.target.value as NotificationDateFilter | "";
-                  setDateFilter(next);
-                  if (next !== "custom") {
-                    setCustomStart("");
-                    setCustomEnd("");
-                  }
-                  setOffset(0);
-                }}
-              >
-                <option value="">All time</option>
-                {Object.entries(DATE_FILTER_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {dateFilter === "custom" && (
-              <>
-                {" "}
-                <label>
-                  From
-                  <input
-                    type="date"
-                    value={customStart}
-                    max={customEnd || undefined}
-                    onChange={(e) => updateFilter(setCustomStart, e.target.value)}
-                  />
-                </label>
-                {" "}
-                <label>
-                  To
-                  <input
-                    type="date"
-                    value={customEnd}
-                    min={customStart || undefined}
-                    onChange={(e) => updateFilter(setCustomEnd, e.target.value)}
-                  />
-                </label>
-              </>
-            )}
-            {" "}
+        <div className="notifications-content">
+          <div className="notifications-header">
+            <div>
+              <h1>Notification Centre</h1>
+              <p className="hint">
+                {isOwner
+                  ? "Updates about stock, uploads, reports, insights, team, and billing, with a direct route to each next action."
+                  : "Updates about your branch operations, with a direct route to each next action."}
+              </p>
+            </div>
             <button type="button" onClick={handleMarkAllRead} disabled={markingAll || unreadCount === 0}>
-              Mark all read ({unreadCount} unread)
+              Mark all read{unreadCount > 0 ? ` (${unreadCount})` : ""}
             </button>
           </div>
 
-          {error && (
-            <p className="status-error">
-              {error} <button type="button" onClick={() => load(businessId, offset)}>Retry</button>
-            </p>
-          )}
-          {dateFilter === "custom" && !customRangeReady && (
-            <p className="hint">Pick both a start and end date to apply the custom range.</p>
-          )}
-          {loading ? (
-            <p>Loading…</p>
-          ) : items.length === 0 ? (
-            <p>
-              No notifications to show
-              {statusFilter || categoryFilter || severityFilter || dateFilter ? " for this filter." : "."}
-            </p>
-          ) : (
+          {businessId && (
             <>
-              <ul>
-                {items.map((n) => (
-                  <li key={n.id} className={n.status === "unread" ? "status-unread" : undefined}>
-                    <strong>{n.title}</strong> — <span>{SEVERITY_LABELS[n.severity] ?? n.severity}</span>
-                    {" · "}
-                    <span>{CATEGORY_LABELS[n.category] ?? n.category}</span>
-                    {" · "}
-                    <span>{timeAgo(n.created_at)}</span>
-                    <p>{n.body}</p>
-                    {n.action_url && n.action_label && (
-                      <a href={`${n.action_url}${n.action_url.includes("?") ? "&" : "?"}business=${businessId}`}>
-                        {n.action_label}
-                      </a>
-                    )}
-                    {" "}
-                    {n.status === "unread" && (
-                      <button type="button" disabled={busyId === n.id} onClick={() => handleMarkRead(n.id)}>
-                        Mark read
-                      </button>
-                    )}
-                    {n.status !== "dismissed" && (
-                      <button type="button" disabled={busyId === n.id} onClick={() => handleDismiss(n.id)}>
-                        Dismiss
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <nav aria-label="Notification pages">
-                <button
-                  type="button"
-                  disabled={offset === 0 || loading}
-                  onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-                >
-                  Previous
-                </button>
-                {" "}
-                <span aria-live="polite">
-                  {Math.min(offset + 1, total)}–{Math.min(offset + PAGE_SIZE, total)} of {total}
-                </span>
-                {" "}
-                <button
-                  type="button"
-                  disabled={offset + PAGE_SIZE >= total || loading}
-                  onClick={() => setOffset(offset + PAGE_SIZE)}
-                >
-                  Next
-                </button>
-              </nav>
+              <div className="notifications-toolbar">
+                <label>
+                  Severity
+                  <select value={severityFilter} onChange={(e) => updateFilter(setSeverityFilter, e.target.value)}>
+                    <option value="">All severities</option>
+                    {Object.entries(SEVERITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Status
+                  <select value={statusFilter} onChange={(e) => updateFilter(setStatusFilter, e.target.value)}>
+                    <option value="">Unread &amp; read</option>
+                    <option value="unread">Unread only</option>
+                    <option value="read">Read only</option>
+                    <option value="dismissed">Dismissed</option>
+                  </select>
+                </label>
+                <label>
+                  Date
+                  <select value={dateFilter} onChange={(e) => {
+                    const next = e.target.value as NotificationDateFilter | "";
+                    setDateFilter(next);
+                    if (next !== "custom") { setCustomStart(""); setCustomEnd(""); }
+                    setOffset(0);
+                  }}>
+                    <option value="">All time</option>
+                    {Object.entries(DATE_FILTER_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                {dateFilter === "custom" && <>
+                  <label>From<input type="date" value={customStart} max={customEnd || undefined} onChange={(e) => updateFilter(setCustomStart, e.target.value)} /></label>
+                  <label>To<input type="date" value={customEnd} min={customStart || undefined} onChange={(e) => updateFilter(setCustomEnd, e.target.value)} /></label>
+                </>}
+              </div>
+
+              {error && <div className="notifications-feedback status-error">{error} <button type="button" onClick={() => load(businessId, offset)}>Retry</button></div>}
+              {dateFilter === "custom" && !customRangeReady && <p className="hint">Pick both a start and end date to apply the custom range.</p>}
+              {loading ? <div className="notifications-empty">Loading...</div> : items.length === 0 ? (
+                <div className="notifications-empty">No notifications to show{statusFilter || categoryFilter || severityFilter || dateFilter ? " for this filter." : "."}</div>
+              ) : (
+                <>
+                  <ul className="notifications-list">
+                    {items.map((n) => (
+                      <li key={n.id} className={`notification-card${n.status === "unread" ? " notification-card--unread" : ""}`}>
+                        <span className={`notification-card__severity notification-card__severity--${n.severity}`} aria-label={`${SEVERITY_LABELS[n.severity] ?? n.severity} notification`} />
+                        <div>
+                          <div className="notification-card__title-row">
+                            <strong className="notification-card__title">{n.title}</strong>
+                            <span className="notification-card__tag">{CATEGORY_LABELS[n.category] ?? n.category}</span>
+                          </div>
+                          <p className="notification-card__meta">{SEVERITY_LABELS[n.severity] ?? n.severity} · {timeAgo(n.created_at)}</p>
+                          <p className="notification-card__body">{n.body}</p>
+                          {n.action_url && n.action_label && <a className="notification-card__action-link" href={`${n.action_url}${n.action_url.includes("?") ? "&" : "?"}business=${businessId}`}>{n.action_label}</a>}
+                        </div>
+                        <div className="notification-card__controls">
+                          {n.status === "unread" && <button className="notification-card__control" type="button" disabled={busyId === n.id} onClick={() => handleMarkRead(n.id)}>Mark read</button>}
+                          {n.status !== "dismissed" && <button className="notification-card__control" type="button" disabled={busyId === n.id} onClick={() => handleDismiss(n.id)}>Dismiss</button>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <nav className="notifications-pagination" aria-label="Notification pages">
+                    <button type="button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</button>
+                    <span aria-live="polite">{Math.min(offset + 1, total)}-{Math.min(offset + PAGE_SIZE, total)} of {total}</span>
+                    <button type="button" disabled={offset + PAGE_SIZE >= total || loading} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
+                  </nav>
+                </>
+              )}
             </>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </main>
   );
 }

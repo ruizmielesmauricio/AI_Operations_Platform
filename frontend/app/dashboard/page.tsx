@@ -58,6 +58,7 @@ export default function DashboardPage() {
   // timezone (app/application/business_group.py) — surfaced as a plain
   // 409 error below, not silently worked around.
   const [allBranches, setAllBranches] = useState(false);
+  const [sectionMenuOpen, setSectionMenuOpen] = useState(true);
 
   const [financial, setFinancial] = useState<FinancialPerformance | null>(null);
   const [retail, setRetail] = useState<RetailOperations | null>(null);
@@ -180,7 +181,34 @@ export default function DashboardPage() {
   return (
     <main className="wide">
       <AppNav businessId={businessId} />
-      <h1>Dashboard</h1>
+      <div className="dashboard-title-row">
+        <h1>Dashboard</h1>
+        <button
+          className="dashboard-section-menu-toggle"
+          type="button"
+          aria-expanded={sectionMenuOpen}
+          aria-controls="dashboard-section-menu"
+          title="Toggle dashboard sections"
+          onClick={() => setSectionMenuOpen((open) => !open)}
+        >
+          <span aria-hidden="true">☰</span>
+          <span className="dashboard-section-menu-toggle__label">Sections</span>
+        </button>
+      </div>
+
+      <div className="dashboard-workspace">
+        <aside id="dashboard-section-menu" className={`dashboard-section-menu${sectionMenuOpen ? "" : " dashboard-section-menu--closed"}`}>
+          <p>On this page</p>
+          <nav aria-label="Dashboard sections">
+            <a href="#financial">Financial performance</a>
+            <a href="#retail">Retail operations</a>
+            <a href="#workshop">Workshop performance</a>
+            <a href="#forecast">Forecast</a>
+            <a href="#findings">Recommendations</a>
+            <a href="#alerts">Active alerts</a>
+          </nav>
+        </aside>
+        <div className="dashboard-content">
 
       {businesses.length > 1 && (
         <div>
@@ -198,8 +226,9 @@ export default function DashboardPage() {
               </option>
             ))}
           </select>{" "}
-          <label htmlFor="all-branches">
+          <label className="dashboard-branches-toggle" htmlFor="all-branches">
             <input
+              className="dashboard-branches-toggle__input"
               id="all-branches"
               type="checkbox"
               checked={allBranches}
@@ -228,39 +257,14 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <FinancialSection
-        data={financial}
-        error={errors.financial}
-        categories={categories}
-        categoryId={financialCategoryId}
-        setCategoryId={setFinancialCategoryId}
-      />
-      <RetailSection
-        data={retail}
-        error={errors.retail}
-        categories={categories}
-        categoryId={retailCategoryId}
-        setCategoryId={setRetailCategoryId}
-        businessId={businessId}
-      />
-      <WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} />
-      <ForecastSection
-        data={forecast}
-        error={errors.forecast}
-        horizonDays={horizonDays}
-        setHorizonDays={setHorizonDays}
-        categories={categories}
-        categoryId={forecastCategoryId}
-        setCategoryId={setForecastCategoryId}
-      />
-      <FindingsSection
-        data={findings}
-        error={errors.findings}
-        categories={categories}
-        categoryId={findingsCategoryId}
-        setCategoryId={setFindingsCategoryId}
-      />
-      <AlertsSection alerts={alerts} error={errors.alerts} />
+          <div id="financial"><FinancialSection data={financial} error={errors.financial} categories={categories} categoryId={financialCategoryId} setCategoryId={setFinancialCategoryId} /></div>
+          <div id="retail"><RetailSection data={retail} error={errors.retail} categories={categories} categoryId={retailCategoryId} setCategoryId={setRetailCategoryId} businessId={businessId} /></div>
+          <div id="workshop"><WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} /></div>
+          <div id="forecast"><ForecastSection data={forecast} error={errors.forecast} horizonDays={horizonDays} setHorizonDays={setHorizonDays} categories={categories} categoryId={forecastCategoryId} setCategoryId={setForecastCategoryId} /></div>
+          <div id="findings"><FindingsSection data={findings} error={errors.findings} categories={categories} categoryId={findingsCategoryId} setCategoryId={setFindingsCategoryId} /></div>
+          <div id="alerts"><AlertsSection alerts={alerts} error={errors.alerts} /></div>
+        </div>
+      </div>
     </main>
   );
 }

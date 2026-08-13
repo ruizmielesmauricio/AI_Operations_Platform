@@ -28,6 +28,15 @@ class NotBusinessOwner(Exception):
     """
 
 
+class ExistingMemberCannotCreateBusiness(Exception):
+    """Raised when a staff/manager account tries to create a separate shop.
+
+    A person can either join an existing business as staff/manager or own a
+    standalone shop; allowing both would make the Company Profile create
+    path an accidental privilege-escalation route.
+    """
+
+
 def count_owned_standalone_businesses(db: Session, *, user_id: str) -> int:
     """How many non-deleted, non-branch businesses this user owns — the
     exact count the one-shop-per-account limit checks. Deliberately
@@ -60,6 +69,9 @@ def create_business_with_owner(
     already owns a standalone business — checked first so a rejected
     request never partially creates a row.
     """
+    memberships = db.query(Membership).filter(Membership.user_id == owner_user_id).all()
+    if memberships and not any(membership.role == "owner" for membership in memberships):
+        raise ExistingMemberCannotCreateBusiness(f"User {owner_user_id} is already a staff or manager member")
     if count_owned_standalone_businesses(db, user_id=owner_user_id) >= 1:
         raise BusinessLimitReached(f"User {owner_user_id} already owns a standalone business")
 

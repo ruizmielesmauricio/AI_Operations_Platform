@@ -117,8 +117,8 @@ export function AppNav({ businessId }: { businessId?: string }) {
           Shows only the single most recent open incident; the rest are
           still all in the Notification Centre as normal. */}
       {activeIncident && (
-        <div role="status" className="status-warn" style={{ padding: "0.5em 0", borderBottom: "1px solid currentColor" }}>
-          {activeIncident.title} —{" "}
+        <div role="status" className="app-nav-incident status-warn">
+          <span>{activeIncident.title}</span>
           <a href={`/notifications${suffix}`}>
             {systemStatus && systemStatus.incidents.length > 1
               ? `View details (${systemStatus.incidents.length} active)`
@@ -126,25 +126,26 @@ export function AppNav({ businessId }: { businessId?: string }) {
           </a>
         </div>
       )}
-      <nav>
-      <a href={`/dashboard${suffix}`}>Dashboard</a>
-      {" · "}
+      <nav className="app-nav" aria-label="Main navigation">
+        <a className="app-nav__brand" href={`/dashboard${suffix}`} aria-label="ORLA dashboard">
+          <span className="app-nav__brand-mark" aria-hidden="true">OR</span>
+          <span>ORLA</span>
+        </a>
+        <div className="app-nav__links">
+          <a href={`/dashboard${suffix}`}>Dashboard</a>
       {/* No businessId at all — no business selected yet (e.g. Company
           Profile with no active businesses), nothing real to link to. */}
       {businessId ? (
         canUpload ? (
           <a href={`/uploads${suffix}`}>Upload data</a>
         ) : (
-          <span title="This shop's subscription isn't active yet">Upload data (subscribe first)</span>
+          <span className="app-nav__disabled" title="This shop's subscription isn't active yet">Upload data (subscribe first)</span>
         )
       ) : (
         <a href="/uploads">Upload data</a>
       )}
-      {" · "}
       <a href={`/reports${suffix}`}>Reports</a>
-      {" · "}
       <a href={`/chat${suffix}`}>Ask ORLA</a>
-      {" · "}
       {/* Product-management surfaces (Gaps 1/4/5) — business-scoped like
           Reports/Chat above; nothing to show without a selected business,
           same reasoning as those two. Company Profile (/onboarding) is
@@ -155,11 +156,8 @@ export function AppNav({ businessId }: { businessId?: string }) {
       {businessId && (
         <>
           <a href={`/products${suffix}`}>Thresholds</a>
-          {" · "}
           <a href={`/suppliers${suffix}`}>Suppliers</a>
-          {" · "}
           <a href={`/transactions${suffix}`}>Transactions</a>
-          {" · "}
         </>
       )}
       {businessId && (
@@ -167,7 +165,6 @@ export function AppNav({ businessId }: { businessId?: string }) {
           <a href={`/notifications${suffix}`}>
             Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
           </a>
-          {" · "}
         </>
       )}
       {/* Global search (notification_staff_filters_global_search_prompt,
@@ -175,12 +172,6 @@ export function AppNav({ businessId }: { businessId?: string }) {
           link above: hidden entirely with no business selected, since
           there'd be nothing to search. Searches only this business/
           branch, never siblings (see GlobalSearchBar's own comment). */}
-      {businessId && (
-        <>
-          <GlobalSearchBar businessId={businessId} />
-          {" · "}
-        </>
-      )}
       {/* No businessId suffix — this links to the full list (every
           business the user owns, active or not), not one specific
           business. Still the same /onboarding route/page (first-run
@@ -189,11 +180,16 @@ export function AppNav({ businessId }: { businessId?: string }) {
           business's full descriptive profile lives now (per-business
           "View profile" from the list, PATCH /businesses/{id}). */}
       <a href="/onboarding">Company Profile</a>
-      {" · "}
-      <button type="button" onClick={handleLogout}>
+        </div>
+      <button className="app-nav__logout" type="button" onClick={handleLogout}>
         Log out
       </button>
       </nav>
+      {businessId && (
+        <div className="app-nav-search-row">
+          <GlobalSearchBar businessId={businessId} />
+        </div>
+      )}
     </>
   );
 }

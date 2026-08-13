@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api import (
     ai,
+    account_security,
     alerts,
     analytics,
     audit_logs,
@@ -22,6 +23,7 @@ from app.api import (
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
+api_router.include_router(account_security.router)
 api_router.include_router(businesses.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(employee_seats.router)

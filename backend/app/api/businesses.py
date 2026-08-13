@@ -13,6 +13,7 @@ from app.models.membership import Membership
 from app.repositories.audit_log import record_audit_event
 from app.repositories.business import (
     BusinessLimitReached,
+    ExistingMemberCannotCreateBusiness,
     NotBusinessOwner,
     create_branch_business,
     create_business_with_owner,
@@ -84,6 +85,11 @@ def create_business(
             status_code=status.HTTP_409_CONFLICT,
             detail="You already have a shop on this account. Delete your existing shop to create a "
             "different one, or contact us about adding a branch.",
+        ) from exc
+    except ExistingMemberCannotCreateBusiness as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is already assigned to a business. Ask its owner to update your access instead.",
         ) from exc
     return _to_business_out(business, role="owner")
 

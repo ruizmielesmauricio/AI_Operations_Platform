@@ -1,103 +1,868 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+  --app-bg: #f7f4ef;
+  --app-surface: #fffdf8;
+  --app-panel: #ffffff;
+  --app-panel-soft: #faf8f2;
+  --app-text: #1b1e1f;
+  --app-muted: #69716c;
+  --app-border: #ddd7cb;
+  --app-border-strong: #cfc7b9;
+  --app-green: #24765a;
+  --app-green-soft: #e6f2eb;
+  --app-blue: #2e6f9e;
+  --app-blue-soft: #eaf3f8;
+  --app-amber: #a96510;
+  --app-amber-soft: #f8eddc;
+  --app-red: #b33d32;
+  --app-red-soft: #f9e7e4;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+a {
+  color: #205d86;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: #174967;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--app-green);
+}
+
+button,
+select,
+input,
+textarea {
+  border: 1px solid var(--app-border-strong);
+  border-radius: 6px;
+}
+
+button {
+  min-height: 34px;
+  padding: 0.4rem 0.7rem;
+  border-color: var(--app-green);
+  background: var(--app-green);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #1c6049;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+input,
+select,
+textarea {
+  min-height: 34px;
+  padding: 0.38rem 0.55rem;
+  background: var(--app-panel);
+  color: var(--app-text);
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #9bc9b7;
+  outline-offset: 2px;
 }
 
 main {
-  max-width: 640px;
-  margin: 4rem auto;
-  padding: 0 1.5rem;
+  width: min(1180px, calc(100% - 32px));
+  margin: 24px auto 52px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0.35rem;
+  font-size: 2rem;
+  line-height: 1.15;
+}
+
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.25;
+}
+
+label {
+  display: inline-grid;
+  gap: 0.35rem;
+  color: var(--app-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
 }
 
 .status-ok {
-  color: #1a7f37;
+  color: var(--app-green);
 }
 
 .status-error {
-  color: #cf222e;
+  color: var(--app-red);
 }
 
 .status-warn {
-  color: #9a6700;
+  color: var(--app-amber);
 }
 
 .status-info {
-  color: #57606a;
+  color: var(--app-muted);
 }
 
-/* Secondary explanatory text under a field-mapping question — kept
-   visually distinct (smaller, muted) from the short primary question so
-   the question itself stays scannable, per feedback that a single
-   sentence trying to carry every caveat was too dense to read. */
 .hint {
   display: block;
-  font-size: 0.85em;
-  color: #57606a;
+  color: var(--app-muted);
+  font-size: 0.9rem;
   margin-top: 0.15rem;
 }
 
-/* Dashboard needs more room than the default 640px form-width pages
-   (uploads, auth) for charts/tables — opt-in via a class rather than
-   widening `main` globally. */
 .wide {
-  max-width: 960px;
+  max-width: 1180px;
+}
+
+.auth-page {
+  display: grid;
+  min-height: calc(100vh - 48px);
+  place-items: center;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.auth-card {
+  width: min(100%, 430px);
+  padding: 2rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  box-shadow: 0 12px 30px rgb(27 30 31 / 8%);
+}
+
+.auth-brand {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  color: var(--app-text);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.auth-brand span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--app-green);
+  color: #fff;
+  font-size: 0.78rem;
+}
+
+.auth-card form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.4rem;
+}
+
+.auth-card form > div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.auth-card input:not([type="checkbox"]) {
+  width: 100%;
+}
+
+.auth-card label:has(input[type="checkbox"]) {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  color: #34403a;
+  font-size: 0.88rem;
+}
+
+.auth-card form > button,
+.auth-secondary-action {
+  width: 100%;
+}
+
+.auth-secondary-action {
+  border-color: var(--app-border-strong);
+  background: var(--app-panel);
+  color: #34403a;
+}
+
+.auth-secondary-action:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.auth-footer {
+  margin: 1.2rem 0 0;
+  color: var(--app-muted);
+}
+
+.dashboard-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.2rem;
+}
+
+.dashboard-title-row h1 {
+  margin: 0;
+}
+
+.dashboard-section-menu-toggle {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.32rem 0.55rem;
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: #34403a;
+  font-size: 0.82rem;
+}
+
+.dashboard-section-menu-toggle:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.dashboard-section-menu-toggle span:first-child {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.dashboard-workspace {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.dashboard-section-menu {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  padding: 0.8rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.dashboard-section-menu--closed {
+  display: none;
+}
+
+.dashboard-section-menu p {
+  margin-bottom: 0.5rem;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.dashboard-section-menu nav {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.dashboard-section-menu a {
+  padding: 0.38rem 0.45rem;
+  border-radius: 5px;
+  color: #34403a;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.dashboard-section-menu a:hover {
+  background: var(--app-green-soft);
+  color: #18563f;
+}
+
+.dashboard-content {
+  min-width: 0;
+}
+
+.dashboard-content > div[id] {
+  scroll-margin-top: 16px;
 }
 
 section {
-  margin: 2.5rem 0;
+  margin: 2rem 0;
 }
 
 table {
-  border-collapse: collapse;
   width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-panel);
 }
 
 th,
 td {
+  padding: 0.65rem 0.75rem;
   text-align: left;
-  padding: 0.25rem 0.75rem 0.25rem 0;
+  border-bottom: 1px solid var(--app-border);
 }
 
-/* Stage E19-E24's chat thread — a plain message list, matching this
-   prototype's deliberate no-framework minimalism (see AppNav's own
-   comment) rather than a full chat-bubble UI. */
+th {
+  background: var(--app-panel-soft);
+  color: var(--app-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.app-nav-incident {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #e8c78c;
+  border-radius: 7px;
+  background: var(--app-amber-soft);
+}
+
+.app-nav {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  min-height: 62px;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  box-shadow: 0 1px 2px rgb(27 30 31 / 5%);
+}
+
+.app-nav__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--app-text);
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-nav__brand-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--app-green);
+  color: #fff;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+}
+
+.app-nav__links {
+  display: flex;
+  flex: 1;
+  gap: 0.15rem;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.app-nav__links a,
+.app-nav__disabled {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  color: #34403a;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-nav__links a:hover {
+  background: var(--app-green-soft);
+  color: #18563f;
+}
+
+.app-nav__disabled {
+  color: var(--app-muted);
+  cursor: help;
+}
+
+.app-nav-search-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
+.app-nav-search-row .global-search {
+  width: min(330px, 100%);
+}
+
+.global-search {
+  position: relative;
+  display: block;
+}
+
+.global-search__input {
+  width: 100%;
+}
+
+.global-search__results {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  width: min(420px, 90vw);
+  max-height: 70vh;
+  padding: 0.5rem 0;
+  margin-top: 0.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 7px;
+  background: var(--app-panel);
+  box-shadow: 0 12px 26px rgb(27 30 31 / 14%);
+}
+
+.app-nav__logout {
+  flex: 0 0 auto;
+  border-color: var(--app-border-strong);
+  background: transparent;
+  color: #34403a;
+  white-space: nowrap;
+}
+
+.app-nav__logout:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.notifications-shell {
+  display: grid;
+  grid-template-columns: 226px minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.notifications-sidebar,
+.notifications-content {
+  min-width: 0;
+}
+
+.notifications-sidebar {
+  align-self: start;
+  padding: 0.85rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.notifications-shop-label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.notifications-shop-label select {
+  width: 100%;
+}
+
+.notifications-filter-title {
+  margin: 1.2rem 0 0.5rem;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.notifications-category-list {
+  display: grid;
+  gap: 0.25rem;
+}
+
+button.notifications-category {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  padding: 0.4rem 0.5rem;
+  border-color: transparent;
+  background: transparent;
+  color: #34403a;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+button.notifications-category:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+button.notifications-category[aria-pressed="true"] {
+  background: var(--app-green-soft);
+  color: #18563f;
+}
+
+.notifications-category__count {
+  color: var(--app-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.notifications-header {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+}
+
+.notifications-header h1 {
+  margin-bottom: 0.3rem;
+}
+
+.notifications-header .hint {
+  max-width: 720px;
+}
+
+.notifications-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: flex-end;
+  margin: 1.15rem 0;
+  padding: 0.85rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel-soft);
+}
+
+.notifications-toolbar label {
+  flex: 1 1 130px;
+}
+
+.notifications-toolbar select,
+.notifications-toolbar input {
+  width: 100%;
+}
+
+.notifications-feedback,
+.notifications-empty {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-panel);
+}
+
+.notifications-list {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.notification-card {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: start;
+  padding: 0.95rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+  box-shadow: 0 1px 1px rgb(27 30 31 / 3%);
+}
+
+.notification-card--unread {
+  border-color: #b9d7c8;
+}
+
+.notification-card__severity {
+  width: 9px;
+  height: 9px;
+  margin-top: 0.4rem;
+  border-radius: 50%;
+  background: var(--app-blue);
+}
+
+.notification-card__severity--success { background: var(--app-green); }
+.notification-card__severity--warning { background: var(--app-amber); }
+.notification-card__severity--critical { background: var(--app-red); }
+
+.notification-card__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.notification-card__title {
+  color: var(--app-text);
+  font-size: 0.98rem;
+}
+
+.notification-card__tag {
+  padding: 0.13rem 0.4rem;
+  border-radius: 4px;
+  background: var(--app-blue-soft);
+  color: #245c82;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.notification-card__meta {
+  margin: 0.3rem 0 0;
+  color: var(--app-muted);
+  font-size: 0.8rem;
+}
+
+.notification-card__body {
+  margin: 0.55rem 0 0;
+}
+
+.notification-card__action-link {
+  display: inline-flex;
+  margin-top: 0.7rem;
+  color: #18563f;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.notification-card__controls {
+  display: flex;
+  gap: 0.4rem;
+}
+
+button.notification-card__control {
+  min-height: 30px;
+  padding: 0.3rem 0.5rem;
+  border-color: var(--app-border-strong);
+  background: transparent;
+  color: #34403a;
+  font-size: 0.78rem;
+}
+
+button.notification-card__control:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.notifications-pagination {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  color: var(--app-muted);
+  font-size: 0.85rem;
+}
+
+.notifications-pagination button {
+  min-height: 32px;
+  border-color: var(--app-border-strong);
+  background: var(--app-panel);
+  color: #34403a;
+}
+
+.notifications-pagination button:hover:not(:disabled) {
+  background: var(--app-panel-soft);
+}
+
+.dashboard-branches-toggle {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin-left: 0.65rem;
+  color: #34403a;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.dashboard-branches-toggle__input {
+  flex: 0 0 auto;
+}
+
+.product-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 185px;
+}
+
+.product-table-actions button {
+  min-height: 30px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.product-recommendation-button {
+  border-color: #b9d7c8 !important;
+  background: var(--app-green-soft) !important;
+  color: #18563f !important;
+  white-space: normal;
+}
+
+.company-business {
+  padding: 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.company-owner-action,
+.company-profile-action {
+  display: inline-flex;
+  margin: 0.65rem 0.45rem 0 0;
+  vertical-align: top;
+}
+
+.company-owner-action--danger button {
+  border-color: #d9aaa4;
+  background: transparent;
+  color: #98362d;
+}
+
+.company-owner-action--danger button:hover:not(:disabled) {
+  background: var(--app-red-soft);
+}
+
+.upload-record {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+  padding: 0.9rem;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-panel);
+}
+
+.upload-record__details {
+  font-weight: 650;
+}
+
+.upload-record__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.upload-record__actions button {
+  min-height: 31px;
+  padding: 0.32rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.upload-record__result {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--app-muted);
+}
+
 .chat-thread {
   margin: 1.5rem 0;
 }
 
 .chat-user {
-  color: #57606a;
+  color: var(--app-muted);
 }
 
 .chat-assistant {
   margin-bottom: 1rem;
 }
 
-/* Reports page's "Download PDF" (frontend/app/reports/[id]/page.tsx) —
-   uses the browser's own print-to-PDF rather than a new client-side PDF
-   library, so this stylesheet is what actually makes that produce a
-   clean document: no nav/controls, no page-break-splitting a table row
-   or a chart in half. */
-.no-print {
-  display: block;
+.no-print { display: block; }
+
+@media (max-width: 820px) {
+  main { width: min(100% - 24px, 1180px); margin-top: 12px; }
+  .app-nav { align-items: flex-start; flex-wrap: wrap; gap: 0.65rem; }
+  .app-nav__links { order: 3; flex-basis: 100%; padding-bottom: 0.1rem; }
+  .app-nav-search-row { justify-content: stretch; }
+  .app-nav-search-row .global-search { width: 100%; }
+  .notifications-shell { grid-template-columns: 1fr; gap: 14px; }
+  .notifications-sidebar { display: grid; grid-template-columns: minmax(0, 230px) 1fr; gap: 0.8rem 1rem; }
+  .notifications-filter-title { grid-column: 1 / -1; margin: 0.2rem 0 -0.35rem; }
+  .notifications-category-list { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-workspace { grid-template-columns: 1fr; gap: 0.9rem; }
+  .dashboard-section-menu { position: static; }
+  .dashboard-section-menu nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  h1 { font-size: 1.65rem; }
+  .auth-page { min-height: calc(100vh - 24px); }
+  .auth-card { padding: 1.35rem; }
+  .app-nav__brand { flex: 1; }
+  .app-nav__logout { margin-left: auto; }
+  .notifications-sidebar { display: block; }
+  .notifications-filter-title { margin-top: 1rem; }
+  .notifications-category-list { grid-template-columns: 1fr; }
+  .notifications-header { display: block; }
+  .notifications-header button { margin-top: 0.75rem; }
+  .notification-card { grid-template-columns: 9px minmax(0, 1fr); }
+  .notification-card__controls { grid-column: 2; }
+  .notifications-pagination { justify-content: space-between; }
+  .dashboard-section-menu nav { grid-template-columns: 1fr; }
+  .dashboard-section-menu-toggle__label { display: none; }
 }
 
 @media print {
-  .no-print {
-    display: none !important;
-  }
-  main.wide {
-    max-width: 100%;
-  }
-  section {
-    break-inside: avoid-page;
-  }
-  table,
-  tr {
-    break-inside: avoid;
-  }
+  .no-print { display: none !important; }
+  main.wide { max-width: 100%; }
+  section { break-inside: avoid-page; }
+  table, tr { break-inside: avoid; }
 }

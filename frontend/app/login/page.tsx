@@ -50,9 +50,12 @@ export default function LoginPage() {
   }
 
   return (
-    <main>
-      <h1>Log in</h1>
-      <form onSubmit={handleSubmit}>
+    <main className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand" aria-hidden="true"><span>OR</span> ORLA</div>
+        <h1>Log in</h1>
+        <p className="hint">Use your ORLA account to continue.</p>
+        <form onSubmit={handleSubmit}>
         <div>
           <label htmlFor="email">Email</label>
           <br />
@@ -79,16 +82,17 @@ export default function LoginPage() {
         <button type="submit" disabled={submitting}>
           {submitting ? "Logging in…" : "Log in"}
         </button>
-      </form>
-      <p>
-        <a href="/forgot-password">Forgot password?</a>
-      </p>
-      <button type="button" onClick={handleGoogleLogin}>
-        Continue with Google
-      </button>
-      <p>
-        No account yet? <a href="/signup">Sign up</a>
-      </p>
+        </form>
+        <p>
+          <a href="/forgot-password">Forgot password?</a>
+        </p>
+        <button className="auth-secondary-action" type="button" onClick={handleGoogleLogin}>
+          Continue with Google
+        </button>
+        <p className="auth-footer">
+          No account yet? <a href="/signup">Sign up</a>
+        </p>
+      </div>
     </main>
   );
 }

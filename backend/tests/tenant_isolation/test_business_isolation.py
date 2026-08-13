@@ -1,3 +1,7 @@
+import time
+import uuid
+
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -5,8 +9,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.deps import get_db
 from app.main import app
-from app.models import Base
-from tests.auth_helpers import bearer_header, patch_jwks
+from app.models import Base, Membership
+from tests.auth_helpers import _private_key, bearer_header, patch_jwks
 
 
 @pytest.fixture()
@@ -103,6 +107,69 @@ def test_business_limit_rejects_a_second_standalone_business_for_the_same_owner(
     response = client.get("/businesses", headers=headers)
     names = {row["name"] for row in response.json()}
     assert names == {"Shop A"}
+
+
+def test_staff_member_cannot_create_a_standalone_business(client):
+    owner_headers = bearer_header("owner-a", "owner@example.com")
+    staff_headers = bearer_header("staff-a", "staff@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=owner_headers).json()
+
+    session = client._SessionLocal()
+    try:
+        session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="staff-a", role="staff"))
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post("/businesses", json={"name": "Staff Shop"}, headers=staff_headers)
+    assert response.status_code == 403
+    assert "already assigned" in response.json()["detail"]
+
+
+def _header(user_id: str, email: str, session_id: str, issued_at: int) -> dict:
+    token = jwt.encode(
+        {"sub": user_id, "email": email, "aud": "authenticated", "session_id": session_id, "iat": issued_at},
+        _private_key,
+        algorithm="ES256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_revoking_other_sessions_rejects_old_session_but_keeps_current_one(client):
+    user_id = "owner-a"
+    current_session = str(uuid.uuid4())
+    other_session = str(uuid.uuid4())
+    issued_at = int(time.time()) - 5
+    current_headers = _header(user_id, "owner@example.com", current_session, issued_at)
+    other_headers = _header(user_id, "owner@example.com", other_session, issued_at)
+
+    assert client.post("/businesses", json={"name": "Shop A"}, headers=current_headers).status_code == 201
+    assert client.post("/account/security/revoke-other-sessions", json={}, headers=current_headers).status_code == 200
+    assert client.get("/businesses", headers=current_headers).status_code == 200
+    rejected = client.get("/businesses", headers=other_headers)
+    assert rejected.status_code == 401
+    assert "revoked" in rejected.json()["detail"]
+
+
+def test_revoke_other_sessions_requires_a_session_id(client):
+    token = jwt.encode(
+        {"sub": "owner-a", "email": "owner@example.com", "aud": "authenticated", "iat": int(time.time())},
+        _private_key,
+        algorithm="ES256",
+    )
+    response = client.post("/account/security/revoke-other-sessions", json={}, headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 400
+
+
+def test_revocation_does_not_block_a_fresh_session_after_reset(client):
+    old_session = str(uuid.uuid4())
+    current_session = str(uuid.uuid4())
+    old_headers = _header("owner-a", "owner@example.com", old_session, int(time.time()) - 10)
+    current_headers = _header("owner-a", "owner@example.com", current_session, int(time.time()))
+    assert client.post("/businesses", json={"name": "Shop A"}, headers=current_headers).status_code == 201
+    assert client.post("/account/security/revoke-other-sessions", json={}, headers=current_headers).status_code == 200
+    assert client.get("/businesses", headers=old_headers).status_code == 401
+    assert client.get("/businesses", headers=current_headers).status_code == 200
 
 
 # --- PATCH /businesses/{id} (profile fields) --------------------------------

@@ -1,4 +1,4 @@
-import { getAccessToken } from "@/lib/supabase/client";
+import { getAccessToken, supabase } from "@/lib/supabase/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -45,6 +45,14 @@ async function throwApiError(response: Response, path: string): Promise<never> {
     if (typeof body?.detail === "string") detail = body.detail;
   } catch {
     // Not JSON, or no body — fall back to the generic message below.
+  }
+  // An ORLA-level password-reset revocation can invalidate an otherwise
+  // still-unexpired access JWT. Clear its local Supabase session as soon as
+  // the API proves it is no longer accepted, so the other browser lands at
+  // Login instead of continuing to display a stale protected page.
+  if (response.status === 401 && typeof window !== "undefined") {
+    await supabase?.auth.signOut({ scope: "local" });
+    window.location.assign("/login");
   }
   throw new ApiError(response.status, detail ?? `API request to ${path} failed with ${response.status}`);
 }

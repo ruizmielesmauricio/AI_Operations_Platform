@@ -349,6 +349,7 @@ export default function ProductThresholdsPage() {
                     <td>{settingLabel(row)}</td>
                     {canWrite && (
                       <td>
+                        <div className="product-table-actions">
                         {editingId === row.product_id ? (
                           <>
                             <button
@@ -379,6 +380,7 @@ export default function ProductThresholdsPage() {
                                 confusingly-worded way to set an arbitrary value. */}
                             {hasDifferentRecommendation && (
                               <button
+                                className="product-recommendation-button"
                                 type="button"
                                 disabled={savingId === row.product_id}
                                 onClick={() =>
@@ -392,6 +394,7 @@ export default function ProductThresholdsPage() {
                             )}
                           </>
                         )}
+                        </div>
                       </td>
                     )}
                   </tr>

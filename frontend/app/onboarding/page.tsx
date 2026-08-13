@@ -7,6 +7,7 @@ import { redirectToCheckout } from "@/lib/billing";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
+import { useRouter } from "next/navigation";
 import type {
   AddressSuggestion,
   Business,
@@ -138,6 +139,7 @@ function statusLabel(business: Business, subscriptionStatus: string | null): str
 }
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const { session, checkingSession } = useRequireSession();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [subscriptions, setSubscriptions] = useState<Record<string, SubscriptionStatus>>({});
@@ -245,6 +247,16 @@ export default function OnboardingPage() {
       return requestedIsValid ? (requested as string) : activeBusinesses[0]?.id;
     });
   }, [businesses]);
+
+  // A paid, active staff membership is an invitation into a real business,
+  // not a prompt to create a separate one. Send staff/manager users directly
+  // to their assigned branch as soon as the memberships list resolves.
+  useEffect(() => {
+    const activeBusinesses = businesses.filter((b) => !b.deleted_at);
+    if (activeBusinesses.length > 0 && activeBusinesses.every((b) => b.role !== "owner")) {
+      router.replace(`/dashboard?business=${activeBusinesses[0].id}`);
+    }
+  }, [businesses, router]);
 
   useEffect(() => {
     businesses.forEach((b) => {
@@ -651,6 +663,11 @@ export default function OnboardingPage() {
   // itself or a deleted shop would wrongly keep the create form hidden).
   const hasStandaloneShop = businesses.some((b) => !b.parent_business_id && !b.deleted_at);
   const activeBusinessesForNav = businesses.filter((b) => !b.deleted_at);
+  const isExistingStaffOnly = activeBusinessesForNav.length > 0 && activeBusinessesForNav.every((b) => b.role !== "owner");
+
+  if (isExistingStaffOnly) {
+    return <main><p>Opening your workspace…</p></main>;
+  }
 
   return (
     <main>
@@ -720,7 +737,7 @@ export default function OnboardingPage() {
               : null;
             const isStandalone = !b.parent_business_id;
             return (
-              <li key={b.id} style={{ marginBottom: "1em" }}>
+              <li className="company-business" key={b.id} style={{ marginBottom: "1em" }}>
                 <div>
                   <strong>
                     {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
@@ -745,7 +762,7 @@ export default function OnboardingPage() {
                     branch profile above (owner-only) or another
                     employee's row (owner-only, in the Team list below). */}
                 {b.role !== "owner" && (
-                  <div>
+                  <div className="company-profile-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -831,7 +848,7 @@ export default function OnboardingPage() {
                     not the real boundary): a staff/manager member would
                     otherwise see a live-looking button that just 403s. */}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     {isRecoverableInPortal ? (
                       <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
                         {busy ? "Opening…" : "Manage billing"}
@@ -854,7 +871,7 @@ export default function OnboardingPage() {
                     for a standalone shop, since a branch can't itself have
                     branches. */}
                 {isStandalone && b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -968,7 +985,7 @@ export default function OnboardingPage() {
                     branch" which is standalone-only: a branch is its own
                     fully separate, separately-billed entity). */}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action">
                     <button
                       type="button"
                       onClick={() =>
@@ -1188,7 +1205,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 {b.role === "owner" && (
-                  <div>
+                  <div className="company-owner-action company-owner-action--danger">
                     {confirmingDeleteId === b.id ? (
                       <span>
                         Delete &quot;{b.name}&quot;? This cancels its subscription and archives the shop —
@@ -1214,7 +1231,7 @@ export default function OnboardingPage() {
         </ul>
       )}
 
-      {hasStandaloneShop ? (
+      {hasStandaloneShop || activeBusinessesForNav.length > 0 ? (
         <p className="hint">
           One standalone shop per account — delete your existing shop above to create a different one, or
           use "Add a branch" on it to add another location for €30/month.
