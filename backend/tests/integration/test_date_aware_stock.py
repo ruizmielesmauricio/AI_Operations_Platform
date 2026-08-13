@@ -143,6 +143,63 @@ def test_an_out_of_order_backdated_reconciliation_is_not_picked_as_the_baseline(
     assert stock[product.id] == 70  # not 999 — the later-dated count wins regardless of processing order
 
 
+def test_a_legacy_adjustment_with_no_resulting_quantity_on_hand_is_not_treated_as_a_zero_baseline(db_session, business_id):
+    # Found during the Sales Backdating/Stock Integrity audit: migration
+    # 8b3e6c1a4f92 backfills event_date for pre-existing "adjustment" rows
+    # but, correctly, invents no resulting_quantity_on_hand it has no way
+    # to know. The old `resulting_qty or 0` coerced that missing value to
+    # a real "0 units counted," silently discarding this row's entire
+    # historical stock the moment it became the most recent adjustment —
+    # this product had 100 units under the pre-event_date flat-sum model,
+    # not 0.
+    product = _make_product(db_session, business_id)
+    _make_movement(
+        db_session, business_id, product_id=product.id, quantity_delta=100, reason="adjustment",
+        event_date=date(2026, 1, 1), resulting_quantity_on_hand=None,
+    )
+    db_session.commit()
+
+    stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock[product.id] == 100  # not 0
+
+
+def test_a_legacy_adjustment_is_superseded_by_a_later_valued_reconciliation(db_session, business_id):
+    product = _make_product(db_session, business_id)
+    _make_movement(
+        db_session, business_id, product_id=product.id, quantity_delta=100, reason="adjustment",
+        event_date=date(2026, 1, 1), resulting_quantity_on_hand=None,
+    )
+    _make_movement(
+        db_session, business_id, product_id=product.id, quantity_delta=0, reason="adjustment",
+        event_date=date(2026, 1, 10), resulting_quantity_on_hand=40,
+    )
+    db_session.commit()
+
+    stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock[product.id] == 40  # the real, valued count wins — the legacy row plays no further role
+
+
+def test_a_legacy_adjustment_dated_after_a_valid_baseline_still_adds_its_own_delta(db_session, business_id):
+    # A legacy-shaped row (no resulting_quantity_on_hand) dated AFTER a
+    # real, valued count — can't happen from this migration alone, but the
+    # calculation must still behave sanely: it's excluded from baseline
+    # candidacy same as any legacy row, so it's folded into the additive
+    # pass, subject to the same date-cutoff rule as every other movement.
+    product = _make_product(db_session, business_id)
+    _make_movement(
+        db_session, business_id, product_id=product.id, quantity_delta=0, reason="adjustment",
+        event_date=date(2026, 1, 1), resulting_quantity_on_hand=40,
+    )
+    _make_movement(
+        db_session, business_id, product_id=product.id, quantity_delta=5, reason="adjustment",
+        event_date=date(2026, 1, 10), resulting_quantity_on_hand=None,
+    )
+    db_session.commit()
+
+    stock = InventoryMovementRepository(db_session).sum_by_product_ids(business_id, [product.id])
+    assert stock[product.id] == 45
+
+
 def test_a_sale_dated_on_or_before_the_reconciliation_does_not_double_subtract(db_session, business_id):
     # The mirror-image case to purchases: a shop's daily POS export
     # includes both the day's sales and the day's final stock count

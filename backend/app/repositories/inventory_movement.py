@@ -62,15 +62,33 @@ class InventoryMovementRepository:
         SQLite-portable for tests).
 
         Formula per product: the most recent "adjustment" (stock-count
-        reconciliation) movement's resulting_quantity_on_hand is the
-        baseline (0 if the product has never been reconciled) — every
-        sale/purchase/return/production movement dated *after* that
-        baseline's event_date is added on top; anything dated on or
-        before it is presumed already reflected in that count and
-        excluded. A movement with no event_date at all (legacy rows from
-        before this field existed) is always included — the safe
-        default, matching this system's behavior before event_date
-        existed.
+        reconciliation) movement that actually recorded an absolute count
+        (resulting_quantity_on_hand IS NOT NULL) is the baseline (0 if the
+        product has never been reconciled) — every sale/purchase/return/
+        production movement dated *after* that baseline's event_date is
+        added on top; anything dated on or before it is presumed already
+        reflected in that count and excluded. A movement with no
+        event_date at all (legacy rows from before this field existed) is
+        always included — the safe default, matching this system's
+        behavior before event_date existed.
+
+        A legacy "adjustment" row with no resulting_quantity_on_hand at
+        all (written before that column existed — migration
+        8b3e6c1a4f92 backfills event_date for these but, correctly, does
+        not invent a resulting_quantity_on_hand it has no way to know)
+        must never be picked as this baseline: found live during the
+        Sales Backdating/Stock Integrity audit, treating a missing value
+        the same as a real "0 units counted" (the old `resulting_qty or
+        0` did exactly this) silently discarded that row's entire
+        historical stock down to zero the moment it became the most
+        recent adjustment. Such a row is instead folded into the ordinary
+        additive movements below, using its own quantity_delta — under
+        the pre-event_date model this delta *was* the row's real
+        contribution to a flat running sum, so summing it here (subject
+        to the same baseline-date cutoff as every other movement)
+        reconstructs the old total exactly when no valid baseline exists,
+        and is correctly excluded once a real, valued reconciliation
+        supersedes it.
 
         A product with no rows here (never had a movement) has 0 stock;
         callers must default missing keys themselves.
@@ -83,6 +101,7 @@ class InventoryMovementRepository:
                 InventoryMovement.product_id,
                 InventoryMovement.event_date,
                 InventoryMovement.resulting_quantity_on_hand,
+                InventoryMovement.quantity_delta,
                 InventoryMovement.created_at,
             ).where(
                 InventoryMovement.business_id == business_id,
@@ -90,18 +109,27 @@ class InventoryMovementRepository:
                 InventoryMovement.reason == "adjustment",
             )
         ).all()
-        # Latest per product — event_date DESC, created_at DESC as a
-        # tiebreak (two reconciliations dated the same day; the one
-        # processed later wins, matching this business's own understanding
-        # of which was more recent). A product with no adjustment at all
-        # simply never appears here — baseline 0, no cutoff date.
+        # Latest *valued* reconciliation per product — event_date DESC,
+        # created_at DESC as a tiebreak (two reconciliations dated the same
+        # day; the one processed later wins, matching this business's own
+        # understanding of which was more recent). Rows with no recorded
+        # resulting_quantity_on_hand (legacy, pre-migration) are excluded
+        # from baseline candidacy entirely here — see the docstring above —
+        # and collected into legacy_movements instead, to be folded into
+        # the ordinary additive pass below like any other movement. A
+        # product with no valued adjustment at all simply never appears
+        # here — baseline 0, no cutoff date.
         # Stored as {product_id: (sort_key, resulting_qty, cutoff_date)}.
         latest_adjustment: dict[uuid.UUID, tuple[tuple, int, date | None]] = {}
-        for product_id, event_date_value, resulting_qty, created_at in adjustment_rows:
+        legacy_movements: list[tuple[uuid.UUID, date | None, int]] = []
+        for product_id, event_date_value, resulting_qty, quantity_delta, created_at in adjustment_rows:
+            if resulting_qty is None:
+                legacy_movements.append((product_id, event_date_value, quantity_delta))
+                continue
             sort_key = (event_date_value or date.min, created_at)
             existing = latest_adjustment.get(product_id)
             if existing is None or sort_key > existing[0]:
-                latest_adjustment[product_id] = (sort_key, resulting_qty or 0, event_date_value)
+                latest_adjustment[product_id] = (sort_key, resulting_qty, event_date_value)
 
         movement_rows = self.session.execute(
             select(InventoryMovement.product_id, InventoryMovement.event_date, InventoryMovement.quantity_delta).where(
@@ -114,7 +142,7 @@ class InventoryMovementRepository:
         totals: dict[uuid.UUID, int] = {
             product_id: resulting_qty for product_id, (_sort_key, resulting_qty, _cutoff) in latest_adjustment.items()
         }
-        for product_id, event_date_value, quantity_delta in movement_rows:
+        for product_id, event_date_value, quantity_delta in [*movement_rows, *legacy_movements]:
             baseline = latest_adjustment.get(product_id)
             cutoff = baseline[2] if baseline else None
             if cutoff is not None and event_date_value is not None and event_date_value <= cutoff:
@@ -248,21 +276,28 @@ class InventoryMovementRepository:
         return {(ref, product_id) for ref, product_id in rows}
 
     def list_latest_adjustment_event_dates(self, business_id: uuid.UUID) -> dict[uuid.UUID, date]:
-        """Every product's most recent "adjustment" movement's event_date
-        (skips products with no adjustment at all, or whose latest one has
-        no event_date) — business-wide, not product_ids-scoped, since
-        callers here (app/imports/importer.py::_write_purchases) resolve
+        """Every product's most recent *valued* "adjustment" movement's
+        event_date (skips products with no adjustment at all, whose latest
+        one has no event_date, or whose latest one has no recorded
+        resulting_quantity_on_hand — a legacy, pre-migration row that
+        sum_by_product_ids itself no longer treats as a usable baseline;
+        see that method's own docstring) — business-wide, not
+        product_ids-scoped, since callers here
+        (app/imports/importer.py::_write_purchases, _write_sales) resolve
         products row by row as they go, not from a known list upfront.
         Used only to decide whether to show an informational "this
-        purchase predates your last stock count" warning — never to
+        purchase/sale predates your last stock count" warning — never to
         exclude anything from being written; sum_by_product_ids's own
         (product-scoped) version of this same lookup is what actually
-        governs current-stock correctness."""
+        governs current-stock correctness, and this must stay in sync with
+        which adjustment rows it actually treats as a baseline, or the
+        warning would fire (or stay silent) inconsistently with reality."""
         rows = self.session.execute(
             select(InventoryMovement.product_id, InventoryMovement.event_date, InventoryMovement.created_at).where(
                 InventoryMovement.business_id == business_id,
                 InventoryMovement.reason == "adjustment",
                 InventoryMovement.event_date.isnot(None),
+                InventoryMovement.resulting_quantity_on_hand.isnot(None),
             )
         ).all()
         latest: dict[uuid.UUID, tuple[date, object]] = {}
