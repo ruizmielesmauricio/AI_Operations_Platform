@@ -8,11 +8,11 @@ under all_branches=True.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.ai import client
-from app.ai.service import answer_question
+from app.ai.service import ClassifyResult, _fetch_context, answer_question
 from app.models.business import Business
 from app.models.membership import Membership
 from app.models.product import Product
@@ -56,6 +56,28 @@ def _make_sale(db_session, business_id, *, amount: Decimal):
     db_session.commit()
 
 
+def _make_forecast_history(db_session, business_id, *, name: str, unit_price: Decimal, quantity: int):
+    product = Product(business_id=business_id, sku=None, name=name, cost_price=Decimal("5.00"))
+    db_session.add(product)
+    db_session.flush()
+    for days_back in range(1, 16):
+        sale = Sale(
+            business_id=business_id,
+            sold_at=_NOW - timedelta(days=days_back),
+            total_amount=unit_price * quantity,
+            order_reference=None,
+        )
+        db_session.add(sale)
+        db_session.flush()
+        db_session.add(
+            SaleItem(
+                business_id=business_id, sale_id=sale.id, product_id=product.id, quantity=quantity,
+                unit_price=unit_price, cost_price_at_sale=Decimal("5.00"),
+            )
+        )
+    db_session.commit()
+
+
 def _seed_group(db_session, *, branch_timezone: str = "Europe/Dublin"):
     parent = Business(name="Test Bike Shop", timezone="Europe/Dublin")
     branch = Business(name="Galway", timezone=branch_timezone)
@@ -93,6 +115,47 @@ def test_all_branches_combines_revenue_across_the_group(db_session, monkeypatch)
 
     assert result.grounded is True
     assert "400.00" in result.answer
+
+
+def test_question_asking_for_two_shops_combines_revenue_without_the_ui_flag(db_session, monkeypatch):
+    parent, _branch = _seed_group(db_session)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_financial_performance()
+        return _canned_response("Your combined revenue across the two shops this period was €400.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session,
+        business_id=parent.id,
+        user_id="owner",
+        question="What's my revenue across my two shops?",
+        now=_NOW,
+        all_branches=False,
+    )
+
+    assert result.grounded is True
+    assert "400.00" in result.answer
+
+
+def test_all_branches_financial_context_includes_branch_profit_breakdown(db_session):
+    parent, branch = _seed_group(db_session)
+
+    context = _fetch_context(
+        db_session,
+        business=parent,
+        intent="financial_performance",
+        classify=ClassifyResult(intent="financial_performance"),
+        now=_NOW,
+        combined_businesses=[parent, branch],
+    )
+
+    by_name = {row["business_name"]: row for row in context["branches"]}
+    assert context["gross_margin"]["gross_profit"] == "390.00"
+    assert by_name["Test Bike Shop"]["gross_margin"]["gross_profit"] == "95.00"
+    assert by_name["Galway"]["gross_margin"]["gross_profit"] == "295.00"
 
 
 def test_naming_a_branch_directly_overrides_all_branches(db_session, monkeypatch):
@@ -175,3 +238,54 @@ def test_all_branches_rejects_a_caller_missing_from_any_group_member(db_session,
     )
 
     assert result.intent == "out_of_scope"
+
+
+def test_all_branches_forecast_context_preserves_branch_name_per_product(db_session):
+    parent, branch = _seed_group(db_session)
+    _make_forecast_history(db_session, parent.id, name="Parent Forecast Tyre", unit_price=Decimal("20.00"), quantity=1)
+    _make_forecast_history(db_session, branch.id, name="Galway Forecast Tyre", unit_price=Decimal("30.00"), quantity=2)
+
+    context = _fetch_context(
+        db_session,
+        business=parent,
+        intent="forecast",
+        classify=ClassifyResult(intent="forecast"),
+        now=_NOW,
+        combined_businesses=[parent, branch],
+    )
+
+    products = context["_all_products_for_priority_list"]
+    by_name = {product["name"]: product for product in products}
+    assert by_name["Parent Forecast Tyre"]["business_name"] == "Test Bike Shop"
+    assert by_name["Galway Forecast Tyre"]["business_name"] == "Galway"
+
+
+def test_branch_split_follow_up_recovers_to_forecast_and_groups_the_priority_list(db_session, monkeypatch):
+    parent, branch = _seed_group(db_session)
+    _make_forecast_history(db_session, parent.id, name="Parent Forecast Tyre", unit_price=Decimal("20.00"), quantity=1)
+    _make_forecast_history(db_session, branch.id, name="Galway Forecast Tyre", unit_price=Decimal("30.00"), quantity=2)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _canned_response(json.dumps({"intent": "out_of_scope", "period": None, "metric": None}))
+        return _canned_response("Here is the branch split from the forecast data.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session,
+        business_id=parent.id,
+        user_id="owner",
+        question="Can you split that into my branches?",
+        now=_NOW,
+        all_branches=False,
+        previous_question="What do I need to order for my two shops?",
+        previous_answer="You should reorder products for both shops.",
+        previous_intent="forecast",
+    )
+
+    assert result.intent == "forecast"
+    assert result.grounded is True
+    assert "Priority order by branch" in result.answer
+    assert "Test Bike Shop:" in result.answer
+    assert "Galway:" in result.answer

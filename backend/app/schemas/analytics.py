@@ -220,6 +220,8 @@ class ProductDemandForecastOut(BaseModel):
     suggested_reorder_quantity: int
     days_of_cover_at_forecast_rate: Decimal | None
     category_name: str | None = None
+    business_id: uuid.UUID | None = None
+    business_name: str | None = None
 
     model_config = {"from_attributes": True}
 

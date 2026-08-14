@@ -390,3 +390,28 @@ class InventoryMovementRepository:
             base.order_by(InventoryMovement.event_date.desc(), InventoryMovement.id.desc()).limit(limit).offset(offset)
         ).all()
         return [(movement, product, supplier) for movement, product, supplier in rows], total
+
+    def list_purchases_by_unit_cost(
+        self,
+        business_id: uuid.UUID,
+        *,
+        limit: int = 10,
+    ) -> list[tuple[InventoryMovement, Product | None, Supplier | None]]:
+        """Most expensive purchase rows by recorded per-unit cost.
+        This backs ORLA list-style purchase-history questions such as
+        "what were the most expensive things I ordered by unit?" Unit
+        cost can be null on older imports, so those rows are excluded
+        rather than treated as free/zero-cost purchases."""
+        rows = self.session.execute(
+            select(InventoryMovement, Product, Supplier)
+            .outerjoin(Product, Product.id == InventoryMovement.product_id)
+            .outerjoin(Supplier, Supplier.id == InventoryMovement.supplier_id)
+            .where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.reason == "purchase",
+                InventoryMovement.unit_cost.isnot(None),
+            )
+            .order_by(InventoryMovement.unit_cost.desc(), InventoryMovement.event_date.desc(), InventoryMovement.id.desc())
+            .limit(limit)
+        ).all()
+        return [(movement, product, supplier) for movement, product, supplier in rows]

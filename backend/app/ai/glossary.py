@@ -11,6 +11,8 @@ keeping the two in sync by hand is an accepted, stated simplification
 for this pass rather than building a shared source of truth.
 """
 
+import re
+
 METRIC_DEFINITIONS: dict[str, str] = {
     "revenue": "Total sales recorded in the selected period.",
     "gross_margin": (
@@ -46,7 +48,7 @@ METRIC_DEFINITIONS: dict[str, str] = {
 
 ALLOWED_METRIC_KEYS = tuple(METRIC_DEFINITIONS.keys())
 
-_DEFINITION_TRIGGER_WORDS = ("what does", "what is", "what's", "define", "explain what", "meaning of")
+_DEFINITION_TRIGGER_WORDS = ("what does", "define", "explain what", "meaning of")
 
 _METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "revenue": ("revenue",),
@@ -81,6 +83,13 @@ def match_definition_question(question: str) -> str | None:
     on the same `metric_definition` intent for phrasings this simple
     keyword check misses (at the cost of one small classify call)."""
     lowered = question.lower()
+    # "What's my revenue?" is asking for the business's actual number,
+    # not the glossary entry for the word revenue. Keep the zero-cost
+    # shortcut for clear definition phrasings only; the classifier can
+    # still choose metric_definition for fuzzier cases after seeing the
+    # full question.
+    if re.search(r"\bwhat(?: is|'s)\s+(?:my|our|the)\b", lowered):
+        return None
     if not any(trigger in lowered for trigger in _DEFINITION_TRIGGER_WORDS):
         return None
     for key, aliases in _METRIC_ALIASES.items():
