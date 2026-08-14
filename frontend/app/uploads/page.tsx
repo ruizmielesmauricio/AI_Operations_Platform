@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiGet, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
 import { AppNav } from "@/components/AppNav";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type {
@@ -236,6 +237,7 @@ export default function UploadsPage() {
   // Per-upload so running/undoing one row's import doesn't disable another's.
   const [runningUploadId, setRunningUploadId] = useState<string | null>(null);
   const [undoingRecordId, setUndoingRecordId] = useState<string | null>(null);
+  const [confirmingUndoRecordId, setConfirmingUndoRecordId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   const loadUploads = useCallback((id: string) => {
@@ -455,6 +457,7 @@ export default function UploadsPage() {
       }));
     } finally {
       setUndoingRecordId(null);
+      setConfirmingUndoRecordId(null);
     }
   }
 
@@ -554,6 +557,16 @@ export default function UploadsPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
+      <ConfirmDialog
+        open={confirmingUndoRecordId !== null}
+        title="Undo this import?"
+        description="This reverses the records and stock changes created by this upload. It cannot be restored automatically; re-import the file if you need it again."
+        confirmLabel="Undo import"
+        tone="danger"
+        busy={confirmingUndoRecordId !== null && undoingRecordId === confirmingUndoRecordId}
+        onCancel={() => setConfirmingUndoRecordId(null)}
+        onConfirm={() => confirmingUndoRecordId && handleUndo(confirmingUndoRecordId)}
+      />
       <h1>Upload data</h1>
 
       {subscriptionRequired && (
@@ -771,7 +784,7 @@ export default function UploadsPage() {
                     )}
                     {renderRejectionSummary(record.rejection_summary)}
                     <div className="upload-record__actions">
-                      <button type="button" disabled={isUndoing} onClick={() => handleUndo(record.id)}>
+                      <button type="button" disabled={isUndoing} onClick={() => setConfirmingUndoRecordId(record.id)}>
                         {isUndoing ? "Undoing…" : "Undo import"}
                       </button>
                     </div>

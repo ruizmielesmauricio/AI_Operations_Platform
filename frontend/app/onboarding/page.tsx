@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
@@ -157,6 +158,8 @@ export default function OnboardingPage() {
   // without ever showing anything) with a plain in-page Yes/No, the same
   // expand-in-place pattern already used for the branch form.
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [confirmingEmployeeRemoval, setConfirmingEmployeeRemoval] = useState<{ businessId: string; seatId: string; name: string } | null>(null);
+  const [confirmingBranchCancel, setConfirmingBranchCancel] = useState(false);
   // Which standalone business's "Add a branch" form is expanded, if any —
   // only one open at a time, matching the create-business form's own
   // single-form-on-screen feel. Doubles as the businessId passed to
@@ -380,6 +383,14 @@ export default function OnboardingPage() {
     }
   }
 
+  function handleRequestCancelAddBranch() {
+    if (branchId) {
+      setConfirmingBranchCancel(true);
+      return;
+    }
+    handleCancelAddBranch();
+  }
+
   function updateBranchDraft(key: keyof BranchDraft, value: string) {
     setBranchDraft((prev) => ({ ...prev, [key]: value }));
   }
@@ -500,6 +511,8 @@ export default function OnboardingPage() {
       }));
     } catch (err) {
       setEmployeeError(err instanceof ApiError ? err.message : "Could not remove this employee.");
+    } finally {
+      setConfirmingEmployeeRemoval(null);
     }
   }
 
@@ -670,6 +683,30 @@ export default function OnboardingPage() {
   return (
     <main>
       <AppNav businessId={navBusinessId} />
+      <ConfirmDialog
+        open={confirmingEmployeeRemoval !== null}
+        title={`Remove ${confirmingEmployeeRemoval?.name ?? "this employee"}?`}
+        description="This immediately removes their access and cancels their employee seat. Their historical record remains visible as Removed."
+        confirmLabel="Remove employee"
+        tone="danger"
+        onCancel={() => setConfirmingEmployeeRemoval(null)}
+        onConfirm={() =>
+          confirmingEmployeeRemoval &&
+          handleDeleteEmployee(confirmingEmployeeRemoval.businessId, confirmingEmployeeRemoval.seatId)
+        }
+      />
+      <ConfirmDialog
+        open={confirmingBranchCancel}
+        title="Discard this new branch?"
+        description="The branch profile has already been created. Cancelling now archives it and cancels any associated subscription setup."
+        confirmLabel="Discard branch"
+        tone="danger"
+        onCancel={() => setConfirmingBranchCancel(false)}
+        onConfirm={() => {
+          setConfirmingBranchCancel(false);
+          handleCancelAddBranch();
+        }}
+      />
       <h1>Your businesses</h1>
       {/* Drives every link in the top nav above — same list GET /businesses
           already scopes to the caller's own memberships, so a staff
@@ -873,7 +910,7 @@ export default function OnboardingPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        branchFormOpenFor === b.id ? handleCancelAddBranch() : handleOpenAddBranch(b.id)
+                        branchFormOpenFor === b.id ? handleRequestCancelAddBranch() : handleOpenAddBranch(b.id)
                       }
                     >
                       {branchFormOpenFor === b.id ? "Cancel" : "+ Add a branch (€30/mo)"}
@@ -973,7 +1010,7 @@ export default function OnboardingPage() {
                     <button type="submit" disabled={branchSubmitting}>
                       {branchSubmitting ? "Saving…" : "Save and continue to payment"}
                     </button>{" "}
-                    <button type="button" disabled={branchSubmitting} onClick={handleCancelAddBranch}>
+                    <button type="button" disabled={branchSubmitting} onClick={handleRequestCancelAddBranch}>
                       Cancel
                     </button>
                   </form>
@@ -1201,7 +1238,10 @@ export default function OnboardingPage() {
                                   Edit
                                 </button>{" "}
                                 {member.status !== "canceled" && (
-                                  <button type="button" onClick={() => handleDeleteEmployee(b.id, seatId)}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmingEmployeeRemoval({ businessId: b.id, seatId, name: displayName })}
+                                  >
                                     Delete
                                   </button>
                                 )}

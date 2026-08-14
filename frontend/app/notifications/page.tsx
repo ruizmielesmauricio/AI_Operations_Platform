@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { broadcastNotificationsChanged } from "@/lib/notificationsBus";
@@ -64,6 +65,7 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmingDismiss, setConfirmingDismiss] = useState<Notification | null>(null);
   const [markingAll, setMarkingAll] = useState(false);
 
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -154,6 +156,7 @@ export default function NotificationsPage() {
       setError("Could not mark this notification as read.");
     } finally {
       setBusyId(null);
+      setConfirmingDismiss(null);
     }
   }
 
@@ -191,6 +194,14 @@ export default function NotificationsPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
+      <ConfirmDialog
+        open={confirmingDismiss !== null}
+        title="Dismiss this notification?"
+        description="It will move to your dismissed notifications. If the underlying issue changes later, ORLA can create a new notification."
+        confirmLabel="Dismiss notification"
+        onCancel={() => setConfirmingDismiss(null)}
+        onConfirm={() => confirmingDismiss && handleDismiss(confirmingDismiss.id)}
+      />
       <div className="notifications-shell">
         <aside className="notifications-sidebar" aria-label="Notification filters">
           <label className="notifications-shop-label">
@@ -287,7 +298,7 @@ export default function NotificationsPage() {
                         </div>
                         <div className="notification-card__controls">
                           {n.status === "unread" && <button className="notification-card__control" type="button" disabled={busyId === n.id} onClick={() => handleMarkRead(n.id)}>Mark read</button>}
-                          {n.status !== "dismissed" && <button className="notification-card__control" type="button" disabled={busyId === n.id} onClick={() => handleDismiss(n.id)}>Dismiss</button>}
+                          {n.status !== "dismissed" && <button className="notification-card__control" type="button" disabled={busyId === n.id} onClick={() => setConfirmingDismiss(n)}>Dismiss</button>}
                         </div>
                       </li>
                     ))}

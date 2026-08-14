@@ -496,6 +496,55 @@ tbody tr:last-child td {
   background: var(--app-panel-soft);
 }
 
+.confirm-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(27 30 31 / 44%);
+}
+
+.confirm-dialog {
+  width: min(100%, 430px);
+  padding: 1.15rem;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 8px;
+  background: var(--app-panel);
+  box-shadow: 0 18px 44px rgb(27 30 31 / 22%);
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--app-muted);
+  line-height: 1.5;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.confirm-dialog__confirm--warning {
+  border-color: #e8c78c !important;
+  background: var(--app-amber-soft) !important;
+  color: #855410 !important;
+}
+
+.confirm-dialog__confirm--danger {
+  border-color: #d9aaa4 !important;
+  background: var(--app-red-soft) !important;
+  color: #98362d !important;
+}
+
 .notifications-shell {
   display: grid;
   grid-template-columns: 226px minmax(0, 1fr);
