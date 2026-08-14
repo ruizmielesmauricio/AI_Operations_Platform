@@ -186,15 +186,32 @@ export default function ProductThresholdsPage() {
     <main>
       <AppNav businessId={businessId} />
       <h1>Product Reorder Rules</h1>
-      <p className="hint">
-        Each column answers a different question: <strong>In stock</strong> — how many units are there now?{" "}
-        <strong>Sold last 30 days</strong> — how quickly is it selling? <strong>Stock cover</strong> — roughly how
-        many days will current stock last? <strong>Reorder point</strong> — when should ORLA warn me (in days of
-        cover)? <strong>ORLA recommends</strong> — what does ORLA think the reorder point should be?{" "}
-        <strong>Setting</strong> — where did the current value come from? Recommendations come from your recorded
-        supplier lead times (plus a 3-day safety buffer) when known, or a general default otherwise — ORLA never
-        invents this number, it only explains it.
-      </p>
+      <section className="threshold-guide" aria-label="How reorder rules work">
+        <div>
+          <strong>In stock</strong>
+          <span>Units available now.</span>
+        </div>
+        <div>
+          <strong>Sold last 30 days</strong>
+          <span>How quickly the product is moving.</span>
+        </div>
+        <div>
+          <strong>Stock cover</strong>
+          <span>Estimated days the current stock will last.</span>
+        </div>
+        <div>
+          <strong>Reorder point</strong>
+          <span>When ORLA should warn you.</span>
+        </div>
+        <div>
+          <strong>ORLA recommends</strong>
+          <span>A suggested reorder point from your sales and supplier lead time.</span>
+        </div>
+        <div>
+          <strong>Setting</strong>
+          <span>Whether the value is custom, category-based, or recommended.</span>
+        </div>
+      </section>
 
       <label htmlFor="business-select">Shop</label>
       <br />
@@ -211,7 +228,7 @@ export default function ProductThresholdsPage() {
       {loading && <p>Loading…</p>}
 
       {!loading && businessId && rows.length > 0 && (
-        <ul>
+        <ul className="threshold-insights">
           {insights.belowReorderPoint > 0 && (
             <li>
               {insights.belowReorderPoint} product{insights.belowReorderPoint === 1 ? " is" : "s are"} below{" "}
@@ -228,7 +245,7 @@ export default function ProductThresholdsPage() {
       )}
 
       {!loading && businessId && rows.length > 0 && (
-        <section>
+        <section className="threshold-restock">
           <h2>Recommended Restock</h2>
           {restockRows.length === 0 ? (
             <p>No products are below their reorder point.</p>

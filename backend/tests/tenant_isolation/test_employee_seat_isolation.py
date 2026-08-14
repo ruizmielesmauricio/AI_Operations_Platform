@@ -10,6 +10,7 @@ from app.ai import client as ai_client
 from app.api.deps import get_db
 from app.billing import client as billing_client
 from app.billing.service import handle_webhook_event
+from app.application import employee_seats as employee_seats_module
 from app.main import app
 from app.models import Base
 from app.models.membership import Membership
@@ -120,6 +121,38 @@ def test_owner_can_add_an_employee_with_no_existing_account(client):
     assert body["employee_seat"]["status"] == "pending_payment"
     assert body["employee_seat"]["account_linked"] is False
     assert "checkout.stripe.com" in body["checkout_url"]
+
+
+def test_only_owner_can_resend_an_unlinked_employee_invitation(client, monkeypatch):
+    headers_owner = bearer_header("user-a", "a@example.com")
+    headers_staff = bearer_header("user-b", "b@example.com")
+    business = client.post("/businesses", json={"name": "Shop A"}, headers=headers_owner).json()
+    created = client.post(
+        f"/businesses/{business['id']}/employee-seats",
+        json={"first_name": "Bea", "surname": "O'Brien", "email": "bea@example.com", "role": "staff"},
+        headers=headers_owner,
+    ).json()["employee_seat"]
+    sent_to: list[str] = []
+    monkeypatch.setattr(
+        employee_seats_module,
+        "send_employee_invite_email",
+        lambda *, to_email, **kwargs: sent_to.append(to_email) or True,
+    )
+
+    owner_response = client.post(
+        f"/businesses/{business['id']}/employee-seats/{created['id']}/resend-invite", headers=headers_owner
+    )
+    assert owner_response.status_code == 204
+    assert sent_to == ["bea@example.com"]
+
+    session = client._SessionLocal()
+    session.add(Membership(business_id=uuid.UUID(business["id"]), user_id="user-b", role="staff"))
+    session.commit()
+    session.close()
+    staff_response = client.post(
+        f"/businesses/{business['id']}/employee-seats/{created['id']}/resend-invite", headers=headers_staff
+    )
+    assert staff_response.status_code == 403
 
 
 def test_a_non_owner_cannot_add_or_edit_an_employee(client):

@@ -87,7 +87,7 @@ Nothing below is legal or financial advice — for company registration, tax, an
 | Area | Why | Tool | Install |
 |---|---|---|---|
 | Stripe integration | Subscriptions, SEPA DD, webhooks | `stripe` (Python), `stripe` (Node) | `pip install stripe`; `npm install stripe` |
-| Webhook testing | Local dev without hitting prod | Stripe CLI | `brew install stripe/stripe-cli/stripe`; `stripe listen --forward-to localhost:8000/webhooks/stripe` |
+| Webhook testing | Local dev without hitting prod | Stripe CLI | `brew install stripe/stripe-cli/stripe`; `stripe listen --forward-to localhost:8000/billing/webhooks/stripe` — found live 14/08/2026: the route actually lives under the `/billing` prefix (`app/api/billing.py::webhook_router`) and always has, since the very first billing commit; this line previously said the bare `/webhooks/stripe` path, which 404s. Must be running continuously for any billing/employee-seat/branch-payment webhook to be received at all in local dev — nothing else keeps it alive. |
 
 ## 4. Financial & Legal (people, not packages)
 

@@ -60,5 +60,32 @@ services:
     depends_on:
       - backend
 
+  stripe-cli:
+    # Local-dev-only: forwards Stripe test-mode events to the webhook
+    # route, since Stripe can't reach localhost directly. Found live
+    # 14/08/2026 — a real employee-seat payment got stuck in
+    # pending_payment because nobody had this running in a terminal;
+    # this service exists so it comes up automatically with the rest of
+    # the stack instead of depending on a human remembering a manual
+    # command. Not needed at all once actually deployed — production
+    # Stripe posts straight to the real public URL, registered directly
+    # in the Stripe Dashboard with its own live-mode signing secret; this
+    # service and STRIPE_WEBHOOK_SECRET's current value are dev-only.
+    image: stripe/stripe-cli:latest
+    command: listen --forward-to backend:8000/billing/webhooks/stripe
+    # Reuses the host's already-authenticated `stripe login` device
+    # (confirmed live: this reproduces the exact same webhook signing
+    # secret every time, since it's tied to the linked device/account,
+    # not randomly generated per session) — no key or secret embedded in
+    # this file or committed anywhere. Not mounted read-only: the CLI
+    # chmods its own config file on every start (found live — it refuses
+    # to run at all against a read-only mount) and this file never leaves
+    # the host either way.
+    volumes:
+      - ${HOME}/.config/stripe:/root/.config/stripe
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   postgres-data:

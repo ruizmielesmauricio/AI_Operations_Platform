@@ -71,6 +71,10 @@ class EmployeeSeatNotFound(Exception):
     """Raised editing a seat id that doesn't exist on this business."""
 
 
+class EmployeeInviteUnavailable(Exception):
+    """Raised when an invite cannot sensibly be sent for this seat."""
+
+
 def add_employee(
     db: Session,
     *,
@@ -177,6 +181,47 @@ def add_employee(
     db.commit()
     db.refresh(seat)
     return seat, checkout_url
+
+
+def resend_employee_invite(
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    seat_id: uuid.UUID,
+    invited_by_user_id: str,
+) -> bool:
+    """Send a fresh registration link for an unlinked, non-removed seat.
+
+    The original invite is sent automatically when an owner adds someone
+    who has not registered yet. This explicit retry covers a lost email or
+    an email provider that was unavailable at creation time. A linked
+    account needs no registration link, and a removed seat must never be
+    revived by sending one.
+    """
+    seats = EmployeeSeatRepository(db)
+    seat = seats.get_for_business(seat_id, business_id)
+    if seat is None:
+        raise EmployeeSeatNotFound(str(seat_id))
+    if seat.user_id is not None or seat.status == "canceled":
+        raise EmployeeInviteUnavailable()
+
+    business = db.get(Business, business_id)
+    business_name = business.name if business is not None else "your team"
+    registration_url = f"{get_settings().app_base_url}/signup?{urlencode({'email': seat.email})}"
+    sent = send_employee_invite_email(
+        to_email=seat.email, business_name=business_name, registration_url=registration_url
+    )
+    if sent:
+        record_audit_event(
+            db,
+            business_id=business_id,
+            user_id=invited_by_user_id,
+            action="employee_invite_email_resent",
+            target_type="employee_seat",
+            target_id=str(seat.id),
+        )
+        db.commit()
+    return sent
 
 
 def update_employee_profile(

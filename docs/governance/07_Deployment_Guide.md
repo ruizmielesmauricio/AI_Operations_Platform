@@ -1,10 +1,10 @@
 # 07_Deployment_Guide.md
 
-**Version:** 0.3 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Phase 1 – Company Foundation
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 14/08/2026
 
 ---
 
@@ -206,6 +206,15 @@ User selects a plan in the web app
 
 Paid access is never granted based solely on the browser redirect back from Checkout — only the verified webhook updates billing state (per `04_Technology_Stack.md`).
 
+**Pending — required before going live, not yet done (found live 14/08/2026):** in local dev, webhook delivery only works because a `stripe-cli` container (`docker-compose.yml`) forwards test-mode events to `localhost`, using a webhook signing secret tied to the developer's own logged-in Stripe CLI session. Neither of those exists in production. Before the first real deploy:
+
+1. Register the real, public deployment URL's webhook endpoint (`https://<production-domain>/billing/webhooks/stripe`) directly in the Stripe Dashboard (Developers → Webhooks) — not via the CLI, which is dev/test-only.
+2. Select the same event types this app's webhook handler already consumes (`checkout.session.completed`, the subscription lifecycle events, `invoice.paid`/`invoice.payment_failed` — see `app/billing/service.py::HANDLED_EVENTS`).
+3. Copy that endpoint's own **live-mode** signing secret into the production `STRIPE_WEBHOOK_SECRET` environment variable — it will not match the test-mode secret used in dev, and using the wrong one fails signature verification silently (every event 400s, exactly the same "payment succeeded, our DB never heard about it" symptom as the local dev-only listener gap this note replaces).
+4. After the first real transaction, confirm in the Stripe Dashboard's own webhook endpoint log that deliveries are landing with `200`s, not silently retrying/failing.
+
+If this step is skipped or misconfigured at deploy time, the exact same class of bug reproduces in production — payments succeed on Stripe's side, but nothing in this app ever finds out.
+
 ## Resend
 
 **Role:** Transactional email — invitations, import completion/failure notices, alerts, and billing notices. Scheduled weekly/monthly performance reports (PR-8 in `10_Product_Requirements.md`, PD-007/ADR-019) are **not** sent through Resend — they are delivered in-app only; see "Scheduled Reporting Operations" below.
@@ -397,3 +406,4 @@ Deployment health checks must cover the scheduler, worker queue, recovery job, n
 | 0.1 | TBD | Initial draft; full external-service connection map and deployment sequence documented. |
 | 0.2 | 30/07/2026 | Clarified the Resend section to reference the PR-8/PD-007 weekly (Monday) and monthly (1st-of-month) scheduled report requirement; removed a duplicate `04_Technology_Stack.md` Related Document entry. |
 | 0.3 | 30/07/2026 | Corrected the Resend section, which had incorrectly stated that scheduled reports are emailed — reports are in-app only (PD-007/ADR-019) and now cross-reference the "Scheduled Reporting Operations" section, which was already correct. |
+| 0.4 | 14/08/2026 | Added a pending pre-launch checklist to the Stripe section: register the real production webhook endpoint in the Stripe Dashboard and switch `STRIPE_WEBHOOK_SECRET` to its live-mode value before the first real deploy. Found live the same day — a real employee-seat payment got stuck for 3 days because local dev had no running webhook forwarder at all; a `stripe-cli` docker-compose service now closes that specific dev-only gap (`11_Development_Roadmap.md`), but production needs its own, separate one-time setup that hasn't happened yet since this app isn't deployed anywhere. |

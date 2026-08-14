@@ -1431,6 +1431,7 @@ def _undo_sales_import(db: Session, import_record: ImportRecord) -> set[uuid.UUI
     sale_repo = SaleRepository(db)
     sale_item_repo = SaleItemRepository(db)
     movement_repo = InventoryMovementRepository(db)
+    return_repo = ReturnRepository(db)
 
     sale_ids = sale_repo.list_ids_by_import_record(import_record.business_id, import_record.id)
     sale_item_ids = sale_item_repo.list_ids_by_sale_ids(sale_ids)
@@ -1438,7 +1439,13 @@ def _undo_sales_import(db: Session, import_record: ImportRecord) -> set[uuid.UUI
 
     # FK-dependency order, explicit bulk deletes rather than relying on
     # cascade — the test suite runs SQLite, which doesn't enforce FKs by
-    # default, so explicit ordering is what's actually portable.
+    # default, so explicit ordering is what's actually portable. Return
+    # must go before SaleItem (Undo-Ordering audit finding: a sales
+    # import that included even one return previously crashed here in
+    # real Postgres — returns_sale_item_id_fkey has no ON DELETE CASCADE
+    # — invisible in the SQLite-backed test suite, which doesn't enforce
+    # FKs by default; see ReturnRepository.bulk_delete_by_sale_item_ids).
+    return_repo.bulk_delete_by_sale_item_ids(sale_item_ids)
     movement_repo.bulk_delete_by_reference_ids(sale_item_ids)
     sale_item_repo.bulk_delete_by_sale_ids(sale_ids)
     sale_repo.bulk_delete_by_ids(sale_ids)

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { formatMoney } from "@/lib/format";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
@@ -26,6 +27,7 @@ export default function SuppliersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmingDeactivate, setConfirmingDeactivate] = useState<Supplier | null>(null);
 
   const [newName, setNewName] = useState("");
   const [newContact, setNewContact] = useState("");
@@ -103,6 +105,8 @@ export default function SuppliersPage() {
       load(businessId);
     } catch {
       setError("Could not deactivate supplier.");
+    } finally {
+      setConfirmingDeactivate(null);
     }
   }
 
@@ -131,6 +135,15 @@ export default function SuppliersPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
+      <ConfirmDialog
+        open={confirmingDeactivate !== null}
+        title={`Deactivate ${confirmingDeactivate?.name ?? "this supplier"}?`}
+        description="This supplier will no longer be available for new purchase matching. Existing purchase history and supplier analytics are retained."
+        confirmLabel="Deactivate supplier"
+        tone="warning"
+        onCancel={() => setConfirmingDeactivate(null)}
+        onConfirm={() => confirmingDeactivate && handleDeactivate(confirmingDeactivate.id)}
+      />
       <h1>Suppliers</h1>
       <p className="hint">
         Track where your stock comes from. This powers the spend breakdown below, and — once you record a
@@ -225,7 +238,7 @@ export default function SuppliersPage() {
                             <button type="button" onClick={() => startEdit(s)}>
                               Edit
                             </button>{" "}
-                            <button type="button" onClick={() => handleDeactivate(s.id)}>
+                            <button type="button" onClick={() => setConfirmingDeactivate(s)}>
                               Deactivate
                             </button>{" "}
                             {canMerge &&
