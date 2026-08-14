@@ -47,6 +47,7 @@ from app.application.workshop_performance import get_workshop_performance
 from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
 from app.repositories.business import list_businesses_for_user
+from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.report import ReportRepository
 from app.schemas.analytics import (
     CategoryBreakdownOut,
@@ -87,6 +88,7 @@ ALLOWED_INTENTS = (
     "metric_definition",
     "product_lookup",
     "purchase_lookup",
+    "purchase_history",
     "repair_lookup",
     "category_breakdown",
     "out_of_scope",
@@ -96,6 +98,13 @@ ALLOWED_INTENTS = (
 # period value that could represent it at all.
 ALLOWED_PERIODS = ("default_recent", "last_completed_week", "last_completed_month", "explicit_date")
 _MAX_SEARCH_TERM_LENGTH = 200
+# Multi-intent cap — a compound question ("what's my revenue and what
+# should I reorder") gets split into at most this many sub-questions, in
+# the same single classify call (see _classify_intent) rather than a
+# separate planner call, to keep AI cost bounded at exactly 2 calls
+# (classify + explain) per question regardless of how many things were
+# asked.
+_MAX_SUBINTENTS = 3
 _MAX_EXPLICIT_DATE_YEARS_BACK = 10
 _MAX_EXPLICIT_DATE_YEARS_FORWARD = 1
 # Same bounds the /forecast API route already enforces (Query(7, ge=1,
@@ -129,6 +138,10 @@ _UNGROUNDED_FALLBACK = "I couldn't confidently answer that from your actual data
 @dataclass(frozen=True)
 class AnswerResult:
     answer: str
+    # The first (or only) sub-question's intent — kept singular so every
+    # existing caller (previous_intent's own _CONTINUABLE_INTENTS checks,
+    # the API layer, the frontend) keeps working unchanged. `intents`
+    # below carries the full list for a multi-intent answer.
     intent: str
     grounded: bool
     # A fixed, small set of app pages the answer references — always
@@ -137,6 +150,13 @@ class AnswerResult:
     # itself (app/chat/page.tsx) rather than ever treating any part of
     # `answer` (which may include model-generated text) as HTML.
     links: tuple[str, ...] = ()
+    # Every sub-question's intent, in question order — length 1 for an
+    # ordinary single-intent question (matching `intent` above), longer
+    # for a compound one. Echoed back by the frontend as the next
+    # request's previous_intents, so a follow-up after a multi-part
+    # answer can still recover via _CONTINUABLE_INTENTS against any part
+    # of it, not just the first.
+    intents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +186,27 @@ class ClassifyResult:
     horizon_days: int | None = None
 
 
+@dataclass(frozen=True)
+class _Part:
+    """One sub-question's worth of work inside a (possibly multi-intent)
+    answer — see answer_question's own docstring for how these compose.
+    `resolved_answer` set means this part is already fully and
+    deterministically answered (a metric definition, a lookup's 0/many-
+    match message, a "no data for this" note, or an unresolved
+    out_of_scope refusal) — zero further AI cost for it, and the shared
+    explain call never sees it. Unset means `context` is what the shared
+    explain call needs to answer it, same shape as every intent's context
+    always was."""
+
+    intent: str
+    resolved_answer: str | None = None
+    context: dict | None = None
+    # Only ever set for a "forecast" part — see _build_part and
+    # _assemble_final_answer's own comments (mirrors the original
+    # single-question _all_products_for_priority_list handling).
+    all_products_for_priority_list: list | None = None
+
+
 def answer_question(
     db: Session,
     *,
@@ -177,6 +218,7 @@ def answer_question(
     previous_question: str | None = None,
     previous_answer: str | None = None,
     previous_intent: str | None = None,
+    previous_intents: list[str] | None = None,
 ) -> AnswerResult:
     """`previous_question`/`previous_answer` are optional, last-exchange-
     only conversation memory (not a full thread — the frontend resends
@@ -195,6 +237,18 @@ def answer_question(
     input, never used directly, only ever checked for membership in
     _CONTINUABLE_INTENTS before being used to deterministically recover
     an unresolved follow-up (see the out_of_scope branch below).
+    `previous_intents` is the same idea for every part of a multi-intent
+    previous turn (echoed back from AnswerResult.intents) — purely
+    additive, structural-only memory (not more Q/A text; see
+    _first_continuable_intent): lets a follow-up after a compound answer
+    still recover against any part of it, not just the first.
+
+    A question that itself contains more than one distinct ask ("what's
+    my revenue and what should I reorder") is answered as up to
+    _MAX_SUBINTENTS separate parts in one response — see _build_part/
+    _assemble_final_answer below — still using exactly one classify call
+    and one explain call regardless of how many parts there are, to keep
+    AI cost from scaling with how many things were asked.
 
     `all_branches` combines every business in business_id's group into
     one answer (app/application/business_group.py, same as the
@@ -231,9 +285,10 @@ def answer_question(
     own_businesses = [b for b, _membership in list_businesses_for_user(db, user_id=user_id)]
     named_business = _detect_named_business(question, own_businesses)
     combined_businesses: list[Business] | None = None
+    requested_all_branches = all_branches or _looks_like_all_branches_question(question)
     if named_business is not None:
         business = named_business
-    elif all_branches:
+    elif requested_all_branches:
         try:
             combined_businesses = resolve_authorized_group(db, business_id=business_id, user_id=user_id)
         except NotGroupMember:
@@ -265,127 +320,388 @@ def answer_question(
         else business.name
     )
 
-    classify = _classify_intent(
+    classify_list = _classify_intent(
         request_repo, business_id=business_id, user_id=user_id, question=question,
         business_timezone=business.timezone, now=resolved_now,
         previous_question=previous_question, previous_answer=previous_answer,
     )
-    intent = classify.intent
 
-    if intent == "provider_unavailable":
-        return AnswerResult(answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False)
-
-    if intent == "metric_definition":
-        definition = get_definition(classify.metric) if classify.metric else None
-        if definition is None:
-            return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
-        return AnswerResult(answer=definition, intent="metric_definition", grounded=True)
-
-    if intent == "out_of_scope":
-        # Defense in depth against classify unreliability (free-tier
-        # model variance) — live fire-test evidence: a reorder/stock-out-
-        # shaped question ("what's going to run out of stock", "what
-        # should I spend €2,000 on restocking") occasionally came back
-        # out_of_scope even though the classify prompt's own "forecast"
-        # description explicitly covers this exact question shape. Only
-        # ever promotes out_of_scope -> forecast, using the same
-        # deterministic keyword check already built for the priority-
-        # list feature — can never grant a more sensitive intent or
-        # override a genuine out-of-scope verdict for anything else, so
-        # this only recovers real questions, never weakens the refusal
-        # path itself.
-        if _looks_like_a_reorder_question(question):
-            classify = ClassifyResult(
-                intent="forecast", period=classify.period, start_date=classify.start_date, end_date=classify.end_date
-            )
-            intent = "forecast"
-        elif _looks_like_a_period_follow_up_question(question) and previous_intent in _CONTINUABLE_INTENTS:
-            # Second, narrower recovery net, same shape as the reorder
-            # one above: a "what/when was the previous/last period?"
-            # follow-up only makes sense in light of whatever was just
-            # discussed — recover to that exact intent (validated against
-            # the fixed _CONTINUABLE_INTENTS allow-list, never trusted as
-            # client input past that membership check) rather than
-            # guessing a default. No previous_intent, or one outside the
-            # allow-list (a lookup intent, or another out_of_scope/
-            # provider_unavailable/metric_definition turn) -> falls
-            # through to the same safe refusal as any other unresolved
-            # out_of_scope, never guessed.
-            classify = ClassifyResult(
-                intent=previous_intent, period=classify.period, start_date=classify.start_date,
-                end_date=classify.end_date,
-            )
-            intent = previous_intent
-        else:
-            return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
-
-    if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
-        context, early_result = _dispatch_lookup(db, business=business, intent=intent, classify=classify)
-        if early_result is not None:
-            return early_result
-    else:
-        context = _fetch_context(
-            db, business=business, intent=intent, classify=classify, now=resolved_now,
-            combined_businesses=combined_businesses,
+    if len(classify_list) == 1 and classify_list[0].intent == "provider_unavailable":
+        return AnswerResult(
+            answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False,
+            intents=("provider_unavailable",),
         )
-        if context is None:
-            # Not applicable (e.g. workshop performance for a non-bike-shop
-            # template, or no report exists yet) — same safe fallback, zero
-            # further AI cost.
-            return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
-    # Set aside for the deterministic priority-list builder below, then
-    # stripped before the LLM ever sees this dict — the *complete*
-    # reorder list costs nothing extra (it's local formatting, not
-    # another AI call), so it doesn't need the same cost-driven cap as
-    # what actually goes in the prompt (see _MAX_CONTEXT_ROWS).
-    all_forecast_products = context.pop("_all_products_for_priority_list", None)
+    previous_intents_tuple = tuple(previous_intents) if previous_intents else ()
+    parts = [
+        _build_part(
+            db, business=business, classify_item=item, now=resolved_now, combined_businesses=combined_businesses,
+            question=question, previous_intent=previous_intent, previous_intents=previous_intents_tuple,
+        )
+        for item in classify_list
+    ]
+    all_intents = tuple(p.intent for p in parts)
+    ai_parts = [(i, p) for i, p in enumerate(parts) if p.resolved_answer is None]
+
+    if not ai_parts:
+        # Every part resolved deterministically (a metric definition, a
+        # lookup's 0/many-match message, a "no data for this" note, or an
+        # unresolved out_of_scope refusal) — zero further AI cost, the
+        # same fast paths this module already had for a single question,
+        # now composed across up to _MAX_SUBINTENTS of them.
+        final_answer = _join_parts_for_display([p.resolved_answer for p in parts])
+        return AnswerResult(answer=final_answer, intent=parts[0].intent, grounded=True, intents=all_intents)
+
+    if len(parts) == 1:
+        # Single-intent path — the overwhelming majority of real
+        # questions. Deliberately identical to this module's original
+        # single-intent behavior (same system prompt, one explain call,
+        # one guardrail call, no part markers) so nothing changes for the
+        # common case just because multi-intent questions exist now.
+        part = parts[0]
+        answer_text = _generate_answer(
+            request_repo, business_id=business_id, user_id=user_id, question=question, context=part.context,
+            scope_label=scope_label, previous_question=previous_question, previous_answer=previous_answer,
+        )
+        if answer_text is None:
+            # Tagged "provider_unavailable", not the already-classified
+            # intent — this means the provider call itself never
+            # completed (network/rate-limit/timeout) at the *explain*
+            # step, not that whatever was classified genuinely failed to
+            # produce an answer.
+            return AnswerResult(
+                answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False,
+                intents=("provider_unavailable",),
+            )
+
+        result = validate_grounded(answer_text, part.context, question=question, previous_answer=previous_answer)
+        if not result.grounded:
+            logger.warning(
+                "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
+                business_id, part.intent, result.unsupported_claims,
+            )
+            return AnswerResult(answer=_UNGROUNDED_FALLBACK, intent=part.intent, grounded=False, intents=(part.intent,))
+
+        final_answer, links = _assemble_final_answer(
+            [part], {0: answer_text}, question=question, previous_intent=previous_intent
+        )
+        return AnswerResult(answer=final_answer, intent=part.intent, grounded=True, links=links, intents=(part.intent,))
+
+    # Multi-part path: the question genuinely asked more than one thing.
+    # Only the parts that still need AI go into one merged explain call —
+    # still exactly 2 AI calls total for the whole question (classify +
+    # explain), never one per part, to keep cost bounded regardless of how
+    # many things were asked. Numbered sequentially over just the
+    # AI-needing subset (part_1, part_2, ...) — the model never needs to
+    # know about a deterministically-resolved slot's position in the
+    # original question.
+    merged_context: dict[str, Any] = {}
+    part_index_by_key: dict[str, int] = {}
+    already_answered = [
+        {"already_answered_part": i + 1, "answer": p.resolved_answer}
+        for i, p in enumerate(parts) if p.resolved_answer is not None
+    ]
+    for position, (i, p) in enumerate(ai_parts, start=1):
+        key = f"part_{position}"
+        merged_context[key] = {
+            "focus": _INTENT_FOCUS_LABELS.get(p.intent, p.intent), "intent": p.intent, "data": p.context,
+        }
+        part_index_by_key[key] = i
+    if already_answered:
+        # Given to the model as context only (so it doesn't re-answer, or
+        # contradict, a part that already has its own final answer) — not
+        # something the model is asked to reproduce.
+        merged_context["_already_answered"] = already_answered
 
     answer_text = _generate_answer(
-        request_repo, business_id=business_id, user_id=user_id, question=question, context=context,
+        request_repo, business_id=business_id, user_id=user_id, question=question, context=merged_context,
         scope_label=scope_label, previous_question=previous_question, previous_answer=previous_answer,
+        multi_part=True,
     )
     if answer_text is None:
-        # Tagged "provider_unavailable", not the already-classified
-        # intent — same reasoning as the classify-step failure above:
-        # this means the provider call itself never completed (network/
-        # rate-limit/timeout) at the *explain* step, not that whatever
-        # was classified genuinely failed to produce an answer. Found
-        # live via a fire-test run: this branch was silently keeping the
-        # original intent, which is misleading for anything inspecting
-        # `result.intent` (logging, analytics) even though the message
-        # shown to the user was already correct.
-        return AnswerResult(answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False)
-
-    result = validate_grounded(answer_text, context, question=question, previous_answer=previous_answer)
-    if not result.grounded:
-        logger.warning(
-            "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
-            business_id, intent, result.unsupported_claims,
+        return AnswerResult(
+            answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False,
+            intents=("provider_unavailable",),
         )
-        return AnswerResult(answer=_UNGROUNDED_FALLBACK, intent=intent, grounded=False)
 
-    final_answer = answer_text
-    if intent == "forecast" and _looks_like_a_reorder_question(question) and all_forecast_products:
-        built = _build_priority_order_list(all_forecast_products)
-        if built is not None:
-            priority_list, list_itself_truncated = built
-            final_answer = f"{final_answer}\n\n{priority_list}"
-            if not list_itself_truncated:
-                # The priority list above already answers "what do I need
-                # to order" completely (it's built from the untrimmed
-                # product list, not the LLM's capped view) — the generic
-                # "only 15 of 152 shown, check elsewhere" note would be
-                # confusing noise right next to an answer that isn't
-                # partial. If the priority list itself had to truncate
-                # (more than _MAX_PRIORITY_LIST_DISPLAY products need
-                # reordering), the note and links stay — genuinely still
-                # a partial answer.
-                context.pop("products_shown_of_total", None)
+    segments = _split_multi_part_answer(answer_text, expected_parts=len(ai_parts))
+    if segments is None:
+        # Fail closed, same posture as every other "don't trust the
+        # model's exact output shape" spot in this module: the model
+        # didn't follow the marker instruction cleanly, so parts can't be
+        # told apart reliably — fall back to one whole-answer guardrail
+        # check instead of risking a misattributed split. Markers are
+        # stripped either way so a stray one is never shown to the user.
+        cleaned = _PART_MARKER_PATTERN.sub("", answer_text).strip()
+        result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
+        ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
+        if not result.grounded:
+            logger.warning(
+                "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
+                business_id, all_intents, result.unsupported_claims,
+            )
+        resolved_texts = [p.resolved_answer for p in parts if p.resolved_answer is not None]
+        final_answer = _join_parts_for_display([*resolved_texts, ai_text])
+        contexts = [p.context for p in parts if p.context is not None]
+        final_answer = _append_truncation_disclosure(final_answer, contexts)
+        links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts) else ()
+        return AnswerResult(
+            answer=final_answer, intent=parts[0].intent, grounded=result.grounded, links=links, intents=all_intents,
+        )
 
-    final_answer = _append_truncation_disclosure(final_answer, context)
-    links = ("dashboard", "reports") if _find_shown_of_total_notes(context) else ()
-    return AnswerResult(answer=final_answer, intent=intent, grounded=True, links=links)
+    ai_text_by_index: dict[int, str] = {}
+    any_segment_failed = False
+    for key, part_index in part_index_by_key.items():
+        n = int(key.rsplit("_", 1)[1])
+        segment_text = segments.get(n)
+        part = parts[part_index]
+        if segment_text is None:
+            ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
+            any_segment_failed = True
+            continue
+        result = validate_grounded(segment_text, part.context, question=question, previous_answer=previous_answer)
+        if result.grounded:
+            ai_text_by_index[part_index] = segment_text
+        else:
+            logger.warning(
+                "Ungrounded AI answer rejected for one part business=%s intent=%s unsupported=%s",
+                business_id, part.intent, result.unsupported_claims,
+            )
+            ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
+            any_segment_failed = True
+
+    final_answer, links = _assemble_final_answer(
+        parts, ai_text_by_index, question=question, previous_intent=previous_intent
+    )
+    return AnswerResult(
+        answer=final_answer, intent=parts[0].intent, grounded=not any_segment_failed, links=links, intents=all_intents,
+    )
+
+
+_INTENT_FOCUS_LABELS = {
+    "financial_performance": "revenue and margin",
+    "retail_operations": "retail/stock overview",
+    "workshop_performance": "workshop/repairs performance",
+    "forecast": "demand forecast and reorder suggestions",
+    "findings_recommendations": "flagged issues and recommendations",
+    "category_breakdown": "revenue/cost by category",
+    "purchase_history": "purchase/order history",
+    "product_lookup": "a specific product",
+    "purchase_lookup": "a specific purchase/order",
+    "repair_lookup": "a specific repair",
+    "latest_report": "the latest report",
+}
+
+
+def _first_continuable_intent(previous_intent: str | None, previous_intents: tuple[str, ...]) -> str | None:
+    """The first of the previous turn's intent(s) that's safe to silently
+    continue on an unresolved follow-up (_CONTINUABLE_INTENTS) — checks
+    the singular previous_intent first (today's existing single-turn
+    behavior, unchanged), then falls through to the rest of a multi-part
+    previous turn. Returns None if nothing continuable is found, same
+    fail-closed default as before this existed."""
+    if previous_intent in _CONTINUABLE_INTENTS:
+        return previous_intent
+    for candidate in previous_intents:
+        if candidate in _CONTINUABLE_INTENTS:
+            return candidate
+    return None
+
+
+def _recover_out_of_scope_intent(
+    question: str, previous_intent: str | None, previous_intents: tuple[str, ...] = ()
+) -> str | None:
+    """Defense in depth against classify unreliability (free-tier model
+    variance) — live fire-test evidence: a reorder/stock-out-shaped
+    question ("what's going to run out of stock", "what should I spend
+    €2,000 on restocking") occasionally came back out_of_scope even
+    though the classify prompt's own "forecast" description explicitly
+    covers this exact question shape; a "what/when was the previous
+    period?" or "merge/combine/total" follow-up occasionally came back
+    out_of_scope despite a clear prior exchange to resolve against. Only
+    ever promotes out_of_scope -> a specific real intent using the same
+    deterministic keyword checks already built for the priority-list
+    feature and the period/aggregate follow-up recovery — can never grant
+    a more sensitive intent or override a genuine out-of-scope verdict
+    for anything else, so this only recovers real questions, never
+    weakens the refusal path itself. Returns the recovered intent name,
+    or None if classify's out_of_scope verdict should stand (the caller
+    then returns the same safe refusal as always)."""
+    if _looks_like_purchase_history_question(question):
+        return "purchase_history"
+    if _looks_like_a_reorder_question(question) or (
+        _looks_like_branch_split_question(question)
+        and (previous_intent == "forecast" or "forecast" in previous_intents)
+    ):
+        return "forecast"
+    # Second, narrower recovery net, same shape as the reorder one above:
+    # a period/aggregate follow-up only makes sense in light of whatever
+    # was just discussed — recover to that exact intent (validated
+    # against the fixed _CONTINUABLE_INTENTS allow-list via
+    # _first_continuable_intent, never trusted as client input past that
+    # membership check) rather than guessing a default. No continuable
+    # previous intent -> falls through to the same safe refusal as any
+    # other unresolved out_of_scope, never guessed.
+    continuable = _first_continuable_intent(previous_intent, previous_intents)
+    if continuable is not None and (
+        _looks_like_a_period_follow_up_question(question) or _looks_like_aggregate_follow_up_question(question)
+    ):
+        return continuable
+    return None
+
+
+def _build_part(
+    db: Session,
+    *,
+    business: Business,
+    classify_item: ClassifyResult,
+    now: datetime,
+    combined_businesses: list[Business] | None,
+    question: str,
+    previous_intent: str | None,
+    previous_intents: tuple[str, ...],
+) -> _Part:
+    """Resolves one classify sub-intent into either a final, zero-AI-cost
+    answer (_Part.resolved_answer) or the context the shared explain call
+    needs (_Part.context) — the same per-intent dispatch answer_question
+    always did for the whole question, now reusable per sub-question. See
+    answer_question's own docstring for how the results compose."""
+    intent = classify_item.intent
+
+    if intent == "out_of_scope":
+        recovered = _recover_out_of_scope_intent(question, previous_intent, previous_intents)
+        if recovered is None:
+            return _Part(intent="out_of_scope", resolved_answer=_SAFE_FALLBACK)
+        # Only period/start_date/end_date carry over — metric/search_term/
+        # horizon_days were extracted (if at all) for whatever intent
+        # classify originally, wrongly, picked, and don't necessarily
+        # mean anything for the recovered one.
+        classify_item = ClassifyResult(
+            intent=recovered, period=classify_item.period, start_date=classify_item.start_date,
+            end_date=classify_item.end_date,
+        )
+        intent = recovered
+
+    if intent == "metric_definition":
+        definition = get_definition(classify_item.metric) if classify_item.metric else None
+        return _Part(intent="metric_definition", resolved_answer=definition or _SAFE_FALLBACK)
+
+    if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
+        context, early_result = _dispatch_lookup(db, business=business, intent=intent, classify=classify_item)
+        if early_result is not None:
+            # early_result.intent is not always `intent` itself — a
+            # product_lookup with no search_term at all comes back as
+            # "out_of_scope" specifically (see _dispatch_lookup), not
+            # "product_lookup" — preserve whichever it actually is.
+            return _Part(intent=early_result.intent, resolved_answer=early_result.answer)
+        return _Part(intent=intent, context=context)
+
+    context = _fetch_context(
+        db, business=business, intent=intent, classify=classify_item, now=now, combined_businesses=combined_businesses,
+    )
+    if context is None:
+        # Not applicable (e.g. workshop performance for a non-bike-shop
+        # template, or no report exists yet) — same safe fallback, zero
+        # further AI cost for this part.
+        return _Part(intent=intent, resolved_answer=_SAFE_FALLBACK)
+    # Set aside for the deterministic priority-list builder in
+    # _assemble_final_answer, then stripped before the LLM ever sees this
+    # dict — the *complete* reorder list costs nothing extra (it's local
+    # formatting, not another AI call), so it doesn't need the same
+    # cost-driven cap as what actually goes in the prompt (see
+    # _MAX_CONTEXT_ROWS).
+    all_products = context.pop("_all_products_for_priority_list", None)
+    return _Part(intent=intent, context=context, all_products_for_priority_list=all_products)
+
+
+def _join_parts_for_display(texts: list[str]) -> str:
+    """Joins final part texts into one ORLA message — a single element
+    passes through completely unchanged (so the single-intent path stays
+    byte-for-byte identical to before multi-part answers existed)."""
+    return "\n\n".join(t for t in texts if t)
+
+
+# The marker the explain step is told to prefix each part's own answer
+# with (see _MULTI_PART_INSTRUCTION) — deliberately not plain text like
+# "Part 1:", which could plausibly appear in a legitimate answer on its
+# own and be split on by accident; these bracket characters are not
+# something a real business-data answer would ever otherwise contain.
+_PART_MARKER_PATTERN = re.compile("⟦PART_(\\d+)⟧")
+
+
+def _split_multi_part_answer(answer_text: str, *, expected_parts: int) -> dict[int, str] | None:
+    """Splits a multi-part explain answer on its own marker into
+    {part_number: text}, 1-based matching the part_N keys the merged
+    context was built with. Fails closed (returns None) on anything other
+    than exactly one clean, in-range, non-duplicate marker per expected
+    part — a malformed split could otherwise silently attribute one
+    part's text to the wrong part's data during guardrail validation,
+    defeating the point of validating per part at all. The caller falls
+    back to a coarser whole-answer check when this happens."""
+    matches = list(_PART_MARKER_PATTERN.finditer(answer_text))
+    if len(matches) != expected_parts:
+        return None
+    seen: set[int] = set()
+    result: dict[int, str] = {}
+    for i, m in enumerate(matches):
+        n = int(m.group(1))
+        if n in seen or n < 1 or n > expected_parts:
+            return None
+        seen.add(n)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(answer_text)
+        result[n] = answer_text[start:end].strip()
+    return result
+
+
+def _assemble_final_answer(
+    parts: list[_Part], ai_text_by_index: dict[int, str], *, question: str, previous_intent: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    """Reassembles the final user-facing answer from every part, in the
+    original question order — a resolved_answer part's text is already
+    final; an AI-answered part's text comes from ai_text_by_index (already
+    guardrail-checked by the caller). Also where the existing
+    deterministic priority-order list (_build_priority_order_list) gets
+    attached to whichever part is actually the forecast/reorder one, and
+    where the existing truncation-disclosure/links logic runs — both
+    reused unchanged, just now over every part's context rather than one.
+    For a single part this reduces to exactly the original single-
+    question assembly, byte-for-byte."""
+    wants_reorder_list = _looks_like_a_reorder_question(question) or (
+        _looks_like_branch_split_question(question) and previous_intent == "forecast"
+    )
+    texts: list[str] = []
+    contexts_for_links: list[dict] = []
+    for i, part in enumerate(parts):
+        if part.resolved_answer is not None:
+            texts.append(part.resolved_answer)
+            continue
+        text = ai_text_by_index[i]
+        if part.intent == "forecast" and wants_reorder_list and part.all_products_for_priority_list:
+            built = _build_priority_order_list(
+                part.all_products_for_priority_list, group_by_business=_looks_like_branch_split_question(question)
+            )
+            if built is not None:
+                priority_list, list_itself_truncated = built
+                text = f"{text}\n\n{priority_list}"
+                if not list_itself_truncated and part.context is not None:
+                    # The priority list above already answers "what do I
+                    # need to order" completely (it's built from the
+                    # untrimmed product list, not the LLM's capped view)
+                    # — the generic "only 15 of 152 shown" note would be
+                    # confusing noise right next to an answer that isn't
+                    # partial. If the priority list itself had to
+                    # truncate, the note and links stay — genuinely still
+                    # a partial answer.
+                    part.context.pop("products_shown_of_total", None)
+        texts.append(text)
+        if part.context is not None:
+            contexts_for_links.append(part.context)
+
+    joined = _join_parts_for_display(texts)
+    joined = _append_truncation_disclosure(joined, contexts_for_links)
+    links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts_for_links) else ()
+    return joined, links
 
 
 def _find_shown_of_total_notes(context: Any) -> list[str]:
@@ -435,6 +751,18 @@ _REORDER_KEYWORDS = (
 )
 
 
+_PURCHASE_HISTORY_KEYWORDS = (
+    "last orders", "latest orders", "recent orders", "order history", "purchase history", "last purchases",
+    "latest purchases", "recent purchases", "things i ordered", "items i ordered", "most expensive things i ordered",
+    "most expensive items i ordered", "most expensive purchases", "unit cost", "by unit",
+)
+
+
+def _looks_like_purchase_history_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _PURCHASE_HISTORY_KEYWORDS)
+
+
 def _looks_like_a_reorder_question(question: str) -> bool:
     """A cheap, deterministic check gating the priority-list build below
     — the `forecast` intent's context also covers plain revenue-forecast
@@ -442,6 +770,16 @@ def _looks_like_a_reorder_question(question: str) -> bool:
     unrelated product-reorder list appended."""
     lowered = question.lower()
     return any(keyword in lowered for keyword in _REORDER_KEYWORDS)
+
+
+_BRANCH_SPLIT_KEYWORDS = (
+    "split", "separate", "breakdown", "break down", "branch", "branches", "shop", "shops", "location",
+)
+
+
+def _looks_like_branch_split_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _BRANCH_SPLIT_KEYWORDS)
 
 
 # Intents safe to silently continue on an unresolved follow-up — every
@@ -488,6 +826,17 @@ def _looks_like_a_period_follow_up_question(question: str) -> bool:
     return any(keyword in lowered for keyword in _PERIOD_FOLLOW_UP_KEYWORDS)
 
 
+_AGGREGATE_FOLLOW_UP_KEYWORDS = (
+    "merge", "merged", "combine", "combined", "total", "overall", "together", "sum", "add them", "add those",
+    "full business", "whole business", "entire business", "full company", "whole company", "all together",
+)
+
+
+def _looks_like_aggregate_follow_up_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _AGGREGATE_FOLLOW_UP_KEYWORDS)
+
+
 def _detect_named_business(question: str, businesses: list[Business]) -> Business | None:
     """Deterministic, not LLM-based — direct scope decision: a question
     naming one of the account's own branches by name ("what was revenue
@@ -516,6 +865,18 @@ def _detect_named_business(question: str, businesses: list[Business]) -> Busines
     return None
 
 
+_ALL_BRANCHES_PATTERNS = (
+    r"\bacross\s+(?:all|both|my|our)\s+(?:branches|shops|locations)\b",
+    r"\b(?:all|both|my|our)\s+(?:branches|shops|locations)\b",
+    r"\b(?:two|2)\s+(?:branches|shops|locations)\b",
+)
+
+
+def _looks_like_all_branches_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(re.search(pattern, lowered) for pattern in _ALL_BRANCHES_PATTERNS)
+
+
 # Zero-cost — this is local formatting after the AI calls are already
 # done, not another prompt — so it can afford to be far more generous
 # than _MAX_CONTEXT_ROWS (which bounds what's actually sent to the
@@ -524,7 +885,15 @@ def _detect_named_business(question: str, businesses: list[Business]) -> Busines
 _MAX_PRIORITY_LIST_DISPLAY = 30
 
 
-def _build_priority_order_list(all_products: list) -> tuple[str, bool] | None:
+def _format_priority_product_line(index: int, product: dict) -> str:
+    name = product.get("name", "Unknown product")
+    quantity = product.get("suggested_reorder_quantity")
+    cover = product.get("days_of_cover_at_forecast_rate")
+    cover_note = f" ({cover} days cover left)" if cover is not None else ""
+    return f"{index}. {name} — {quantity} units{cover_note}"
+
+
+def _build_priority_order_list(all_products: list, *, group_by_business: bool = False) -> tuple[str, bool] | None:
     """Deterministically formats every product needing reorder, in
     guaranteed urgency order (get_forecast's own docstring: products are
     already sorted soonest-out-of-stock-first) — not left to the model's
@@ -544,13 +913,31 @@ def _build_priority_order_list(all_products: list) -> tuple[str, bool] | None:
     if not to_order:
         return None
 
+    if group_by_business and any(product.get("business_name") for product in to_order):
+        lines = ["Priority order by branch (most urgent first):"]
+        shown = 0
+        truncated = len(to_order) > _MAX_PRIORITY_LIST_DISPLAY
+        grouped: dict[str, list[dict]] = {}
+        for product in to_order:
+            branch = product.get("business_name") or "Unknown branch"
+            grouped.setdefault(branch, []).append(product)
+        for branch, products in grouped.items():
+            if shown >= _MAX_PRIORITY_LIST_DISPLAY:
+                break
+            lines.append(f"{branch}:")
+            for product in products:
+                if shown >= _MAX_PRIORITY_LIST_DISPLAY:
+                    break
+                shown += 1
+                lines.append(_format_priority_product_line(shown, product))
+        remaining = len(to_order) - shown
+        if remaining > 0:
+            lines.append(f"...and {remaining} more product(s) need reordering — see the Dashboard for the full list.")
+        return "\n".join(lines), truncated
+
     lines = []
     for i, product in enumerate(to_order[:_MAX_PRIORITY_LIST_DISPLAY], start=1):
-        name = product.get("name", "Unknown product")
-        quantity = product.get("suggested_reorder_quantity")
-        cover = product.get("days_of_cover_at_forecast_rate")
-        cover_note = f" ({cover} days cover left)" if cover is not None else ""
-        lines.append(f"{i}. {name} — {quantity} units{cover_note}")
+        lines.append(_format_priority_product_line(i, product))
 
     remaining = len(to_order) - len(lines)
     truncated = remaining > 0
@@ -668,6 +1055,17 @@ def _fetch_context(
             summary = get_financial_performance_for_group(
                 db, businesses=combined_businesses, start_date=start_date, end_date=end_date
             )
+            context = FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+            context["branches"] = [
+                _financial_branch_context(
+                    business,
+                    get_financial_performance(
+                        db, business_id=business.id, start_date=start_date, end_date=end_date
+                    ),
+                )
+                for business in combined_businesses
+            ]
+            return context
         else:
             summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
@@ -712,6 +1110,8 @@ def _fetch_context(
     if intent == "category_breakdown":
         summary = get_category_breakdown(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_category_breakdown(CategoryBreakdownOut.model_validate(summary).model_dump(mode="json"))
+    if intent == "purchase_history":
+        return _purchase_history_context(db, businesses=combined_businesses or [business])
     if intent == "latest_report":
         reports = ReportRepository(db).list_active_for_business(business_id, now=now)
         if not reports:
@@ -760,6 +1160,64 @@ def _trim_forecast_result(result: dict) -> dict:
     # .ts's revenueForecastLineOption) — a text answer only ever needs
     # the aggregate total_point/total_low/total_high.
     return {k: v for k, v in result.items() if k != "daily"}
+
+
+def _financial_branch_context(business: Business, summary: Any) -> dict:
+    """Small branch breakdown for combined financial chat answers.
+    The combined summary remains the dashboard-equivalent total; this
+    branch list gives ORLA already-computed per-business figures when the
+    user asks for profit/revenue across "two branches" or "both shops"."""
+    data = FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+    return {
+        "business_id": str(business.id),
+        "business_name": business.name,
+        "revenue": data["revenue"],
+        "gross_margin": data["gross_margin"],
+        "returns": data["returns"],
+    }
+
+
+def _purchase_history_context(db: Session, *, businesses: list[Business]) -> dict:
+    recent_rows = []
+    expensive_rows = []
+    for business in businesses:
+        repo = InventoryMovementRepository(db)
+        recent, _total = repo.list_purchases_paginated(business.id, limit=_MAX_CONTEXT_ROWS)
+        recent_rows.extend(_purchase_context_row(business, movement, product, supplier) for movement, product, supplier in recent)
+        expensive_rows.extend(
+            _purchase_context_row(business, movement, product, supplier)
+            for movement, product, supplier in repo.list_purchases_by_unit_cost(business.id, limit=_MAX_CONTEXT_ROWS)
+        )
+
+    recent_rows.sort(key=lambda row: (row["event_date"] or "", row["purchase_id"]), reverse=True)
+    expensive_rows.sort(
+        key=lambda row: (
+            row["unit_cost"] is not None,
+            Decimal(row["unit_cost"]) if row["unit_cost"] is not None else Decimal("0"),
+            row["event_date"] or "",
+        ),
+        reverse=True,
+    )
+    return {
+        "recent_purchases": recent_rows[:_MAX_CONTEXT_ROWS],
+        "most_expensive_unit_purchases": expensive_rows[:_MAX_CONTEXT_ROWS],
+    }
+
+
+def _purchase_context_row(business: Business, movement: Any, product: Any, supplier: Any) -> dict:
+    return {
+        "purchase_id": str(movement.id),
+        "business_id": str(business.id),
+        "business_name": business.name,
+        "product_id": str(movement.product_id),
+        "product_name": product.name if product else "Unknown product",
+        "sku": product.sku if product else None,
+        "supplier_name": supplier.name if supplier else None,
+        "quantity_received": movement.quantity_delta,
+        "purchase_reference": movement.purchase_reference,
+        "event_date": movement.event_date.isoformat() if movement.event_date else None,
+        "unit_cost": str(movement.unit_cost) if movement.unit_cost is not None else None,
+    }
 
 
 def _trim_forecast(forecast: dict) -> dict:
@@ -835,8 +1293,13 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "Today's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
     'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
     "on or before today, unless a year is stated; \"last Tuesday\"/\"yesterday\" resolve the same way).\n"
-    "Read the user's question and respond with ONLY a JSON object (no prose, no markdown fences) "
-    "with exactly these keys:\n"
+    "Read the user's question and respond with ONLY a JSON object (no prose, no markdown fences) of the exact "
+    'shape {{"intents": [ ... ]}} — a list of 1 to 3 objects, one per distinct question actually being asked. '
+    "Almost every question is a single ask — return a one-element list unless the question genuinely contains "
+    'more than one distinct request (joined by "and", "also", "as well", "plus", "while you\'re at it", or '
+    "phrased as more than one separate question), in which case list one object per distinct request, in the "
+    "order asked, capped at 3 (if there are genuinely more than 3, cover only the first 3). "
+    "Each object in that list has exactly these keys:\n"
     f'"intent": one of {list(ALLOWED_INTENTS)}\n'
     f'"period": one of {list(ALLOWED_PERIODS)}, or null\n'
     '"start_date": "YYYY-MM-DD", only when period is "explicit_date" — the specific date the question '
@@ -857,7 +1320,7 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '- "findings_recommendations": flagged issues (low stock, dead stock, thin margin, revenue decline) '
     "with a plain-language recommendation each — no order quantities live here.\n"
     '- "retail_operations": top sellers, stock cover, dead stock, inventory value, sell-through.\n'
-    '- "financial_performance": revenue, gross margin, top/bottom-margin products, and returns/refunds '
+    '- "financial_performance": revenue, gross profit/profit, gross margin, top/bottom-margin products, and returns/refunds '
     "(gross vs net revenue, how much was refunded, return rate). Use period \"explicit_date\" for a "
     'question naming a specific day or date range (e.g. "revenue on the 24th of June", "sales last '
     'Tuesday").\n'
@@ -867,6 +1330,8 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '- "product_lookup": detail about ONE specific product by name or SKU — its current stock, cost, or '
     'sell price (e.g. "how much stock of Chain Lube do I have"). Not for "what are my top sellers" or a '
     "stock overview across products — that's \"retail_operations\".\n"
+    '- "purchase_history": list-style purchase/order history questions — latest/last/recent orders, recent '
+    'purchases, order history, or "most expensive things/items I ordered by unit cost".\n'
     '- "purchase_lookup": detail about a specific purchase, order, or delivery — by PO/purchase '
     'reference, or by product name and/or date (e.g. "what did I order under PO-123", "when did the '
     'chain lube delivery arrive", "what did I order last week"). Set "search_term" to the reference or '
@@ -895,7 +1360,11 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "search_term the new wording implies, rather than falling back to \"out_of_scope\". For example, if the "
     'previous answer was about revenue and the new question asks "what was the previous period?", classify '
     'it "financial_performance" (its own data already includes both the current and previous-period figures) '
-    "rather than treating it as unrelated. Only ignore the previous exchange, and classify on the new "
+    'rather than treating it as unrelated. If the previous answer gave a branch/shop/location breakdown and '
+    'the new question says "merge", "combine", "total", "overall", "together", "full business", or '
+    '"whole business", classify it as the same intent as the previous exchange so the combined figure can '
+    "be answered from the current data. "
+    "Only ignore the previous exchange, and classify on the new "
     "question's own merits, when it clearly stands alone or changes topic."
 )
 
@@ -908,7 +1377,12 @@ def _classify_intent(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str,
     business_timezone: str, now: datetime,
     previous_question: str | None = None, previous_answer: str | None = None,
-) -> ClassifyResult:
+) -> list[ClassifyResult]:
+    """Returns 1 to _MAX_SUBINTENTS sub-intents, in question order — the
+    overwhelming majority of real questions come back as a single-element
+    list, same shape today's single-intent behavior always had. See
+    _parse_intent_json for how the classify call's "intents" array gets
+    validated into this."""
     today = _today_in_timezone(business_timezone, now)
     system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat(), weekday=today.strftime("%A"))
     messages = [{"role": "system", "content": system_prompt}]
@@ -927,23 +1401,27 @@ def _classify_intent(
         messages.append({"role": "assistant", "content": previous_answer[:_CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS]})
     messages.append({"role": "user", "content": question})
     try:
-        # max_tokens=700, not the ~20-50 a plain classification would
-        # need: the default model is a reasoning model that spends
-        # hidden "reasoning" tokens (billed, counted against this
-        # budget) before ever emitting the visible JSON — too tight a
-        # budget here just silently truncates before real content comes
-        # out (content=None), which _parse_intent_json then has no way
-        # to tell apart from a genuine "out of scope" verdict. Raised
-        # from 300 after adding the lookup/explicit-date intents: this
-        # module's classify prompt grew substantially (10 intents, date
-        # extraction, search-term extraction), and live-verified against
-        # OpenRouter this pushed some real questions into consistently
-        # burning the full 300-token reasoning budget with zero left for
-        # the visible JSON — reproduced deterministically (temperature=0)
-        # across repeated calls, not a one-off. See
+        # max_tokens=1000 (raised from 700 when the classify JSON shape
+        # became a 1-3 item "intents" array instead of one object): the
+        # default model is a reasoning model that spends hidden
+        # "reasoning" tokens (billed, counted against this budget) before
+        # ever emitting the visible JSON — too tight a budget here just
+        # silently truncates before real content comes out (content=
+        # None), which _parse_intent_json then has no way to tell apart
+        # from a genuine "out of scope" verdict. 700 was itself raised
+        # from 300 after adding the lookup/explicit-date intents and
+        # live-verified against OpenRouter pushing some real questions
+        # into consistently burning the full 300-token reasoning budget
+        # with zero left for the visible JSON — reproduced
+        # deterministically (temperature=0) across repeated calls, not a
+        # one-off. A genuine 3-part compound question roughly triples the
+        # visible JSON payload on top of that same reasoning-token cost;
+        # 1000 is sized to cover that worst case without repeating the
+        # same regression — live-verify against a real 3-part question
+        # and raise further if truncation shows up again. See
         # app/settings/config.py's openrouter_model comment.
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=700, temperature=0.0
+            messages=messages, response_format={"type": "json_object"}, max_tokens=1000, temperature=0.0
         )
     except AIProviderError as exc:
         logger.warning("AI classify call failed business=%s error=%s", business_id, exc)
@@ -955,7 +1433,7 @@ def _classify_intent(
         # "I can't help with that topic" for what was actually "the AI
         # service is down right now" — live-verified this exact
         # confusion after hitting OpenRouter's free-tier daily quota.
-        return ClassifyResult(intent="provider_unavailable")
+        return [ClassifyResult(intent="provider_unavailable")]
 
     content, tokens_in, tokens_out, model, cost = _extract_message(response)
     _log_request(
@@ -999,29 +1477,11 @@ def _parse_explicit_dates(raw_start: Any, raw_end: Any, *, today: date) -> tuple
     return start_date, end_date
 
 
-def _parse_intent_json(content: str | None, *, today: date) -> ClassifyResult:
-    """`content is None`, a JSON-decode failure, or a non-dict payload
-    all fall back to "out_of_scope" — but unlike a model genuinely
-    deciding a question is out of scope (a normal, silent outcome), each
-    of these means something went wrong upstream (the model didn't
-    respect response_format, ran out of its token budget before emitting
-    visible content, ...), so each is logged. Found live: this silence
-    made a real regression (a newly added fallback model returning
-    unparseable content) look identical to ordinary "not about this
-    business" refusals for every single question, with zero trace in the
-    logs to tell the two apart — this is the fix for that blind spot."""
-    if content is None:
-        logger.warning("Classify call returned no content — provider likely exhausted its token budget")
-        return ClassifyResult(intent="out_of_scope")
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Classify call returned non-JSON content, defaulting to out_of_scope: %r", content[:500])
-        return ClassifyResult(intent="out_of_scope")
-    if not isinstance(data, dict):
-        logger.warning("Classify call returned JSON that wasn't an object, defaulting to out_of_scope: %r", content[:500])
-        return ClassifyResult(intent="out_of_scope")
-
+def _parse_one_intent(data: dict, *, today: date) -> ClassifyResult:
+    """Server-side validation for a single sub-intent object — every
+    field validated exactly as a lone-object classify response always
+    was. See _parse_intent_json for the outer list-level parsing (the
+    "intents" array, capping, and fallback shapes) this feeds into."""
     intent = data.get("intent")
     if intent not in ALLOWED_INTENTS:
         if intent is not None:
@@ -1057,6 +1517,58 @@ def _parse_intent_json(content: str | None, *, today: date) -> ClassifyResult:
         intent=intent, period=period, start_date=start_date, end_date=end_date, metric=metric,
         search_term=search_term, horizon_days=horizon_days,
     )
+
+
+def _parse_intent_json(content: str | None, *, today: date) -> list[ClassifyResult]:
+    """`content is None`, a JSON-decode failure, or a non-dict payload all
+    fall back to a single out_of_scope result — but unlike a model
+    genuinely deciding a question is out of scope (a normal, silent
+    outcome), each of these means something went wrong upstream (the
+    model didn't respect response_format, ran out of its token budget
+    before emitting visible content, ...), so each is logged. Found live:
+    this silence made a real regression (a newly added fallback model
+    returning unparseable content) look identical to ordinary "not about
+    this business" refusals for every single question, with zero trace
+    in the logs to tell the two apart — this is the fix for that blind
+    spot.
+
+    Reads `data["intents"]` as a list of 1-_MAX_SUBINTENTS sub-intent
+    objects (see _CLASSIFY_SYSTEM_PROMPT_TEMPLATE's own instruction for
+    this shape), each validated independently via _parse_one_intent.
+    Falls back to treating a bare, non-array-wrapped object (one with an
+    "intent" key directly) as a single-element list — defensive, since a
+    free-tier model has a documented history of not always following the
+    exact JSON shape asked for (see _classify_intent's own max_tokens
+    comment)."""
+    if content is None:
+        logger.warning("Classify call returned no content — provider likely exhausted its token budget")
+        return [ClassifyResult(intent="out_of_scope")]
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Classify call returned non-JSON content, defaulting to out_of_scope: %r", content[:500])
+        return [ClassifyResult(intent="out_of_scope")]
+    if not isinstance(data, dict):
+        logger.warning("Classify call returned JSON that wasn't an object, defaulting to out_of_scope: %r", content[:500])
+        return [ClassifyResult(intent="out_of_scope")]
+
+    raw_intents = data.get("intents")
+    if not isinstance(raw_intents, list) or not raw_intents:
+        if isinstance(data.get("intent"), str):
+            raw_intents = [data]
+        else:
+            logger.warning(
+                'Classify call returned no usable "intents" list, defaulting to out_of_scope: %r', content[:500]
+            )
+            return [ClassifyResult(intent="out_of_scope")]
+
+    parsed = [_parse_one_intent(item, today=today) for item in raw_intents[:_MAX_SUBINTENTS] if isinstance(item, dict)]
+    if not parsed:
+        logger.warning(
+            'Classify call\'s "intents" list had no usable objects, defaulting to out_of_scope: %r', content[:500]
+        )
+        return [ClassifyResult(intent="out_of_scope")]
+    return parsed
 
 
 def _parse_horizon_days(raw: Any) -> int | None:
@@ -1101,9 +1613,27 @@ _ORLA_PERSONALITY = (_AI_MODULE_DIR / "orla_personality.md").read_text(encoding=
 _EXPLAIN_SYSTEM_PROMPT_PREFIX = f"{_ORLA_CONSTITUTION}\n\n{_ORLA_PERSONALITY}\n\nDATA:\n"
 
 
+# Only appended when answer_question is assembling a genuine multi-intent
+# question (several different intents, each with its own "part_N" key in
+# the supplied DATA) — not the same thing as a single intent's answer
+# covering several list items ("give me 5 actions"), which _generate_
+# answer already handled before this existed and still does the same way.
+_MULTI_PART_INSTRUCTION = (
+    "This question has multiple distinct parts, numbered part_1, part_2, ... in the DATA below (there may also "
+    "be an _already_answered list of parts that already have their own final answer — do not re-answer those, "
+    "they're shown only so you have their figures for context if the question refers back to them). Answer every "
+    "part_N key present in DATA, briefly, in ascending numeric order. Start each part's own answer on its own "
+    "line with the exact marker ⟦PART_n⟧ (matching that part's own number, e.g. ⟦PART_1⟧), "
+    "with nothing else on that line — no other text before or after the marker on that line. If a part's \"data\" "
+    "field is null, say so plainly in one short sentence for that part rather than guessing. Never invent an "
+    "extra part or marker beyond the part_N keys actually present in DATA.\n\n"
+)
+
+
 def _generate_answer(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict,
     scope_label: str, previous_question: str | None = None, previous_answer: str | None = None,
+    multi_part: bool = False,
 ) -> str | None:
     # Explicit, stated outright rather than left for the model to infer —
     # live-reproduced bug: without this, a branch-scoped or combined-
@@ -1112,8 +1642,13 @@ def _generate_answer(
     # scope by name ("revenue in Galway?") gets answered "I don't have a
     # location breakdown" even though the JSON below *is* that exact
     # breakdown already.
-    scope_note = f"(This data is already scoped to: {scope_label} — it is not a whole-account total unless stated, and it does not need a further per-branch/location breakdown.)\n"
-    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + scope_note + json.dumps(context, default=str)
+    scope_note = (
+        f"(This data is already scoped to: {scope_label} — it is not a whole-account total unless stated. "
+        "If a `branches` list is present in the supplied data, use it for branch/shop/location breakdowns; "
+        "otherwise do not claim to have a further per-branch/location breakdown.)\n"
+    )
+    multi_part_note = _MULTI_PART_INSTRUCTION if multi_part else ""
+    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + scope_note + multi_part_note + json.dumps(context, default=str)
     messages = [{"role": "system", "content": system_prompt}]
     if previous_question and previous_answer:
         # Same last-exchange-only shape as _classify_intent above, given
@@ -1127,12 +1662,24 @@ def _generate_answer(
     try:
         # Same reasoning-token headroom rationale as _classify_intent
         # above; raised from 500 after a live fire-test run showed a
-        # genuinely multi-part question ("give me 5 actions, cite the
-        # data, flag uncertainty for each") visibly truncating mid-word
-        # — 500 was enough for the usual 2-4-sentence answer but not for
-        # a question that explicitly asks the prompt above to cover
-        # several distinct items.
-        response = client.chat_completion(messages=messages, max_tokens=800, temperature=0.2)
+        # single intent's answer covering several distinct list items
+        # ("give me 5 actions, cite the data, flag uncertainty for each")
+        # visibly truncating mid-word — 500 was enough for the usual 2-4-
+        # sentence answer but not for a question that explicitly asks the
+        # prompt above to cover several distinct items. multi_part raises
+        # this further still (800 -> 1600): a genuine multi-intent answer
+        # is proportionally longer again (up to _MAX_SUBINTENTS separate
+        # answers plus their markers). Live-verified against real
+        # 2-part and 3-part questions on the real dev stack (Test Bike
+        # Shop, real OpenRouter) at 1200: both came back correctly
+        # formed, but tokens_out landed at 1191 and 1198 — within single
+        # digits of truncating outright, not a comfortable margin. Raised
+        # to 1600 for real headroom rather than leaving it at a value one
+        # slightly longer answer away from silently cutting a part off
+        # mid-word.
+        response = client.chat_completion(
+            messages=messages, max_tokens=1600 if multi_part else 800, temperature=0.2
+        )
     except AIProviderError as exc:
         logger.warning("AI explain call failed business=%s error=%s", business_id, exc)
         _log_request(request_repo, business_id=business_id, user_id=user_id, model="unknown", success=False)

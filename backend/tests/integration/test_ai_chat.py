@@ -297,6 +297,50 @@ def test_purchase_lookup_with_no_match_is_a_deterministic_zero_cost_answer(db_se
     assert db_session.query(AIRequest).count() == 1
 
 
+def test_purchase_history_question_recovers_and_reaches_the_explain_call(db_session, business_id, monkeypatch):
+    cheap = ProductRepository(db_session).create(
+        business_id=business_id, sku="CH-1", name="Cheap Chain", cost_price=Decimal("2.00"), sell_price=None
+    )
+    expensive = ProductRepository(db_session).create(
+        business_id=business_id, sku="EX-1", name="Expensive Hub", cost_price=Decimal("100.00"), sell_price=None
+    )
+    movement_repo = InventoryMovementRepository(db_session)
+    movement_repo.create(
+        business_id=business_id, product_id=cheap.id, quantity_delta=3, reason="purchase",
+        purchase_reference="PO-CHEAP", event_date=date(2026, 1, 3), unit_cost=Decimal("9.00"),
+    )
+    movement_repo.create(
+        business_id=business_id, product_id=expensive.id, quantity_delta=1, reason="purchase",
+        purchase_reference="PO-EXP", event_date=date(2026, 1, 5), unit_cost=Decimal("100.00"),
+    )
+    db_session.commit()
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("Your last order shown was Expensive Hub on 2026-01-05 at €100.00 per unit.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session,
+        business_id=business_id,
+        user_id="user-1",
+        question="When were my last orders placed? and what were the most expensive things I ordered by unit?",
+        now=_NOW,
+    )
+
+    assert result.intent == "purchase_history"
+    assert result.grounded is True
+    assert "Expensive Hub" in result.answer
+    explain_prompt = calls[1][0]["content"]
+    assert "recent_purchases" in explain_prompt
+    assert "most_expensive_unit_purchases" in explain_prompt
+    assert explain_prompt.index("Expensive Hub") < explain_prompt.index("Cheap Chain")
+
+
 def test_repair_lookup_by_reference_reaches_the_explain_call(db_session, business_id, monkeypatch):
     ProductionEventRepository(db_session).create(
         business_id=business_id, event_type="repair", description="Full service", status="completed",
@@ -751,6 +795,48 @@ def test_period_follow_up_recovers_to_the_previous_turns_intent(db_session, busi
     assert result.intent == "financial_performance"
 
 
+def test_aggregate_follow_up_recovers_to_the_previous_turns_intent(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("Merged together, the gross profit is €0.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="Can you give me that as a merge?", now=_NOW,
+        previous_question="Can you tell me the profit for my two branches?",
+        previous_answer="Branch A had €0.00 gross profit and Branch B had €0.00 gross profit.",
+        previous_intent="financial_performance",
+    )
+
+    assert result.intent == "financial_performance"
+    assert result.grounded is True
+
+
+def test_full_business_follow_up_recovers_to_the_previous_turns_intent(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("For the full business, gross profit is €0.00.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session,
+        business_id=business_id,
+        user_id="user-1",
+        question="Can you show me this as a full business?",
+        now=_NOW,
+        previous_question="Can you tell me the profit for my two branches?",
+        previous_answer="Branch A had €0.00 gross profit and Branch B had €0.00 gross profit.",
+        previous_intent="financial_performance",
+    )
+
+    assert result.intent == "financial_performance"
+    assert result.grounded is True
+
+
 def test_period_follow_up_does_not_recover_without_a_previous_intent(db_session, business_id, monkeypatch):
     # No previous_intent at all (e.g. the very first question in a
     # session, or a page refresh that reset memory) — nothing to recover
@@ -807,3 +893,225 @@ def test_a_genuine_topic_change_after_a_continuable_intent_is_not_swallowed_by_r
     )
 
     assert result.intent == "out_of_scope"
+
+
+# --- multi-intent compound questions -----------------------------------
+# Covers answer_question's part-based assembly for a question that asks
+# more than one distinct thing ("what's my revenue and what should I
+# reorder") — still exactly 2 AI calls (classify + explain) regardless of
+# how many parts, per-part grounding, and a part that can't be answered
+# disclosing that instead of discarding the whole response. The
+# overwhelming single-intent case is covered exhaustively by every other
+# test in this file; these are specifically the composition behavior.
+
+
+def _intent_obj(intent: str, **extra) -> dict:
+    payload = {"intent": intent, "period": None, "metric": None}
+    payload.update(extra)
+    return payload
+
+
+def _multi_classify_response(*intent_objs: dict) -> dict:
+    return _canned_response(json.dumps({"intents": list(intent_objs)}))
+
+
+def test_compound_question_across_two_lanes_merges_both_parts_into_one_grounded_answer(
+    db_session, business_id, monkeypatch
+):
+    calls = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        calls.append(messages)
+        if response_format is not None:
+            return _multi_classify_response(_intent_obj("financial_performance"), _intent_obj("forecast"))
+        return _canned_response(
+            "⟦PART_1⟧Your gross margin coverage is low right now — no cost data has been recorded yet."
+            "\n⟦PART_2⟧Nothing is projected to run out of stock soon based on your current sales rate."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How's my revenue doing, and what should I reorder soon?", now=_NOW,
+    )
+
+    assert len(calls) == 2  # classify, then one shared explain call — never one per part
+    assert result.intents == ("financial_performance", "forecast")
+    assert result.intent == "financial_performance"
+    assert result.grounded is True
+    assert "gross margin coverage is low" in result.answer
+    assert "run out of stock soon" in result.answer
+    assert "⟦" not in result.answer  # markers are never shown to the user
+    assert db_session.query(AIRequest).count() == 2
+
+
+def test_one_part_fails_grounding_the_other_part_is_still_answered(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _multi_classify_response(_intent_obj("financial_performance"), _intent_obj("forecast"))
+        return _canned_response(
+            "⟦PART_1⟧Your gross margin coverage is low right now — no cost data has been recorded yet."
+            "\n⟦PART_2⟧You should reorder 9999999 units immediately."  # invented number, not in any context
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How's my revenue doing, and what should I reorder soon?", now=_NOW,
+    )
+
+    assert result.grounded is False  # at least one part fell back
+    assert "gross margin coverage is low" in result.answer  # the good part survives
+    assert "9999999" not in result.answer  # the invented claim never reaches the user
+    assert result.intents == ("financial_performance", "forecast")
+
+
+def test_one_part_with_no_available_data_is_disclosed_the_other_part_still_answers(
+    db_session, business_id, monkeypatch
+):
+    from app.models.business import Business
+
+    # workshop_performance is only available for the bicycle_shop
+    # template — a non-bike-shop business gets None context for it,
+    # resolved deterministically with zero AI cost (see _build_part).
+    non_bike_business = Business(name="Not A Bike Shop", template="generic_retail")
+    db_session.add(non_bike_business)
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _multi_classify_response(_intent_obj("financial_performance"), _intent_obj("workshop_performance"))
+        # Only one marker: the workshop part never reaches the model at
+        # all (it was already resolved before the explain call).
+        return _canned_response(
+            "⟦PART_1⟧Your gross margin coverage is low right now — no cost data has been recorded yet."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=non_bike_business.id, user_id="user-1",
+        question="How's my revenue doing, and how's the workshop doing?", now=_NOW,
+    )
+
+    assert result.grounded is True  # the one AI part was grounded; the other was never a guess
+    assert "gross margin coverage is low" in result.answer
+    assert result.intents == ("financial_performance", "workshop_performance")
+    assert db_session.query(AIRequest).count() == 2  # still just classify + explain, not 3
+
+
+def test_lookup_zero_match_mixed_with_an_aggregate_intent_still_answers_the_other_part(
+    db_session, business_id, monkeypatch
+):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _multi_classify_response(
+                _intent_obj("product_lookup", search_term="Nonexistent Widget"), _intent_obj("financial_performance")
+            )
+        return _canned_response(
+            "⟦PART_1⟧Your gross margin coverage is low right now — no cost data has been recorded yet."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How much stock of Nonexistent Widget do I have, and how's my revenue doing?", now=_NOW,
+    )
+
+    assert 'find anything matching "Nonexistent Widget"' in result.answer
+    assert "gross margin coverage is low" in result.answer
+    assert result.intents == ("product_lookup", "financial_performance")
+
+
+def test_marker_split_failure_falls_back_to_a_coarse_whole_answer_grounding_check(
+    db_session, business_id, monkeypatch
+):
+    # The model ignores the marker instruction entirely and just writes
+    # plain prose — a real possibility given free-tier model variance
+    # (see _split_multi_part_answer's own docstring). No markers at all
+    # means the parts can't be told apart, so this falls back to one
+    # whole-answer guardrail check instead of a misattributed split.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _multi_classify_response(_intent_obj("financial_performance"), _intent_obj("forecast"))
+        return _canned_response(
+            "Your gross margin coverage is low right now, and nothing is projected to run out of stock soon."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How's my revenue doing, and what should I reorder soon?", now=_NOW,
+    )
+
+    assert result.grounded is True
+    assert "gross margin coverage is low" in result.answer
+    assert result.intents == ("financial_performance", "forecast")
+
+
+def test_marker_split_failure_with_an_ungrounded_answer_falls_back_to_the_safe_message(
+    db_session, business_id, monkeypatch
+):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _multi_classify_response(_intent_obj("financial_performance"), _intent_obj("forecast"))
+        return _canned_response("You should reorder 9999999 units immediately.")  # no markers, invented number
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How's my revenue doing, and what should I reorder soon?", now=_NOW,
+    )
+
+    assert result.grounded is False
+    assert "9999999" not in result.answer
+
+
+def test_single_intent_question_shape_is_unchanged_by_multi_intent_support(db_session, business_id, monkeypatch):
+    # Explicit regression guard: intents is a length-1 tuple matching
+    # intent, and no marker artifact ever leaks into a plain single-
+    # question answer — the byte-for-byte-identical single-intent path
+    # this module's own docstrings promise.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("financial_performance")  # bare object, not an "intents" array
+        return _canned_response("Your gross margin coverage is 0% right now — no cost data has been recorded yet.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="How's my revenue doing?", now=_NOW
+    )
+
+    assert result.intents == ("financial_performance",)
+    assert result.intent == "financial_performance"
+    assert "⟦" not in result.answer
+    assert "part_1" not in result.answer.lower()
+
+
+def test_previous_intents_plural_recovers_a_follow_up_against_a_non_first_part(
+    db_session, business_id, monkeypatch
+):
+    # The previous turn was itself compound (product_lookup + forecast) —
+    # previous_intent alone (the first part, "product_lookup") isn't
+    # continuable, but previous_intents carries "forecast" too, which is.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("out_of_scope")
+        return _canned_response("The previous period's reorder picture looked about the same.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What about the previous period?", now=_NOW,
+        previous_question="How much Chain Lube do I have, and what should I reorder?",
+        previous_answer="You have 12 units of Chain Lube. Nothing needs reordering right now.",
+        previous_intent="product_lookup", previous_intents=["product_lookup", "forecast"],
+    )
+
+    assert result.intent == "forecast"

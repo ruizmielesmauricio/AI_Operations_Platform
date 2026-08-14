@@ -16,6 +16,12 @@ import type { ChatResponse } from "@/types";
 // memory of anything further back than one exchange. The thread shown
 // here is purely a local display list; nothing about it is persisted
 // server-side.
+//
+// ORLA can also answer more than one distinct question in one message
+// ("what's my revenue and what should I reorder") — the backend already
+// joins each part into one `answer` string (double-newline-separated,
+// which `whiteSpace: pre-wrap` below renders as its own paragraph), so
+// no extra client-side splitting is needed here.
 interface ChatMessage {
   role: "user" | "assistant";
   text: string;
@@ -57,8 +63,17 @@ export default function ChatPage() {
   // scope decision above. Reset whenever the selected business or the
   // all-branches toggle changes: a different scope has entirely
   // different data, so a prior exchange from elsewhere would be actively
-  // wrong to carry into it, not just stale.
-  const [lastExchange, setLastExchange] = useState<{ question: string; answer: string; intent: string } | null>(null);
+  // wrong to carry into it, not just stale. `intents` (plural) is purely
+  // structural memory alongside `intent` — every part of a compound
+  // previous answer, not just the first — so a follow-up after "what's
+  // my revenue and what should I reorder" can still recover against
+  // either half, not only the first one asked.
+  const [lastExchange, setLastExchange] = useState<{
+    question: string;
+    answer: string;
+    intent: string;
+    intents: string[];
+  } | null>(null);
 
   useEffect(() => {
     setLastExchange(null);
@@ -89,12 +104,15 @@ export default function ChatPage() {
         previous_question: lastExchange?.question,
         previous_answer: lastExchange?.answer,
         previous_intent: lastExchange?.intent,
+        previous_intents: lastExchange?.intents,
       });
       setMessages((prev) => [
         ...prev,
         { role: "assistant", text: response.answer, grounded: response.grounded, links: response.links },
       ]);
-      setLastExchange({ question: trimmed, answer: response.answer, intent: response.intent });
+      setLastExchange({
+        question: trimmed, answer: response.answer, intent: response.intent, intents: response.intents,
+      });
     } catch {
       setError("Could not reach the assistant. Your dashboard and reports are unaffected — try again shortly.");
     } finally {
@@ -135,10 +153,11 @@ export default function ChatPage() {
       <h1>Ask ORLA</h1>
       <p className="hint">
         ORLA can answer questions about your revenue, retail or workshop performance, forecast, recommendations, or
-        your latest report. Not a general chatbot — answers are grounded only in your own calculated data, and
-        questions outside that scope get a plain "I can't help with that" response rather than a guess. ORLA
-        remembers your last question and answer, so a follow-up like "what about the previous period?" works —
-        but only one exchange back, not the whole conversation.
+        your latest report — and can answer a few of these at once if you ask them together (e.g. "what's my
+        revenue and what should I reorder?"). Not a general chatbot — answers are grounded only in your own
+        calculated data, and questions outside that scope get a plain "I can't help with that" response rather
+        than a guess. ORLA remembers your last question and answer, so a follow-up like "what about the previous
+        period?" works — but only one exchange back, not the whole conversation.
       </p>
 
       {businesses.length > 1 && (
