@@ -210,8 +210,9 @@ export default function DashboardPage() {
         </aside>
         <div className="dashboard-content">
 
+      <div className="dashboard-filters">
       {businesses.length > 1 && (
-        <div>
+        <div className="dashboard-filter-group">
           <label htmlFor="business">Business</label>
           <br />
           <select
@@ -239,7 +240,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div>
+      <div className="dashboard-filter-group">
         <label htmlFor="start-date">From</label>{" "}
         <input id="start-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />{" "}
         <label htmlFor="end-date">to</label>{" "}
@@ -255,6 +256,7 @@ export default function DashboardPage() {
             Reset to default (last 30 days)
           </button>
         )}
+      </div>
       </div>
 
           <div id="financial"><FinancialSection data={financial} error={errors.financial} categories={categories} categoryId={financialCategoryId} setCategoryId={setFinancialCategoryId} /></div>

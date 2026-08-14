@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.application.employee_seats import (
     AlreadyAMemberOrInvited,
+    EmployeeInviteUnavailable,
     EmployeeSeatLimitReached,
     EmployeeSeatNotFound,
     InvalidEmployeeRole,
@@ -13,6 +14,7 @@ from app.application.employee_seats import (
     add_employee,
     delete_employee,
     update_employee_profile,
+    resend_employee_invite,
 )
 from app.billing.exceptions import EmployeeSeatPriceNotConfigured
 from app.models.membership import Membership
@@ -89,6 +91,38 @@ def create_employee_seat(
             detail="Employee seats aren't available yet — billing isn't fully configured.",
         ) from exc
     return EmployeeSeatCreateResponse(employee_seat=EmployeeSeatOut.from_seat(seat), checkout_url=checkout_url)
+
+
+@router.post("/{seat_id}/resend-invite", status_code=status.HTTP_204_NO_CONTENT)
+def resend_invite(
+    seat_id: uuid.UUID,
+    membership: Membership = Depends(get_current_membership),
+    current_user: AuthenticatedUser = Depends(get_current_user_synced),
+    db: Session = Depends(get_db),
+) -> None:
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can send an employee invitation"
+        )
+    try:
+        sent = resend_employee_invite(
+            db,
+            business_id=membership.business_id,
+            seat_id=seat_id,
+            invited_by_user_id=current_user.id,
+        )
+    except EmployeeSeatNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found") from exc
+    except EmployeeInviteUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This employee has already registered or has been removed, so no invitation can be sent.",
+        ) from exc
+    if not sent:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The invitation could not be sent right now. Check email delivery is configured and try again.",
+        )
 
 
 @router.patch("/{seat_id}", response_model=EmployeeSeatOut)

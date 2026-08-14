@@ -6,7 +6,7 @@ import { GlobalSearchBar } from "@/components/GlobalSearchBar";
 import { apiGet } from "@/lib/api/client";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
-import type { SubscriptionStatus, SystemStatus } from "@/types";
+import type { Member, SubscriptionStatus, SystemStatus } from "@/types";
 
 /**
  * The first shared nav in this frontend — everything up to now
@@ -27,6 +27,35 @@ export function AppNav({ businessId }: { businessId?: string }) {
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [identityLabel, setIdentityLabel] = useState<string | null>(null);
+
+  // The signed-in member is resolved from the business's existing
+  // membership list, rather than guessing from a name in Supabase metadata.
+  // That keeps the role accurate for both owners and staff on every page.
+  useEffect(() => {
+    if (!businessId || !supabase) {
+      setIdentityLabel(null);
+      return;
+    }
+    let active = true;
+    Promise.all([supabase.auth.getUser(), apiGet<Member[]>(`/businesses/${businessId}/members`)])
+      .then(([{ data }, members]) => {
+        if (!active) return;
+        const member = members.find((item) => item.user_id === data.user?.id);
+        if (!member) {
+          setIdentityLabel(data.user?.email ?? null);
+          return;
+        }
+        const name = `${member.first_name} ${member.surname}`.trim() || data.user?.email || "Account";
+        setIdentityLabel(`${name} (${member.role})`);
+      })
+      .catch(() => {
+        if (active) setIdentityLabel(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [businessId]);
 
   // "Upload data" used to render unconditionally here regardless of the
   // selected business's subscription status — the upload/import routes
@@ -181,6 +210,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
           "View profile" from the list, PATCH /businesses/{id}). */}
       <a href="/onboarding">Company Profile</a>
         </div>
+      {identityLabel && <span className="app-nav__identity">Signed in as {identityLabel}</span>}
       <button className="app-nav__logout" type="button" onClick={handleLogout}>
         Log out
       </button>
