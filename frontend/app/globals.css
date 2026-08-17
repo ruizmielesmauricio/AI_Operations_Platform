@@ -377,18 +377,6 @@ tbody tr:last-child td {
   letter-spacing: 0;
 }
 
-/* The signed-in shop's own uploaded logo, shown alongside (not instead
-   of) the ORLA brand mark above — object-fit: contain since a shop's
-   logo can be any aspect ratio, unlike the fixed-square brand mark. */
-.app-nav__business-logo {
-  width: 30px;
-  height: 30px;
-  object-fit: contain;
-  border-radius: 5px;
-  background: var(--app-surface);
-  border: 1px solid var(--app-border);
-}
-
 .app-nav__links {
   display: flex;
   flex: 1;
@@ -440,6 +428,40 @@ tbody tr:last-child td {
 
 .app-nav-search-row .global-search {
   width: min(330px, 100%);
+}
+
+.app-business-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.app-business-header__logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-panel);
+}
+
+.app-business-header__eyebrow,
+.app-business-header__meta {
+  display: block;
+  color: var(--app-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.app-business-header strong {
+  display: block;
+  color: var(--app-text);
+  font-size: 1rem;
 }
 
 .global-search {
@@ -884,6 +906,47 @@ button.notification-card__control:hover:not(:disabled) {
   background: var(--app-red-soft);
 }
 
+.upload-guidance {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.5fr);
+  gap: 1rem;
+  margin: 1rem 0 1.2rem;
+  padding: 1rem;
+  border: 1px solid var(--app-border);
+  border-left: 4px solid var(--app-green);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+
+.upload-guidance h2 {
+  margin-bottom: 0.35rem;
+}
+
+.upload-guidance p,
+.upload-guidance dl {
+  margin-bottom: 0;
+}
+
+.upload-guidance dl {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.upload-guidance dl > div {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.upload-guidance dt {
+  font-weight: 800;
+}
+
+.upload-guidance dd {
+  margin: 0;
+  color: var(--app-muted);
+}
+
 .upload-record {
   display: grid;
   gap: 0.55rem;
@@ -945,6 +1008,7 @@ button.notification-card__control:hover:not(:disabled) {
   .dashboard-workspace { grid-template-columns: 1fr; gap: 0.9rem; }
   .dashboard-section-menu { position: static; }
   .dashboard-section-menu nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .upload-guidance { grid-template-columns: 1fr; }
   .threshold-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -963,6 +1027,7 @@ button.notification-card__control:hover:not(:disabled) {
   .notification-card__controls { grid-column: 2; }
   .notifications-pagination { justify-content: space-between; }
   .dashboard-section-menu nav { grid-template-columns: 1fr; }
+  .upload-guidance dl > div { grid-template-columns: 1fr; gap: 0.15rem; }
   .threshold-guide { grid-template-columns: 1fr; }
 }
 

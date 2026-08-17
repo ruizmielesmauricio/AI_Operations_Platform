@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { formatMoney } from "@/lib/format";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -158,7 +159,7 @@ export default function SuppliersPage() {
       <select id="business-select" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
         {businesses.map((b) => (
           <option key={b.id} value={b.id}>
-            {b.name}
+            {businessDisplayLabel(b)}
           </option>
         ))}
       </select>

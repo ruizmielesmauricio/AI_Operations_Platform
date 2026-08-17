@@ -7,6 +7,7 @@ import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
 import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -211,7 +212,7 @@ export default function DashboardPage() {
           >
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.name}
+                {businessDisplayLabel(b)}
               </option>
             ))}
           </select>{" "}

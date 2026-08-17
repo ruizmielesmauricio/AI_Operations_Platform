@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GlobalSearchBar } from "@/components/GlobalSearchBar";
 import { API_URL, apiGet } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { useCurrentMember } from "@/lib/hooks/useCurrentMember";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
@@ -36,7 +37,12 @@ export function AppNav({ businessId }: { businessId?: string }) {
   // (see frontend/app/onboarding/[id]/page.tsx's identical pattern) so a
   // logo replaced from the profile page doesn't keep showing the old
   // cached image here.
-  const [logoInfo, setLogoInfo] = useState<{ hasLogo: boolean; version: string } | null>(null);
+  const [logoInfo, setLogoInfo] = useState<{
+    companyName: string;
+    logoBusinessId: string | null;
+    logoVersion: string | null;
+    selectedBusinessName: string;
+  } | null>(null);
   // The signed-in member is resolved from the business's existing
   // membership list, rather than guessing from a name in Supabase metadata.
   // That keeps the role accurate for both owners and staff on every page.
@@ -66,9 +72,36 @@ export function AppNav({ businessId }: { businessId?: string }) {
       setLogoInfo(null);
       return;
     }
+    // A branch change can start a second request before the previous
+    // branch's profile request has finished. Only let the active request
+    // populate this shared header, otherwise its location can briefly
+    // (or permanently, depending on response order) show the old branch.
+    let current = true;
+    setLogoInfo(null);
     apiGet<Business>(`/businesses/${businessId}`)
-      .then((b) => setLogoInfo({ hasLogo: b.has_logo, version: b.updated_at }))
-      .catch(() => setLogoInfo(null));
+      .then(async (selectedBusiness) => {
+        // Branches use the parent company's logo when they have not
+        // uploaded a separate one. The label always remains the exact
+        // selected branch name, matching the page dropdown.
+        const logoBusiness =
+          selectedBusiness.has_logo || !selectedBusiness.parent_business_id
+            ? selectedBusiness
+            : await apiGet<Business>(`/businesses/${selectedBusiness.parent_business_id}`).catch(() => null);
+        if (current) {
+          setLogoInfo({
+            companyName: logoBusiness?.name ?? selectedBusiness.name,
+            logoBusinessId: logoBusiness?.has_logo ? logoBusiness.id : null,
+            logoVersion: logoBusiness?.has_logo ? logoBusiness.updated_at : null,
+            selectedBusinessName: businessDisplayLabel(selectedBusiness),
+          });
+        }
+      })
+      .catch(() => {
+        if (current) setLogoInfo(null);
+      });
+    return () => {
+      current = false;
+    };
   }, [businessId]);
 
   // Notification Centre's unread badge — a lightweight poll (not a
@@ -154,25 +187,6 @@ export function AppNav({ businessId }: { businessId?: string }) {
       )}
       <nav className="app-nav" aria-label="Main navigation">
         <a className="app-nav__brand" href={`/dashboard${suffix}`} aria-label="ORLA dashboard">
-          {/* The signed-in shop's own logo (Company Profile "Company logo"
-              section) — shown here, not just on that one settings page,
-              per direct feedback that uploading it had no visible effect
-              anywhere. GET .../logo is public (see app/api/businesses.py),
-              so this is a plain <img>, same as the profile page's own
-              preview; the ?v= cache-buster is the business row's
-              `updated_at` so a replaced logo doesn't keep showing the old
-              cached image here either. */}
-          {businessId && logoInfo?.hasLogo && (
-            // eslint-disable-next-line @next/next/no-img-element -- deliberately a
-            // plain <img>, not next/image: a public URL on our own API, not a
-            // Next.js-optimizable local/remote asset.
-            <img
-              src={`${API_URL}/businesses/${businessId}/logo?v=${encodeURIComponent(logoInfo.version)}`}
-              alt=""
-              aria-hidden="true"
-              className="app-nav__business-logo"
-            />
-          )}
           <span className="app-nav__brand-mark" aria-hidden="true">OR</span>
           <span>ORLA</span>
         </a>
@@ -238,6 +252,26 @@ export function AppNav({ businessId }: { businessId?: string }) {
       {businessId && (
         <div className="app-nav-search-row">
           <GlobalSearchBar businessId={businessId} />
+        </div>
+      )}
+      {businessId && logoInfo && (
+        <div className="app-business-header" aria-label="Current business">
+          {logoInfo.logoBusinessId && logoInfo.logoVersion && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- public API logo URL, not a Next-managed asset. */}
+              <img
+                src={`${API_URL}/businesses/${logoInfo.logoBusinessId}/logo?v=${encodeURIComponent(logoInfo.logoVersion)}`}
+                alt=""
+                aria-hidden="true"
+                className="app-business-header__logo"
+              />
+            </>
+          )}
+          <div>
+            <span className="app-business-header__eyebrow">Current business</span>
+            <strong>{logoInfo.companyName}</strong>
+            <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+          </div>
         </div>
       )}
     </>

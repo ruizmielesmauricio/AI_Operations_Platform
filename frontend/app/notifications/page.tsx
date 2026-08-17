@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiGet, apiPost } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { broadcastNotificationsChanged } from "@/lib/notificationsBus";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -208,7 +209,7 @@ export default function NotificationsPage() {
             Shop
             <select value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
               {businesses.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
+                <option key={b.id} value={b.id}>{businessDisplayLabel(b)}</option>
               ))}
             </select>
           </label>
