@@ -999,12 +999,23 @@ def _dispatch_lookup(
     else:
         return None, AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
-    if not result.matches:
+    # Live-reproduced real bug: find_purchases's own "search term matched
+    # several products, which one?" branch (app/application/lookups.py)
+    # populates match_labels but deliberately leaves matches empty (it
+    # has no single resolved purchase record yet, only candidate product
+    # identities) — checking `result.matches` here treated that
+    # genuinely-ambiguous case as "nothing found" instead of "several
+    # things found," which is the opposite of what actually happened.
+    # match_labels is always populated whenever there's anything to
+    # report at all (every LookupResult-returning function keeps it in
+    # lockstep with matches except that one case), so it's the correct
+    # single source of truth for "how many candidates," not matches.
+    if not result.match_labels:
         term = classify.search_term or "that"
         message = f'I couldn\'t find anything matching "{term}" in your data.'
         return None, AnswerResult(answer=message, intent=intent, grounded=True)
 
-    if len(result.matches) > 1:
+    if len(result.match_labels) > 1:
         listed = "; ".join(result.match_labels[:5])
         # Explicitly models a full, self-contained follow-up question
         # rather than just saying "be more specific" — ORLA has no

@@ -199,6 +199,40 @@ def test_product_lookup_with_one_match_reaches_the_explain_call(db_session, busi
     assert db_session.query(AIRequest).count() == 2  # classify + explain
 
 
+def test_product_lookup_matches_across_a_non_ascii_dash_variant_in_the_search_term(
+    db_session, business_id, monkeypatch
+):
+    # Live-reproduced real bug, exact reported transcript: "How many
+    # E‑Motion Trail 500 did I order last time?" used U+2011 (NON-
+    # BREAKING HYPHEN) where the stored product name has a plain ASCII
+    # "-", and the product genuinely existed — a byte-exact match found
+    # nothing. search_term here is deliberately the classify step's own
+    # verbatim echo of the question's actual character, not a "clean"
+    # ASCII stand-in — this is what a real free-tier model extraction
+    # would hand back.
+    ProductRepository(db_session).create(
+        business_id=business_id, sku="EM-500", name="E-Motion Trail 500", cost_price=Decimal("450.00"),
+        sell_price=Decimal("899.00"),
+    )
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("product_lookup", search_term="E‑Motion Trail 500")
+        return _canned_response("E-Motion Trail 500 (EM-500) currently has 0 units in stock.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How much stock of E‑Motion Trail 500 do I have?", now=_NOW,
+    )
+
+    assert result.intent == "product_lookup"
+    assert result.grounded is True
+    assert "couldn't find" not in result.answer
+
+
 def test_product_lookup_with_no_match_is_a_deterministic_zero_cost_answer(db_session, business_id, monkeypatch):
     calls = []
 
@@ -334,6 +368,52 @@ def test_purchase_lookup_with_no_product_or_reference_match_never_leaks_unrelate
     assert "couldn't find" in result.answer
     assert "Chain Lube" not in result.answer
     assert db_session.query(AIRequest).count() == 1  # never reached the explain call
+
+
+def test_purchase_lookup_search_term_matching_several_products_asks_which_one_instead_of_reporting_not_found(
+    db_session, business_id, monkeypatch
+):
+    # Live-reproduced real bug, found immediately after the fix above:
+    # find_purchases's own "search term matched several products, which
+    # one?" branch (app/application/lookups.py) populates match_labels
+    # but leaves matches empty (no single resolved purchase record yet)
+    # — _dispatch_lookup used to key its 0/1/many decision off `matches`
+    # alone, so this genuinely-ambiguous case was misreported as "I
+    # couldn't find anything matching," the opposite of what happened.
+    product_a = ProductRepository(db_session).create(
+        business_id=business_id, sku="EM-500", name="E-Motion Trail 500", cost_price=None, sell_price=None
+    )
+    product_b = ProductRepository(db_session).create(
+        business_id=business_id, sku="EM-500-2", name="E-Motion Trail 500 2", cost_price=None, sell_price=None
+    )
+    db_session.commit()
+    movement_repo = InventoryMovementRepository(db_session)
+    movement_repo.create(
+        business_id=business_id, product_id=product_a.id, quantity_delta=4, reason="purchase",
+        purchase_reference="PO-EM500-A", event_date=date(2026, 1, 3),
+    )
+    movement_repo.create(
+        business_id=business_id, product_id=product_b.id, quantity_delta=2, reason="purchase",
+        purchase_reference="PO-EM500-B", event_date=date(2026, 1, 4),
+    )
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("purchase_lookup", search_term="E-Motion Trail 500")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How many E-Motion Trail 500 did I order last time?", now=_NOW,
+    )
+
+    assert result.intent == "purchase_lookup"
+    assert "couldn't find" not in result.answer
+    assert "found several matching results" in result.answer
+    assert "E-Motion Trail 500" in result.answer
+    assert "E-Motion Trail 500 2" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # zero-cost, never reached the explain call
 
 
 def test_purchase_history_question_recovers_and_reaches_the_explain_call(db_session, business_id, monkeypatch):

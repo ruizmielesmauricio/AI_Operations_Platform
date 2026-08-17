@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.analytics.types import ProductPurchaseCostAggregate
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
+from app.text_normalize import normalize_dashes, normalize_dashes_column
 from app.models.supplier import Supplier
 
 _STOCK_AFFECTING_REASONS = ("sale", "purchase", "return", "production_consumption", "production_output")
@@ -178,8 +179,15 @@ class InventoryMovementRepository:
         if product_id is not None:
             conditions.append(InventoryMovement.product_id == product_id)
         if purchase_reference is not None:
-            needle = purchase_reference.strip().upper()
-            conditions.append(func.upper(InventoryMovement.purchase_reference).like(f"%{needle}%"))
+            # Dash/hyphen-normalized on both sides — same real bug class
+            # as ProductRepository.search_by_name_or_sku (see
+            # app/text_normalize.py): a PO reference typed or pasted
+            # with a non-ASCII dash shouldn't silently fail to match a
+            # reference stored with a plain one.
+            needle = normalize_dashes(purchase_reference.strip().upper())
+            conditions.append(
+                func.upper(normalize_dashes_column(InventoryMovement.purchase_reference)).like(f"%{needle}%")
+            )
         if start is not None:
             conditions.append(InventoryMovement.event_date >= start)
         if end is not None:

@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.product import Product, ProductCategory
+from app.text_normalize import normalize_dashes, normalize_dashes_column
 
 _SEARCH_LIMIT = 5
 # Matches a trailing "(...)" annotation on an otherwise plain string, e.g.
@@ -72,18 +73,26 @@ class ProductRepository:
         name nor an exact match on the sku as one whole string, so
         without this it silently returns zero matches for exactly the
         label format this repository's own caller hands back to a user.
+
+        The name comparison also normalizes dash/hyphen-like Unicode
+        variants on both sides (see app/text_normalize.py) — live-
+        reproduced real bug: "E‑Motion Trail 500" (a non-breaking hyphen
+        from a real customer's own input) found zero matches against the
+        stored "E-Motion Trail 500" (a plain ASCII hyphen), even though
+        it's the same product.
         """
-        query = query.strip()
+        query = normalize_dashes(query.strip())
         normalized_sku = query.upper()
+        normalized_name = normalize_dashes_column(Product.name)
         conditions = [
-            func.lower(Product.name).like(f"%{query.lower()}%"),
+            func.lower(normalized_name).like(f"%{query.lower()}%"),
             func.upper(Product.sku) == normalized_sku,
         ]
         paren_match = _TRAILING_PAREN_RE.match(query)
         if paren_match:
             name_part, sku_part = paren_match.group(1).strip(), paren_match.group(2).strip()
             if name_part:
-                conditions.append(func.lower(Product.name).like(f"%{name_part.lower()}%"))
+                conditions.append(func.lower(normalized_name).like(f"%{name_part.lower()}%"))
             if sku_part:
                 conditions.append(func.upper(Product.sku) == sku_part.upper())
 
