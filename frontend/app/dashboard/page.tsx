@@ -58,7 +58,6 @@ export default function DashboardPage() {
   // timezone (app/application/business_group.py) — surfaced as a plain
   // 409 error below, not silently worked around.
   const [allBranches, setAllBranches] = useState(false);
-  const [sectionMenuOpen, setSectionMenuOpen] = useState(true);
 
   const [financial, setFinancial] = useState<FinancialPerformance | null>(null);
   const [retail, setRetail] = useState<RetailOperations | null>(null);
@@ -183,21 +182,10 @@ export default function DashboardPage() {
       <AppNav businessId={businessId} />
       <div className="dashboard-title-row">
         <h1>Dashboard</h1>
-        <button
-          className="dashboard-section-menu-toggle"
-          type="button"
-          aria-expanded={sectionMenuOpen}
-          aria-controls="dashboard-section-menu"
-          title="Toggle dashboard sections"
-          onClick={() => setSectionMenuOpen((open) => !open)}
-        >
-          <span aria-hidden="true">☰</span>
-          <span className="dashboard-section-menu-toggle__label">Sections</span>
-        </button>
       </div>
 
       <div className="dashboard-workspace">
-        <aside id="dashboard-section-menu" className={`dashboard-section-menu${sectionMenuOpen ? "" : " dashboard-section-menu--closed"}`}>
+        <aside id="dashboard-section-menu" className="dashboard-section-menu">
           <p>On this page</p>
           <nav aria-label="Dashboard sections">
             <a href="#financial">Financial performance</a>

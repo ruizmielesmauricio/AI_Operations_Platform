@@ -239,36 +239,11 @@ label {
 }
 
 .dashboard-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
   margin-top: 1.2rem;
 }
 
 .dashboard-title-row h1 {
   margin: 0;
-}
-
-.dashboard-section-menu-toggle {
-  display: inline-flex;
-  gap: 0.45rem;
-  align-items: center;
-  min-height: 32px;
-  padding: 0.32rem 0.55rem;
-  border-color: var(--app-border-strong);
-  background: var(--app-surface);
-  color: #34403a;
-  font-size: 0.82rem;
-}
-
-.dashboard-section-menu-toggle:hover:not(:disabled) {
-  background: var(--app-panel-soft);
-}
-
-.dashboard-section-menu-toggle span:first-child {
-  font-size: 1.15rem;
-  line-height: 1;
 }
 
 .dashboard-workspace {
@@ -286,10 +261,6 @@ label {
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--app-surface);
-}
-
-.dashboard-section-menu--closed {
-  display: none;
 }
 
 .dashboard-section-menu p {
@@ -980,7 +951,6 @@ button.notification-card__control:hover:not(:disabled) {
   .notification-card__controls { grid-column: 2; }
   .notifications-pagination { justify-content: space-between; }
   .dashboard-section-menu nav { grid-template-columns: 1fr; }
-  .dashboard-section-menu-toggle__label { display: none; }
   .threshold-guide { grid-template-columns: 1fr; }
 }
 
