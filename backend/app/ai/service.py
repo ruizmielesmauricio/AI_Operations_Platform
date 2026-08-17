@@ -587,7 +587,9 @@ def _build_part(
         return _Part(intent="metric_definition", resolved_answer=definition or _SAFE_FALLBACK)
 
     if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
-        context, early_result = _dispatch_lookup(db, business=business, intent=intent, classify=classify_item)
+        context, early_result = _dispatch_lookup(
+            db, business=business, intent=intent, classify=classify_item, question=question
+        )
         if early_result is not None:
             # early_result.intent is not always `intent` itself — a
             # product_lookup with no search_term at all comes back as
@@ -970,9 +972,27 @@ _LOOKUP_EXAMPLE_PHRASING = {
     "repair_lookup": "how much did the repair {label} cost",
 }
 
+# Live-reproduced real transcript: "what did I order under E-Motion
+# Trail 500 3 in my last order?" — the search term itself unambiguously
+# named one product with a real multi-order history (see LookupResult.
+# resolved_rows), and this phrasing is what actually narrows "give me
+# the whole history" down to "just the most recent one." Deterministic,
+# same reasoning as every other keyword net in this module — classify
+# already has enough to do extracting the search term itself.
+_LAST_ORDER_ONLY_KEYWORDS = (
+    "last order", "last time", "last purchase", "last delivery",
+    "most recent order", "most recent purchase", "most recent delivery",
+    "latest order", "latest purchase", "latest delivery",
+)
+
+
+def _looks_like_last_order_only_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _LAST_ORDER_ONLY_KEYWORDS)
+
 
 def _dispatch_lookup(
-    db: Session, *, business: Business, intent: str, classify: ClassifyResult
+    db: Session, *, business: Business, intent: str, classify: ClassifyResult, question: str
 ) -> tuple[dict | None, AnswerResult | None]:
     """Shared 0/1/many-match handling for the three per-record lookup
     intents. Returns (context, None) on exactly one match — the caller
@@ -998,6 +1018,22 @@ def _dispatch_lookup(
         )
     else:
         return None, AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
+
+    # Live-reproduced real bug, a different transcript from the
+    # match_labels one below: a search term can unambiguously identify
+    # ONE thing (a specific product, or a specific PO reference) that
+    # legitimately has more than one row to report — a product's full
+    # order history, or several line items under one PO. That's a
+    # complete multi-row answer, never routed through the 0/1/many
+    # disambiguation below at all (see LookupResult.resolved_rows's own
+    # docstring for the exact reported transcript this closes).
+    if result.resolved_rows is not None:
+        rows = result.resolved_rows
+        if intent == "purchase_lookup" and len(rows) > 1 and _looks_like_last_order_only_question(question):
+            rows = rows[:1]
+        if len(rows) == 1:
+            return rows[0], None
+        return {"matches": rows}, None
 
     # Live-reproduced real bug: find_purchases's own "search term matched
     # several products, which one?" branch (app/application/lookups.py)

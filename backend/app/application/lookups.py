@@ -25,12 +25,28 @@ from app.schemas.analytics import ProductDetailOut, PurchaseDetailOut, RepairDet
 class LookupResult:
     # Each already JSON-serializable (model_dump(mode="json")) — ready to
     # hand straight to the AI explain call as context, same as every
-    # other intent's fetched data.
+    # other intent's fetched data. Used when the search term itself is
+    # ambiguous about WHAT is being asked about (several different
+    # products/repairs matched a fuzzy name search) — one match per
+    # distinct candidate, genuinely needing "which one did you mean?".
     matches: list[dict] = field(default_factory=list)
     # Short human labels, one per match, used only for the deterministic
     # "found several matching X — which one?" disambiguation message
     # (app/ai/service.py) — never shown as the final answer itself.
     match_labels: list[str] = field(default_factory=list)
+    # Live-reproduced real bug: a search term can unambiguously identify
+    # ONE thing (a specific product, or a specific purchase reference)
+    # that legitimately has more than one row to report — a product's
+    # full order history, or several line items under one PO reference.
+    # That's a real, complete multi-row answer, not a menu of candidates
+    # to choose between, and must never be funneled through the
+    # `matches`/`match_labels` disambiguation flow above (a real
+    # transcript showed exactly this: "what did I order under
+    # E-Motion Trail 500 3?" — one clearly-named product, 5 real past
+    # orders — coming back as "I found several matching results... which
+    # one?" as if the product itself were unclear). Set only by
+    # find_purchases's own resolved-identity paths; None everywhere else.
+    resolved_rows: list[dict] | None = None
 
 
 def find_products(db: Session, *, business_id: uuid.UUID, query: str) -> LookupResult:
@@ -71,7 +87,7 @@ def find_purchases(
             business_id, purchase_reference=search_term, start=start_date, end=end_date
         )
         if by_reference:
-            return _purchases_to_result(db, business_id, by_reference)
+            return _purchases_to_resolved_result(db, business_id, by_reference)
 
         # No reference match — try resolving it as a product instead.
         # Multiple product matches is itself the ambiguity to surface
@@ -99,10 +115,19 @@ def find_purchases(
             return LookupResult()
 
     movements = movement_repo.list_purchases(business_id, product_id=product_id, start=start_date, end=end_date)
-    return _purchases_to_result(db, business_id, movements)
+    return _purchases_to_resolved_result(db, business_id, movements)
 
 
-def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[InventoryMovement]) -> LookupResult:
+def _purchases_to_resolved_result(db: Session, business_id: uuid.UUID, movements: list[InventoryMovement]) -> LookupResult:
+    """Both call sites above have already unambiguously resolved WHAT is
+    being asked about (one specific PO reference, or one specific
+    product) before reaching here — every row returned is a genuine part
+    of that one answer, in already-most-recent-first order (see
+    InventoryMovementRepository.list_purchases's own docstring), never a
+    set of competing candidates. Returned as `resolved_rows`, not
+    `matches`/`match_labels`, so app/ai/service.py::_dispatch_lookup
+    never mistakes "here is the order history" for "which one did you
+    mean?"."""
     if not movements:
         return LookupResult()
     # Same "load the whole catalogue once" pattern already used by
@@ -110,12 +135,11 @@ def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[In
     # handful of id->name lookups doesn't justify a per-row query.
     products_by_id = {p.id: p for p in ProductRepository(db).list_for_business(business_id)}
 
-    matches = []
-    labels = []
+    rows = []
     for movement in movements:
         product = products_by_id.get(movement.product_id)
         name = product.name if product else "Unknown product"
-        matches.append(
+        rows.append(
             PurchaseDetailOut(
                 product_id=movement.product_id,
                 product_name=name,
@@ -126,8 +150,7 @@ def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[In
                 unit_cost=movement.unit_cost,
             ).model_dump(mode="json")
         )
-        labels.append(f"{name}, {movement.event_date} ({movement.purchase_reference or 'no reference'})")
-    return LookupResult(matches=matches, match_labels=labels)
+    return LookupResult(resolved_rows=rows)
 
 
 def find_repairs(

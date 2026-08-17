@@ -416,6 +416,91 @@ def test_purchase_lookup_search_term_matching_several_products_asks_which_one_in
     assert db_session.query(AIRequest).count() == 1  # zero-cost, never reached the explain call
 
 
+def test_purchase_lookup_for_one_unambiguous_product_with_several_past_orders_answers_all_of_them(
+    db_session, business_id, monkeypatch
+):
+    # Live-reproduced real bug, a different transcript from the one
+    # above: "what did I order under E-Motion Trail 500 3?" named ONE
+    # product with zero ambiguity (unlike the "500"/"500 2"/"500 3" case
+    # above) — the product just happens to have several real past
+    # orders. That's a complete multi-row answer, not a "which one did
+    # you mean" situation; it used to be misreported as exactly that
+    # disambiguation, listing the same product 5 times with no way to
+    # actually get an answer out of it.
+    product = ProductRepository(db_session).create(
+        business_id=business_id, sku="EM-500-3", name="E-Motion Trail 500 3", cost_price=None, sell_price=None
+    )
+    db_session.commit()
+    movement_repo = InventoryMovementRepository(db_session)
+    for i, order_date in enumerate([date(2026, 2, 25), date(2026, 3, 10), date(2026, 5, 18)]):
+        movement_repo.create(
+            business_id=business_id, product_id=product.id, quantity_delta=2 + i, reason="purchase",
+            purchase_reference=f"PO-2026-{i:03d}", event_date=order_date,
+        )
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("purchase_lookup", search_term="E-Motion Trail 500 3")
+        return _canned_response("You ordered E-Motion Trail 500 3 three times: on 2026-02-25, 2026-03-10, and 2026-05-18.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What did I order under E-Motion Trail 500 3?", now=_NOW,
+    )
+
+    assert result.intent == "purchase_lookup"
+    assert "found several matching results" not in result.answer
+    assert "which one" not in result.answer.lower()
+    assert result.grounded is True
+    assert db_session.query(AIRequest).count() == 2  # classify + explain — a real multi-row answer, not zero-cost
+
+
+def test_purchase_lookup_last_order_phrasing_narrows_a_multi_order_history_to_just_the_most_recent(
+    db_session, business_id, monkeypatch
+):
+    # Same real transcript, the direct follow-up: "...in my last order?"
+    # — should narrow the same 3-order history down to just the most
+    # recent row (2026-05-18), not repeat the full history.
+    product = ProductRepository(db_session).create(
+        business_id=business_id, sku="EM-500-3", name="E-Motion Trail 500 3", cost_price=None, sell_price=None
+    )
+    db_session.commit()
+    movement_repo = InventoryMovementRepository(db_session)
+    for i, order_date in enumerate([date(2026, 2, 25), date(2026, 3, 10), date(2026, 5, 18)]):
+        movement_repo.create(
+            business_id=business_id, product_id=product.id, quantity_delta=2 + i, reason="purchase",
+            purchase_reference=f"PO-2026-{i:03d}", event_date=order_date,
+        )
+    db_session.commit()
+
+    captured_context: dict = {}
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("purchase_lookup", search_term="E-Motion Trail 500 3")
+        captured_context["system_prompt"] = messages[0]["content"]
+        return _canned_response("Your last order of E-Motion Trail 500 3 was on 2026-05-18.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What did I order under E-Motion Trail 500 3 in my last order?", now=_NOW,
+    )
+
+    assert result.intent == "purchase_lookup"
+    assert result.grounded is True
+    # Only the single most-recent row's PO reference should have reached
+    # the explain call — the two older orders were narrowed out before
+    # the model ever saw them.
+    assert "PO-2026-002" in captured_context["system_prompt"]  # 2026-05-18, i=2
+    assert "PO-2026-000" not in captured_context["system_prompt"]  # 2026-02-25, i=0
+    assert "PO-2026-001" not in captured_context["system_prompt"]  # 2026-03-10, i=1
+
+
 def test_purchase_history_question_recovers_and_reaches_the_explain_call(db_session, business_id, monkeypatch):
     cheap = ProductRepository(db_session).create(
         business_id=business_id, sku="CH-1", name="Cheap Chain", cost_price=Decimal("2.00"), sell_price=None
