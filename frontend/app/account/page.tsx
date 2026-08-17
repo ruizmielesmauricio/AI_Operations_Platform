@@ -40,6 +40,13 @@ export default function AccountPage() {
   const isOwner = businesses.some((b) => b.role === "owner");
 
   const [currentEmail, setCurrentEmail] = useState<string | null>(null);
+  // Whether this account actually has a password credential at all —
+  // Google-only accounts (frontend/app/login/page.tsx's own OAuth path)
+  // have none, and asking them to reauthenticate with a password they've
+  // never set would be a dead end, not real security. Read from
+  // Supabase's own `identities` array rather than assumed.
+  const [hasPasswordIdentity, setHasPasswordIdentity] = useState<boolean | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -48,8 +55,40 @@ export default function AccountPage() {
 
   useEffect(() => {
     if (!session || !supabase) return;
-    supabase.auth.getUser().then(({ data }) => setCurrentEmail(data.user?.email ?? null));
+    supabase.auth.getUser().then(({ data }) => {
+      setCurrentEmail(data.user?.email ?? null);
+      setHasPasswordIdentity((data.user?.identities ?? []).some((identity) => identity.provider === "email"));
+    });
   }, [session]);
+
+  // Direct request: reauthenticate with the current password before a
+  // sensitive account change like this proceeds — the session cookie
+  // alone (which could be a while-you-were-away browser tab, or a
+  // shared/borrowed device) shouldn't be enough on its own to redirect
+  // where the account's own login mail goes. Supabase has no separate
+  // "verify this password without disturbing the session" call — the
+  // standard, documented pattern is the same `signInWithPassword` the
+  // login page itself already uses, which simply fails (without
+  // otherwise changing anything) if the password is wrong.
+  async function reauthenticate(): Promise<boolean> {
+    if (!currentEmail) {
+      setError("Could not confirm your account email — try reloading the page.");
+      return false;
+    }
+    if (!currentPassword) {
+      setError("Enter your current password to confirm this change");
+      return false;
+    }
+    const { error: authError } = await requireSupabase().auth.signInWithPassword({
+      email: currentEmail,
+      password: currentPassword,
+    });
+    if (authError) {
+      setError("Current password is incorrect");
+      return false;
+    }
+    return true;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -65,12 +104,16 @@ export default function AccountPage() {
     }
     setSubmitting(true);
     try {
+      if (hasPasswordIdentity && !(await reauthenticate())) {
+        return;
+      }
       const { error: updateError } = await requireSupabase().auth.updateUser({ email: newEmail });
       if (updateError) {
         setError(updateError.message);
         return;
       }
       setConfirmationSent(true);
+      setCurrentPassword("");
       setNewEmail("");
       setConfirmEmail("");
     } catch (err) {
@@ -141,6 +184,24 @@ export default function AccountPage() {
               onChange={(e) => setConfirmEmail(e.target.value)}
             />
           </div>
+          {hasPasswordIdentity && (
+            <div>
+              <label htmlFor="currentPassword">Current password (to confirm this change)</label>
+              <br />
+              <input
+                id="currentPassword"
+                type="password"
+                required
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+              />
+            </div>
+          )}
+          {hasPasswordIdentity === false && (
+            <p className="hint">
+              This account signs in with Google, not a password — no reauthentication step is needed here.
+            </p>
+          )}
           {error && <p className="status-error">{error}</p>}
           <button type="submit" disabled={submitting}>
             {submitting ? "Sending confirmation…" : "Change email"}
