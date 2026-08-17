@@ -35,6 +35,18 @@ class BusinessOut(BaseModel):
     city: str | None = None
     postal_code: str | None = None
     country: str | None = None
+    # True once a logo has been uploaded (Business.logo_content_type is
+    # non-null) — tells the frontend whether to render the
+    # GET /businesses/{id}/logo <img> at all, rather than guaranteeing a
+    # 404 request for every logo-less business.
+    has_logo: bool = False
+    # Frontend cache-buster for the logo <img> src (?v=updated_at) — a
+    # re-upload overwrites the same R2 key/URL, so without this the
+    # browser would keep showing the old cached image. Reused rather than
+    # adding a dedicated logo-uploaded-at column: any profile field's
+    # onupdate already bumps it, and a logo upload/delete is itself a
+    # profile write.
+    updated_at: datetime
     # Only ever non-null when the caller opted into GET /businesses?
     # include_deleted=true (frontend/app/onboarding/page.tsx's "Company
     # Profile" list, which shows every business including archived ones

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, apiGet, apiPatch } from "@/lib/api/client";
+import { API_URL, ApiError, apiDelete, apiGet, apiPatch, apiPostFile } from "@/lib/api/client";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -49,6 +49,102 @@ function statusLabel(business: Business, subscriptionStatus: string | null): str
   if (subscriptionStatus === "active") return "Subscribed";
   if (subscriptionStatus === "canceled") return "Cancelled";
   return "Pending Payment";
+}
+
+// Company logo (direct request) — POST/GET/DELETE /businesses/{id}/logo
+// (backend/app/api/businesses.py). GET is deliberately public (confirmed
+// with the user: a shop logo isn't sensitive like sales/financial data),
+// so the preview below is a plain <img src>, not an authenticated fetch —
+// the only place in this frontend that talks to the API without going
+// through lib/api/client.ts's auth-header wrapper. The ?v= cache-buster
+// is the business row's own `updated_at` — a re-upload overwrites the
+// same R2 key/URL, so without it the browser would keep showing a
+// cached copy of the old logo after a replace.
+function LogoSection({
+  business,
+  canEdit,
+  onBusinessUpdate,
+}: {
+  business: Business;
+  canEdit: boolean;
+  onBusinessUpdate: (business: Business) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // lets the same file be re-selected after an error
+    if (!file) return;
+    setError(null);
+    setUploading(true);
+    try {
+      const updated = await apiPostFile<Business>(`/businesses/${business.id}/logo`, file);
+      onBusinessUpdate(updated);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not upload the logo. Is the backend running?");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRemove() {
+    setError(null);
+    setUploading(true);
+    try {
+      await apiDelete(`/businesses/${business.id}/logo`);
+      onBusinessUpdate({ ...business, has_logo: false });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not remove the logo. Is the backend running?");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <section>
+      <h2>Company logo</h2>
+      {business.has_logo ? (
+        <p>
+          {/* eslint-disable-next-line @next/next/no-img-element -- deliberately a
+              plain <img>, not next/image: this is a public, unauthenticated
+              URL on our own API, not a Next.js-optimizable local/remote asset. */}
+          <img
+            src={`${API_URL}/businesses/${business.id}/logo?v=${encodeURIComponent(business.updated_at)}`}
+            alt={`${business.name} logo`}
+            style={{ maxWidth: "200px", maxHeight: "200px", display: "block" }}
+          />
+        </p>
+      ) : (
+        <p className="hint">No logo uploaded yet.</p>
+      )}
+      {canEdit ? (
+        <>
+          <label htmlFor="logo-upload">{business.has_logo ? "Replace logo" : "Upload logo"}</label>
+          <br />
+          <input
+            id="logo-upload"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={handleFileChange}
+            disabled={uploading}
+          />
+          {business.has_logo && (
+            <>
+              {" "}
+              <button type="button" onClick={handleRemove} disabled={uploading}>
+                Remove logo
+              </button>
+            </>
+          )}
+          {error && <p className="status-error">{error}</p>}
+          {uploading && <p className="hint">Working…</p>}
+        </>
+      ) : (
+        <p className="hint">Only the shop&apos;s owner can change the company logo.</p>
+      )}
+    </section>
+  );
 }
 
 export default function BusinessProfilePage() {
@@ -183,6 +279,8 @@ export default function BusinessProfilePage() {
         <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
         {business.parent_business_id && " — Branch"}
       </p>
+
+      <LogoSection business={business} canEdit={canEdit} onBusinessUpdate={setBusiness} />
 
       {!canEdit && (
         // Read-only for staff/manager (Company Profile permissions

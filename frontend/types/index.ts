@@ -20,6 +20,13 @@ export interface Business {
   city: string | null;
   postal_code: string | null;
   country: string | null;
+  // True once a logo has been uploaded via POST /businesses/{id}/logo —
+  // tells the profile page whether to render the logo <img> at all.
+  has_logo: boolean;
+  // Used as the ?v= cache-buster on the logo <img> src so a re-upload
+  // (same URL, overwritten R2 object) actually refetches instead of
+  // showing a browser-cached copy of the old logo.
+  updated_at: string;
   // Only ever populated when fetched via GET /businesses?include_deleted=
   // true (the Company Profile list) — every other fetch never sees a
   // deleted business at all, so this stays null there.

@@ -55,3 +55,12 @@ class Business(Base, PKMixin, TimestampMixin):
     city: Mapped[str | None] = mapped_column(String(128), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     country: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Doubles as the "has a logo at all" flag (NULL = none) and lets
+    # GET /businesses/{id}/logo serve the right Content-Type without
+    # sniffing or a second stored key/extension column — the R2 object
+    # key is always deterministic (logos/{business_id}/logo, computed on
+    # the fly in app/api/businesses.py, never stored), so a re-upload
+    # just overwrites it and there's never an orphaned old logo to clean
+    # up.
+    logo_content_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

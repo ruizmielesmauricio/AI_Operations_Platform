@@ -1,6 +1,12 @@
 import { getAccessToken, supabase } from "@/lib/supabase/client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Exported (rather than kept module-private, as every other call site
+// here stays) specifically for the one deliberately-public route,
+// GET /businesses/{id}/logo (app/api/businesses.py) — a plain <img> tag
+// builds that URL directly since it can't send the Authorization header
+// every apiGet/apiPost call attaches, so it needs the same base URL
+// this module resolves rather than a second hardcoded copy of it.
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 /**
  * All backend calls go through this module — components never construct a
@@ -92,6 +98,25 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     cache: "no-store",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    await throwApiError(response, path);
+  }
+  return response.json() as Promise<T>;
+}
+
+// Multipart file upload (company logo — app/api/businesses.py::
+// upload_logo) — deliberately no explicit Content-Type header: the
+// browser sets the multipart boundary itself when the body is a
+// FormData, and setting it manually would drop that boundary.
+export async function apiPostFile<T>(path: string, file: File): Promise<T> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: await authHeaders(),
+    body: formData,
   });
   if (!response.ok) {
     await throwApiError(response, path);
