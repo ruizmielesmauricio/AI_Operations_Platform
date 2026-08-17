@@ -297,6 +297,45 @@ def test_purchase_lookup_with_no_match_is_a_deterministic_zero_cost_answer(db_se
     assert db_session.query(AIRequest).count() == 1
 
 
+def test_purchase_lookup_with_no_product_or_reference_match_never_leaks_unrelated_purchases(
+    db_session, business_id, monkeypatch
+):
+    # Live-reproduced real bug: with an empty business, the existing
+    # "no match" test above passed for the wrong reason — there was
+    # nothing in the business at all for a broken fallback to leak. Here,
+    # a real unrelated product/purchase exists, and the search term
+    # ("E-Motion Trail 500") matches neither a purchase reference nor any
+    # real product — this must still come back as a clean "not found,"
+    # never silently fall through to an unscoped list of whatever else
+    # was purchased (previously mislabelled as a "found several matching
+    # results" disambiguation for products that were never a match at
+    # all).
+    product = ProductRepository(db_session).create(
+        business_id=business_id, sku="CL-100", name="Chain Lube", cost_price=None, sell_price=None
+    )
+    db_session.commit()
+    InventoryMovementRepository(db_session).create(
+        business_id=business_id, product_id=product.id, quantity_delta=6, reason="purchase",
+        purchase_reference="PO-CHAINLUBE", event_date=date(2026, 1, 2),
+    )
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("purchase_lookup", search_term="E-Motion Trail 500")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="How many E-Motion Trail 500 did I order last time?", now=_NOW,
+    )
+
+    assert result.intent == "purchase_lookup"
+    assert "couldn't find" in result.answer
+    assert "Chain Lube" not in result.answer
+    assert db_session.query(AIRequest).count() == 1  # never reached the explain call
+
+
 def test_purchase_history_question_recovers_and_reaches_the_explain_call(db_session, business_id, monkeypatch):
     cheap = ProductRepository(db_session).create(
         business_id=business_id, sku="CH-1", name="Cheap Chain", cost_price=Decimal("2.00"), sell_price=None

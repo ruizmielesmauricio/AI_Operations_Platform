@@ -82,9 +82,21 @@ def find_purchases(
             return LookupResult(match_labels=labels)
         if len(products) == 1:
             product_id = products[0].id
-        # Zero product matches either — fall through to a plain
-        # date-range search below (still useful if a date was given;
-        # otherwise correctly comes back empty).
+        else:
+            # Live-reproduced real bug: zero product matches used to fall
+            # through to the plain date-range call below with
+            # product_id=None — but InventoryMovementRepository.
+            # list_purchases treats product_id=None as "no product
+            # filter", not "match nothing", so a search term that matched
+            # nothing at all (e.g. "E-Motion Trail 500" for a product
+            # that doesn't exist) silently returned the 10 most recent
+            # purchases business-wide, mislabelled as a "found several
+            # matching results — which one?" disambiguation for products
+            # that were never actually a match. A named search term that
+            # resolves to nothing is genuinely nothing to show — never
+            # broaden into an unscoped browse the way a bare, no-
+            # search-term question legitimately does below.
+            return LookupResult()
 
     movements = movement_repo.list_purchases(business_id, product_id=product_id, start=start_date, end=end_date)
     return _purchases_to_result(db, business_id, movements)
