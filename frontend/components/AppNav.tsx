@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GlobalSearchBar } from "@/components/GlobalSearchBar";
-import { apiGet } from "@/lib/api/client";
+import { API_URL, apiGet } from "@/lib/api/client";
 import { useCurrentMember } from "@/lib/hooks/useCurrentMember";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
-import type { SubscriptionStatus, SystemStatus } from "@/types";
+import type { Business, SubscriptionStatus, SystemStatus } from "@/types";
 
 /**
  * The first shared nav in this frontend — everything up to now
@@ -28,6 +28,15 @@ export function AppNav({ businessId }: { businessId?: string }) {
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  // The uploaded company logo (Company Profile "Company logo" section) —
+  // shown here too so it's actually visible somewhere besides the one
+  // settings page it's uploaded from, per direct feedback. `has_logo` +
+  // `updated_at` come off the same GET /businesses/{id} every profile
+  // page already calls; `updated_at` doubles as the <img> cache-buster
+  // (see frontend/app/onboarding/[id]/page.tsx's identical pattern) so a
+  // logo replaced from the profile page doesn't keep showing the old
+  // cached image here.
+  const [logoInfo, setLogoInfo] = useState<{ hasLogo: boolean; version: string } | null>(null);
   // The signed-in member is resolved from the business's existing
   // membership list, rather than guessing from a name in Supabase metadata.
   // That keeps the role accurate for both owners and staff on every page.
@@ -50,6 +59,16 @@ export function AppNav({ businessId }: { businessId?: string }) {
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
       .then((s) => setSubscriptionStatus(s.status))
       .catch(() => setSubscriptionStatus(null));
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) {
+      setLogoInfo(null);
+      return;
+    }
+    apiGet<Business>(`/businesses/${businessId}`)
+      .then((b) => setLogoInfo({ hasLogo: b.has_logo, version: b.updated_at }))
+      .catch(() => setLogoInfo(null));
   }, [businessId]);
 
   // Notification Centre's unread badge — a lightweight poll (not a
@@ -135,6 +154,25 @@ export function AppNav({ businessId }: { businessId?: string }) {
       )}
       <nav className="app-nav" aria-label="Main navigation">
         <a className="app-nav__brand" href={`/dashboard${suffix}`} aria-label="ORLA dashboard">
+          {/* The signed-in shop's own logo (Company Profile "Company logo"
+              section) — shown here, not just on that one settings page,
+              per direct feedback that uploading it had no visible effect
+              anywhere. GET .../logo is public (see app/api/businesses.py),
+              so this is a plain <img>, same as the profile page's own
+              preview; the ?v= cache-buster is the business row's
+              `updated_at` so a replaced logo doesn't keep showing the old
+              cached image here either. */}
+          {businessId && logoInfo?.hasLogo && (
+            // eslint-disable-next-line @next/next/no-img-element -- deliberately a
+            // plain <img>, not next/image: a public URL on our own API, not a
+            // Next.js-optimizable local/remote asset.
+            <img
+              src={`${API_URL}/businesses/${businessId}/logo?v=${encodeURIComponent(logoInfo.version)}`}
+              alt=""
+              aria-hidden="true"
+              className="app-nav__business-logo"
+            />
+          )}
           <span className="app-nav__brand-mark" aria-hidden="true">OR</span>
           <span>ORLA</span>
         </a>
