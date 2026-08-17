@@ -18,6 +18,12 @@ import type { Business } from "@/types";
 export function useBusinessSelector(session: unknown) {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [businessId, setBusinessId] = useState<string>("");
+  // False until the first fetch settles (success or failure) — added for
+  // frontend/app/welcome/page.tsx, which redirects when `businesses` is
+  // empty and needs to tell "still loading" apart from "genuinely zero
+  // businesses" to avoid a flash-redirect for an account that does have
+  // one. Every existing caller ignores this field, so it's additive only.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -28,8 +34,9 @@ export function useBusinessSelector(session: unknown) {
         const preselect = rows.find((b) => b.id === requested)?.id;
         setBusinessId((current) => current || preselect || rows[0]?.id || "");
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setLoaded(true));
   }, [session]);
 
-  return { businesses, businessId, setBusinessId };
+  return { businesses, businessId, setBusinessId, loaded };
 }
