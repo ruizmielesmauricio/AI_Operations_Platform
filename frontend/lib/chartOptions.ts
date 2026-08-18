@@ -11,17 +11,33 @@ function _labelWithCategory(name: string, categoryName: string | null | undefine
   return categoryName ? `${name} (${categoryName})` : name;
 }
 
+function _formatMoneyLabel(value: number): string {
+  const rounded = Math.round(value);
+  return `${value < 0 ? "-" : ""}€${Math.abs(rounded).toLocaleString()}`;
+}
+
+function _formatDaysLabel(value: number): string {
+  return `${Math.round(value)}d`;
+}
+
 export function marginBarOption(rows: ProductMarginRow[], title: string): EChartsOption {
   const sorted = [...rows].sort((a, b) => Number(a.gross_profit) - Number(b.gross_profit));
   return {
     title: { text: title, textStyle: { fontSize: 13 } },
-    grid: { left: 140, right: 30, top: 40, bottom: 20 },
+    grid: { left: 140, right: 76, top: 40, bottom: 20 },
     tooltip: { trigger: "axis" },
     xAxis: { type: "value" },
     yAxis: { type: "category", data: sorted.map((r) => _labelWithCategory(r.name, r.category_name)) },
     series: [
       {
         type: "bar",
+        label: {
+          show: true,
+          position: "right",
+          formatter: ({ value }) => _formatMoneyLabel(Number(value)),
+          color: "#34403a",
+          fontSize: 11,
+        },
         data: sorted.map((r) => {
           const value = Number(r.gross_profit);
           return { value, itemStyle: { color: value < 0 ? "#cf222e" : "#1a7f37" } };
@@ -34,14 +50,42 @@ export function marginBarOption(rows: ProductMarginRow[], title: string): EChart
 export function revenueForecastLineOption(daily: DailyForecast[]): EChartsOption {
   const dates = daily.map((d) => d.forecast_date);
   return {
-    grid: { left: 70, right: 30, top: 20, bottom: 30 },
+    grid: { left: 70, right: 42, top: 34, bottom: 30 },
     tooltip: { trigger: "axis" },
     xAxis: { type: "category", data: dates },
     yAxis: { type: "value", name: "€" },
     series: [
-      { name: "Typical low", type: "line", data: daily.map((d) => Number(d.low)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
-      { name: "Forecast", type: "line", data: daily.map((d) => Number(d.point)), lineStyle: { color: "#0969da", width: 2 }, symbol: "circle" },
-      { name: "Typical high", type: "line", data: daily.map((d) => Number(d.high)), lineStyle: { type: "dashed", color: "#8c959f" }, symbol: "none" },
+      {
+        name: "Typical low",
+        type: "line",
+        data: daily.map((d) => Number(d.low)),
+        lineStyle: { type: "dashed", color: "#8c959f" },
+        symbol: "circle",
+        symbolSize: 5,
+      },
+      {
+        name: "Forecast",
+        type: "line",
+        data: daily.map((d) => Number(d.point)),
+        lineStyle: { color: "#0969da", width: 2 },
+        symbol: "circle",
+        symbolSize: 7,
+        label: {
+          show: true,
+          position: "top",
+          formatter: ({ value }) => _formatMoneyLabel(Number(value)),
+          color: "#34403a",
+          fontSize: 11,
+        },
+      },
+      {
+        name: "Typical high",
+        type: "line",
+        data: daily.map((d) => Number(d.high)),
+        lineStyle: { type: "dashed", color: "#8c959f" },
+        symbol: "circle",
+        symbolSize: 5,
+      },
     ],
   };
 }
@@ -51,13 +95,20 @@ export function stockCoverBarOption(rows: StockCoverRow[]): EChartsOption {
     .sort((a, b) => Number(a.cover_days) - Number(b.cover_days))
     .slice(0, 15);
   return {
-    grid: { left: 140, right: 30, top: 20, bottom: 20 },
+    grid: { left: 140, right: 64, top: 20, bottom: 20 },
     tooltip: { trigger: "axis" },
     xAxis: { type: "value", name: "Days of stock left" },
     yAxis: { type: "category", data: sorted.map((r) => _labelWithCategory(r.name, r.category_name)) },
     series: [
       {
         type: "bar",
+        label: {
+          show: true,
+          position: "right",
+          formatter: ({ value }) => _formatDaysLabel(Number(value)),
+          color: "#34403a",
+          fontSize: 11,
+        },
         data: sorted.map((r) => {
           const value = Number(r.cover_days);
           return { value, itemStyle: { color: value <= 7 ? "#cf222e" : "#0969da" } };

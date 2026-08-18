@@ -3,8 +3,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.geocoding.service import resolve_and_persist_coordinates
 from app.models.business import Business
 from app.models.membership import Membership
+
+# A change to any of these is worth re-geocoding for — unrelated profile
+# edits (manager name, phone, timezone) shouldn't trigger a provider call
+# that has nothing to do with what changed.
+_ADDRESS_FIELDS = frozenset({"address_line1", "city", "postal_code", "country"})
 
 
 class BusinessLimitReached(Exception):
@@ -207,6 +213,12 @@ def update_business_profile(db: Session, *, business: Business, updates: dict) -
         if field not in _PROFILE_FIELDS:
             continue
         setattr(business, field, value)
+    if _ADDRESS_FIELDS & updates.keys():
+        # Never raises, never blocks the save — a business with no
+        # address yet, or with geocoding not configured/failing, just
+        # keeps latitude/longitude at NULL (see
+        # app/geocoding/service.py::resolve_and_persist_coordinates).
+        resolve_and_persist_coordinates(business)
     db.commit()
     db.refresh(business)
     return business

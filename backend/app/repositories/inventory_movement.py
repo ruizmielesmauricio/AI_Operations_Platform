@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.analytics.types import ProductPurchaseCostAggregate
 from app.models.inventory_movement import InventoryMovement
 from app.models.product import Product
+from app.text_normalize import normalize_dashes, normalize_dashes_column
 from app.models.supplier import Supplier
 
 _STOCK_AFFECTING_REASONS = ("sale", "purchase", "return", "production_consumption", "production_output")
@@ -178,8 +179,15 @@ class InventoryMovementRepository:
         if product_id is not None:
             conditions.append(InventoryMovement.product_id == product_id)
         if purchase_reference is not None:
-            needle = purchase_reference.strip().upper()
-            conditions.append(func.upper(InventoryMovement.purchase_reference).like(f"%{needle}%"))
+            # Dash/hyphen-normalized on both sides — same real bug class
+            # as ProductRepository.search_by_name_or_sku (see
+            # app/text_normalize.py): a PO reference typed or pasted
+            # with a non-ASCII dash shouldn't silently fail to match a
+            # reference stored with a plain one.
+            needle = normalize_dashes(purchase_reference.strip().upper())
+            conditions.append(
+                func.upper(normalize_dashes_column(InventoryMovement.purchase_reference)).like(f"%{needle}%")
+            )
         if start is not None:
             conditions.append(InventoryMovement.event_date >= start)
         if end is not None:
@@ -390,3 +398,28 @@ class InventoryMovementRepository:
             base.order_by(InventoryMovement.event_date.desc(), InventoryMovement.id.desc()).limit(limit).offset(offset)
         ).all()
         return [(movement, product, supplier) for movement, product, supplier in rows], total
+
+    def list_purchases_by_unit_cost(
+        self,
+        business_id: uuid.UUID,
+        *,
+        limit: int = 10,
+    ) -> list[tuple[InventoryMovement, Product | None, Supplier | None]]:
+        """Most expensive purchase rows by recorded per-unit cost.
+        This backs ORLA list-style purchase-history questions such as
+        "what were the most expensive things I ordered by unit?" Unit
+        cost can be null on older imports, so those rows are excluded
+        rather than treated as free/zero-cost purchases."""
+        rows = self.session.execute(
+            select(InventoryMovement, Product, Supplier)
+            .outerjoin(Product, Product.id == InventoryMovement.product_id)
+            .outerjoin(Supplier, Supplier.id == InventoryMovement.supplier_id)
+            .where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.reason == "purchase",
+                InventoryMovement.unit_cost.isnot(None),
+            )
+            .order_by(InventoryMovement.unit_cost.desc(), InventoryMovement.event_date.desc(), InventoryMovement.id.desc())
+            .limit(limit)
+        ).all()
+        return [(movement, product, supplier) for movement, product, supplier in rows]

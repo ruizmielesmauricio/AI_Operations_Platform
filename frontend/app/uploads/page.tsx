@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiGet, apiPost } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { redirectToCheckout } from "@/lib/billing";
 import { AppNav } from "@/components/AppNav";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -569,6 +570,34 @@ export default function UploadsPage() {
       />
       <h1>Upload data</h1>
 
+      <section className="upload-guidance" aria-label="Recommended first upload">
+        <div>
+          <h2>First time here?</h2>
+          <p>
+            For more accurate results, start with a full year of demand data, then add current stock and recent
+            replenishment history.
+          </p>
+        </div>
+        <dl>
+          <div>
+            <dt>Sales</dt>
+            <dd>Last 12 months</dd>
+          </div>
+          <div>
+            <dt>Service / workshop activity</dt>
+            <dd>Last 12 months, if the business has service, repair, or workshop revenue</dd>
+          </div>
+          <div>
+            <dt>Current stock / inventory</dt>
+            <dd>Latest stock-on-hand file</dd>
+          </div>
+          <div>
+            <dt>Purchases / orders / restocks</dt>
+            <dd>Ideally the last 3-12 months</dd>
+          </div>
+        </dl>
+      </section>
+
       {subscriptionRequired && (
         <p className="status-error">
           This shop&apos;s subscription isn&apos;t active, so uploads and imports are paused.{" "}
@@ -603,7 +632,7 @@ export default function UploadsPage() {
           <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
             {subscribedBusinesses.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.name}
+                {businessDisplayLabel(b)}
               </option>
             ))}
           </select>

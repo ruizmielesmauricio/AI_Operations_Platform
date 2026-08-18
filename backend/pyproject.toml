@@ -30,6 +30,12 @@ dependencies = [
     # so no Docker image changes needed.
     "reportlab>=4.2",
     "python-docx>=1.1",
+    # Required by FastAPI/Starlette to parse multipart/form-data bodies —
+    # the company-logo upload route (app/api/businesses.py::upload_logo)
+    # is this app's first UploadFile route; every prior file upload
+    # (imports) used a presigned R2 PUT URL instead, so this was never
+    # needed before.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

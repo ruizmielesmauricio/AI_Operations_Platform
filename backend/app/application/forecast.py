@@ -65,6 +65,12 @@ class ProductDemandForecast:
     # None when the product has no category set — same convention as
     # app/analytics/retail.py's DeadStockEntry.category_name.
     category_name: str | None = None
+    # Populated only by the all-branches/group forecast path. Single-
+    # business forecasts already know their scope from the route/page,
+    # but combined rows need to retain their origin so ORLA can split
+    # reorder answers back out by branch without guessing from names.
+    business_id: uuid.UUID | None = None
+    business_name: str | None = None
 
 
 @dataclass(frozen=True)

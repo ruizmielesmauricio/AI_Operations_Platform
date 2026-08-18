@@ -24,6 +24,9 @@ def chat(
         db, business_id=membership.business_id, user_id=membership.user_id, question=body.question,
         all_branches=body.all_branches,
         previous_question=body.previous_question, previous_answer=body.previous_answer,
-        previous_intent=body.previous_intent,
+        previous_intent=body.previous_intent, previous_intents=body.previous_intents,
     )
-    return ChatResponse(answer=result.answer, intent=result.intent, grounded=result.grounded, links=list(result.links))
+    return ChatResponse(
+        answer=result.answer, intent=result.intent, grounded=result.grounded, links=list(result.links),
+        intents=list(result.intents),
+    )

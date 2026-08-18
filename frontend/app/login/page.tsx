@@ -22,7 +22,7 @@ export default function LoginPage() {
         setError(loginError.message);
         return;
       }
-      router.push("/onboarding");
+      router.push("/welcome");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -35,7 +35,7 @@ export default function LoginPage() {
     const { error: oauthError } = await requireSupabase().auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/onboarding`,
+        redirectTo: `${window.location.origin}/welcome`,
         // Forces Google's account-chooser screen instead of silently
         // re-authenticating through whatever Google session is already
         // live in the browser. The app has no way to end that Google

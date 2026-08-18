@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.analytics.types import RepairPeriodTotals
 from app.models.production_event import ProductionEvent
+from app.text_normalize import normalize_dashes, normalize_dashes_column
 
 _SEARCH_LIMIT = 5
 
@@ -150,11 +151,16 @@ class ProductionEventRepository:
         """
         conditions = [ProductionEvent.business_id == business_id, ProductionEvent.event_type == "repair"]
         if repair_reference is not None:
-            needle = repair_reference.strip().upper()
-            conditions.append(func.upper(ProductionEvent.repair_reference).like(f"%{needle}%"))
+            # Dash/hyphen-normalized on both sides — same real bug class
+            # as ProductRepository.search_by_name_or_sku (see
+            # app/text_normalize.py).
+            needle = normalize_dashes(repair_reference.strip().upper())
+            conditions.append(
+                func.upper(normalize_dashes_column(ProductionEvent.repair_reference)).like(f"%{needle}%")
+            )
         if description_contains is not None:
-            needle = description_contains.strip().lower()
-            conditions.append(func.lower(ProductionEvent.description).like(f"%{needle}%"))
+            needle = normalize_dashes(description_contains.strip().lower())
+            conditions.append(func.lower(normalize_dashes_column(ProductionEvent.description)).like(f"%{needle}%"))
         if start is not None:
             conditions.append(ProductionEvent.opened_at >= start)
         if end is not None:

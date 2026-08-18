@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, PKMixin, TimestampMixin
@@ -55,3 +56,22 @@ class Business(Base, PKMixin, TimestampMixin):
     city: Mapped[str | None] = mapped_column(String(128), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     country: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Doubles as the "has a logo at all" flag (NULL = none) and lets
+    # GET /businesses/{id}/logo serve the right Content-Type without
+    # sniffing or a second stored key/extension column — the R2 object
+    # key is always deterministic (logos/{business_id}/logo, computed on
+    # the fly in app/api/businesses.py, never stored), so a re-upload
+    # just overwrites it and there's never an orphaned old logo to clean
+    # up.
+    logo_content_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Resolved lazily via the existing geocoding client (app/geocoding/)
+    # when a full address is present — see app/geocoding/service.py's
+    # resolve_and_persist_coordinates. Degrades to NULL like every other
+    # "not configured"/"not yet resolved" gap in this schema (Geoapify
+    # itself is optional) rather than blocking anything. Needed so
+    # app/application/weather_ingestion.py can look a business's
+    # coordinates up without re-geocoding on every scheduler tick.
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)

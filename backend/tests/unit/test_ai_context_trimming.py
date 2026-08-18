@@ -4,7 +4,11 @@ from app.ai.service import (
     _MAX_PRIORITY_LIST_DISPLAY,
     _append_truncation_disclosure,
     _build_priority_order_list,
+    _looks_like_aggregate_follow_up_question,
+    _looks_like_all_branches_question,
+    _looks_like_branch_split_question,
     _looks_like_a_period_follow_up_question,
+    _looks_like_purchase_history_question,
     _looks_like_a_reorder_question,
     _trim_findings,
     _trim_forecast,
@@ -117,6 +121,26 @@ def test_looks_like_a_reorder_question_matches_run_out_of_stock_phrasings():
     assert _looks_like_a_reorder_question("Is anything close to a stockout?") is True
 
 
+def test_looks_like_purchase_history_question_matches_expected_phrasings():
+    assert _looks_like_purchase_history_question("When were my last orders placed?") is True
+    assert _looks_like_purchase_history_question("What were the most expensive things I ordered by unit?") is True
+    assert _looks_like_purchase_history_question("Show my recent purchases") is True
+    assert _looks_like_purchase_history_question("What should I reorder?") is False
+
+
+def test_looks_like_branch_split_question_matches_expected_phrasings():
+    assert _looks_like_branch_split_question("Split the reorders into the branches") is True
+    assert _looks_like_branch_split_question("Break down the reorder list by shop") is True
+    assert _looks_like_branch_split_question("What should I reorder?") is False
+
+
+def test_looks_like_all_branches_question_matches_expected_phrasings():
+    assert _looks_like_all_branches_question("What do I need to order for my two shops?") is True
+    assert _looks_like_all_branches_question("What's my revenue across all branches?") is True
+    assert _looks_like_all_branches_question("What should both locations reorder?") is True
+    assert _looks_like_all_branches_question("What should Galway reorder?") is False
+
+
 def test_looks_like_a_period_follow_up_question_matches_the_three_live_reported_phrasings():
     # Three separate real transcripts, three different phrasings, all
     # classified out_of_scope despite an obvious prior exchange to
@@ -130,6 +154,15 @@ def test_looks_like_a_period_follow_up_question_matches_the_three_live_reported_
 def test_looks_like_a_period_follow_up_question_does_not_match_an_unrelated_question():
     assert _looks_like_a_period_follow_up_question("How's my revenue doing?") is False
     assert _looks_like_a_period_follow_up_question("What's the weather like today?") is False
+
+
+def test_looks_like_aggregate_follow_up_question_matches_client_phrasings():
+    assert _looks_like_aggregate_follow_up_question("Can you give me that as a merge?") is True
+    assert _looks_like_aggregate_follow_up_question("What is that combined?") is True
+    assert _looks_like_aggregate_follow_up_question("What's the total together?") is True
+    assert _looks_like_aggregate_follow_up_question("Can you show me this as a full business?") is True
+    assert _looks_like_aggregate_follow_up_question("What is that for the whole business?") is True
+    assert _looks_like_aggregate_follow_up_question("What should I reorder?") is False
 
 
 def test_continuable_intents_excludes_lookup_and_zero_cost_intents():
@@ -163,6 +196,32 @@ def test_build_priority_order_list_orders_by_the_input_order_and_skips_zero_quan
     assert text.index("Urgent Item") < text.index("Less Urgent Item")
     assert "No Reorder Needed" not in text
     assert text.startswith("Priority order (most urgent first):")
+
+
+def test_build_priority_order_list_can_group_by_branch():
+    products = [
+        {
+            "name": "Galway Item",
+            "business_name": "Galway",
+            "suggested_reorder_quantity": 4,
+            "days_of_cover_at_forecast_rate": "0",
+        },
+        {
+            "name": "Test Bike Shop Item",
+            "business_name": "Test Bike Shop",
+            "suggested_reorder_quantity": 2,
+            "days_of_cover_at_forecast_rate": "1",
+        },
+    ]
+    built = _build_priority_order_list(products, group_by_business=True)
+    assert built is not None
+    text, truncated = built
+    assert truncated is False
+    assert text.startswith("Priority order by branch")
+    assert "Galway:" in text
+    assert "Test Bike Shop:" in text
+    assert "Galway Item — 4 units" in text
+    assert "Test Bike Shop Item — 2 units" in text
 
 
 def test_build_priority_order_list_returns_none_when_nothing_needs_reordering():

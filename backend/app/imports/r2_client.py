@@ -48,6 +48,20 @@ def get_object_size(*, storage_key: str) -> int:
     return response["ContentLength"]
 
 
+def put_object_bytes(*, storage_key: str, data: bytes, content_type: str) -> None:
+    """The one direct (non-presigned) write path — used for the company
+    logo upload (small, synchronously-validated files that go straight
+    through the backend instead of a presigned browser PUT; see
+    app/api/businesses.py). Everything else in this module either
+    presigns a URL for the browser to PUT to directly, or reads/deletes
+    an object the browser already wrote.
+    """
+    settings = get_settings()
+    _client().put_object(
+        Bucket=settings.r2_bucket_name, Key=storage_key, Body=data, ContentType=content_type
+    )
+
+
 def download_object(*, storage_key: str) -> bytes:
     """The one place this backend reads an uploaded file's actual content —
     everything before B7 only ever dealt with presigned URLs, never bytes.

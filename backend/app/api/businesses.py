@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -8,6 +8,7 @@ from app.application.employee_seats import EmployeeSeatNotFound, get_own_employe
 from app.application.members import list_business_members
 from app.billing.service import cancel_subscription
 from app.geocoding.service import suggest_addresses
+from app.imports import r2_client
 from app.models.business import Business
 from app.models.membership import Membership
 from app.repositories.audit_log import record_audit_event
@@ -34,6 +35,19 @@ from app.security.tenant import get_current_membership
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
+# A logo isn't a data file the import pipeline reasons about — small,
+# synchronously-validated, and written straight through the backend
+# rather than via a presigned browser PUT (see app/imports/r2_client.py's
+# put_object_bytes docstring). One fixed key per business: a re-upload
+# always overwrites it, so there's never an orphaned old logo in R2 to
+# separately track or clean up.
+_ALLOWED_LOGO_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
+_MAX_LOGO_SIZE_BYTES = 5 * 1024 * 1024
+
+
+def _logo_storage_key(business_id: uuid.UUID) -> str:
+    return f"logos/{business_id}/logo"
+
 
 def _to_business_out(business: Business, *, role: str) -> BusinessOut:
     # One place listing every Business field BusinessOut needs — every
@@ -58,6 +72,8 @@ def _to_business_out(business: Business, *, role: str) -> BusinessOut:
         city=business.city,
         postal_code=business.postal_code,
         country=business.country,
+        has_logo=business.logo_content_type is not None,
+        updated_at=business.updated_at,
         deleted_at=business.deleted_at,
     )
 
@@ -225,6 +241,82 @@ def update_business(
             metadata={"fields_changed": sorted(updates.keys())},
         )
     business = update_business_profile(db, business=business, updates=updates)
+    return _to_business_out(business, role=membership.role)
+
+
+@router.post("/{business_id}/logo", response_model=BusinessOut)
+async def upload_logo(
+    business_id: uuid.UUID,
+    file: UploadFile = File(...),
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> BusinessOut:
+    # Owner-only, same gate as PATCH /{business_id} above — the company
+    # logo is company-profile data.
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can change the company logo"
+        )
+    business = db.get(Business, business_id)
+    if business is None or business.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+    if file.content_type not in _ALLOWED_LOGO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Logo must be a PNG, JPEG, or WEBP image",
+        )
+    data = await file.read()
+    if len(data) > _MAX_LOGO_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Logo file is too large (5MB limit)",
+        )
+    r2_client.put_object_bytes(storage_key=_logo_storage_key(business_id), data=data, content_type=file.content_type)
+    business.logo_content_type = file.content_type
+    db.commit()
+    db.refresh(business)
+    return _to_business_out(business, role=membership.role)
+
+
+@router.get("/{business_id}/logo")
+def get_logo(business_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    # Deliberately PUBLIC — no membership/auth dependency. A plain <img>
+    # tag can't send this app's JWT Authorization header, and every other
+    # route here requires one; confirmed with the user that a shop logo
+    # isn't sensitive like sales/financial data, so this is a narrow,
+    # intentional exception to the usual "every route is tenant-scoped
+    # and authenticated" posture rather than something slipped in
+    # quietly. Only the logo bytes are exposed — nothing else about the
+    # business.
+    business = db.get(Business, business_id)
+    if business is None or business.deleted_at is not None or business.logo_content_type is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No logo set for this business")
+    data = r2_client.download_object(storage_key=_logo_storage_key(business_id))
+    return Response(
+        content=data,
+        media_type=business.logo_content_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.delete("/{business_id}/logo", response_model=BusinessOut)
+def delete_logo(
+    business_id: uuid.UUID,
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> BusinessOut:
+    if membership.role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can change the company logo"
+        )
+    business = db.get(Business, business_id)
+    if business is None or business.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+    if business.logo_content_type is not None:
+        r2_client.delete_object(storage_key=_logo_storage_key(business_id))
+        business.logo_content_type = None
+        db.commit()
+        db.refresh(business)
     return _to_business_out(business, role=membership.role)
 
 

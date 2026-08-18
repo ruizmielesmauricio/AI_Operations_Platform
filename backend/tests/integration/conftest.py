@@ -27,6 +27,7 @@ from app.models import (
     Supplier,
     Upload,
     User,
+    WeatherObservation,
 )
 
 
@@ -73,6 +74,7 @@ def db_session(_engine):
     session.query(AuditLog).delete()
     session.query(EmployeeSeat).delete()
     session.query(Membership).delete()
+    session.query(WeatherObservation).delete()
     session.query(Business).delete()
     session.query(User).delete()
     session.commit()

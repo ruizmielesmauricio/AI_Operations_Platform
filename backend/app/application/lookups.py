@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.analytics.period import resolve_period
 from app.models.inventory_movement import InventoryMovement
 from app.repositories.inventory_movement import InventoryMovementRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductCategoryRepository, ProductRepository
 from app.repositories.production_event import ProductionEventRepository
 from app.schemas.analytics import ProductDetailOut, PurchaseDetailOut, RepairDetailOut
 
@@ -25,12 +25,54 @@ from app.schemas.analytics import ProductDetailOut, PurchaseDetailOut, RepairDet
 class LookupResult:
     # Each already JSON-serializable (model_dump(mode="json")) — ready to
     # hand straight to the AI explain call as context, same as every
-    # other intent's fetched data.
+    # other intent's fetched data. Used when the search term itself is
+    # ambiguous about WHAT is being asked about (several different
+    # products/repairs matched a fuzzy name search) — one match per
+    # distinct candidate, genuinely needing "which one did you mean?".
     matches: list[dict] = field(default_factory=list)
     # Short human labels, one per match, used only for the deterministic
     # "found several matching X — which one?" disambiguation message
     # (app/ai/service.py) — never shown as the final answer itself.
     match_labels: list[str] = field(default_factory=list)
+    # Live-reproduced real bug: a search term can unambiguously identify
+    # ONE thing (a specific product, or a specific purchase reference)
+    # that legitimately has more than one row to report — a product's
+    # full order history, or several line items under one PO reference.
+    # That's a real, complete multi-row answer, not a menu of candidates
+    # to choose between, and must never be funneled through the
+    # `matches`/`match_labels` disambiguation flow above (a real
+    # transcript showed exactly this: "what did I order under
+    # E-Motion Trail 500 3?" — one clearly-named product, 5 real past
+    # orders — coming back as "I found several matching results... which
+    # one?" as if the product itself were unclear). Set only by
+    # find_purchases's own resolved-identity paths; None everywhere else.
+    resolved_rows: list[dict] | None = None
+
+
+def find_category(db: Session, *, business_id: uuid.UUID, query: str) -> LookupResult:
+    """Resolves a free-text category name (Ask ORLA's `weather_pattern_
+    lookup` intent, app/ai/service.py) against this business's own
+    category list. Categories are a small, fully in-memory set per
+    business (typically single digits to a couple dozen) — a case-
+    insensitive substring match over the whole already-loaded list, same
+    "small enough to filter in Python" reasoning app/ai/service.py's own
+    `_detect_named_business` already uses for business names, no new
+    repository query method needed. Feeds the same shared 0/1/many
+    disambiguation every other lookup intent already uses
+    (app/ai/service.py's dispatch functions) — `matches`/`match_labels`,
+    never `resolved_rows` (a category name is never legitimately "one
+    thing with several rows" the way a purchase reference is).
+    """
+    categories = ProductCategoryRepository(db).list_for_business(business_id)
+    lowered = query.strip().lower()
+    if not lowered:
+        return LookupResult()
+    matched = [c for c in categories if lowered in c.name.lower()]
+    if not matched:
+        return LookupResult()
+    matches = [{"category_id": str(c.id), "category_name": c.name} for c in matched]
+    labels = [c.name for c in matched]
+    return LookupResult(matches=matches, match_labels=labels)
 
 
 def find_products(db: Session, *, business_id: uuid.UUID, query: str) -> LookupResult:
@@ -71,7 +113,7 @@ def find_purchases(
             business_id, purchase_reference=search_term, start=start_date, end=end_date
         )
         if by_reference:
-            return _purchases_to_result(db, business_id, by_reference)
+            return _purchases_to_resolved_result(db, business_id, by_reference)
 
         # No reference match — try resolving it as a product instead.
         # Multiple product matches is itself the ambiguity to surface
@@ -82,15 +124,36 @@ def find_purchases(
             return LookupResult(match_labels=labels)
         if len(products) == 1:
             product_id = products[0].id
-        # Zero product matches either — fall through to a plain
-        # date-range search below (still useful if a date was given;
-        # otherwise correctly comes back empty).
+        else:
+            # Live-reproduced real bug: zero product matches used to fall
+            # through to the plain date-range call below with
+            # product_id=None — but InventoryMovementRepository.
+            # list_purchases treats product_id=None as "no product
+            # filter", not "match nothing", so a search term that matched
+            # nothing at all (e.g. "E-Motion Trail 500" for a product
+            # that doesn't exist) silently returned the 10 most recent
+            # purchases business-wide, mislabelled as a "found several
+            # matching results — which one?" disambiguation for products
+            # that were never actually a match. A named search term that
+            # resolves to nothing is genuinely nothing to show — never
+            # broaden into an unscoped browse the way a bare, no-
+            # search-term question legitimately does below.
+            return LookupResult()
 
     movements = movement_repo.list_purchases(business_id, product_id=product_id, start=start_date, end=end_date)
-    return _purchases_to_result(db, business_id, movements)
+    return _purchases_to_resolved_result(db, business_id, movements)
 
 
-def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[InventoryMovement]) -> LookupResult:
+def _purchases_to_resolved_result(db: Session, business_id: uuid.UUID, movements: list[InventoryMovement]) -> LookupResult:
+    """Both call sites above have already unambiguously resolved WHAT is
+    being asked about (one specific PO reference, or one specific
+    product) before reaching here — every row returned is a genuine part
+    of that one answer, in already-most-recent-first order (see
+    InventoryMovementRepository.list_purchases's own docstring), never a
+    set of competing candidates. Returned as `resolved_rows`, not
+    `matches`/`match_labels`, so app/ai/service.py::_dispatch_lookup
+    never mistakes "here is the order history" for "which one did you
+    mean?"."""
     if not movements:
         return LookupResult()
     # Same "load the whole catalogue once" pattern already used by
@@ -98,12 +161,11 @@ def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[In
     # handful of id->name lookups doesn't justify a per-row query.
     products_by_id = {p.id: p for p in ProductRepository(db).list_for_business(business_id)}
 
-    matches = []
-    labels = []
+    rows = []
     for movement in movements:
         product = products_by_id.get(movement.product_id)
         name = product.name if product else "Unknown product"
-        matches.append(
+        rows.append(
             PurchaseDetailOut(
                 product_id=movement.product_id,
                 product_name=name,
@@ -114,8 +176,7 @@ def _purchases_to_result(db: Session, business_id: uuid.UUID, movements: list[In
                 unit_cost=movement.unit_cost,
             ).model_dump(mode="json")
         )
-        labels.append(f"{name}, {movement.event_date} ({movement.purchase_reference or 'no reference'})")
-    return LookupResult(matches=matches, match_labels=labels)
+    return LookupResult(resolved_rows=rows)
 
 
 def find_repairs(

@@ -20,6 +20,13 @@ export interface Business {
   city: string | null;
   postal_code: string | null;
   country: string | null;
+  // True once a logo has been uploaded via POST /businesses/{id}/logo —
+  // tells the profile page whether to render the logo <img> at all.
+  has_logo: boolean;
+  // Used as the ?v= cache-buster on the logo <img> src so a re-upload
+  // (same URL, overwritten R2 object) actually refetches instead of
+  // showing a browser-cached copy of the old logo.
+  updated_at: string;
   // Only ever populated when fetched via GET /businesses?include_deleted=
   // true (the Company Profile list) — every other fetch never sees a
   // deleted business at all, so this stays null there.
@@ -499,15 +506,24 @@ export interface ReportDetail extends ReportSummary {
 
 export interface ChatResponse {
   answer: string;
+  // The first (or only) sub-question's intent — see `intents` below for
+  // a compound question ("what's my revenue and what should I reorder").
   intent: string;
   // False when the AI's raw answer failed the PR-5.3 grounding guardrail
-  // and `answer` is a safe fallback message instead.
+  // and `answer` is a safe fallback message instead. For a multi-intent
+  // answer, false means at least one part fell back this way — the other
+  // parts may still be fully answered within `answer`.
   grounded: boolean;
   // A fixed, small set of app pages ("dashboard" | "reports") the answer
   // references. Rendered as real <a> elements by the chat page itself —
   // never by treating any part of `answer` (which may include
   // model-generated text) as HTML.
   links: string[];
+  // Every sub-question's intent, in question order — length 1 for an
+  // ordinary single-intent question (matching `intent` above), longer
+  // for a compound one. Echo this back as the next request's
+  // previous_intents so a follow-up can recover against any part of it.
+  intents: string[];
 }
 
 // --- Supplier tracking (Gap 4) -------------------------------------------

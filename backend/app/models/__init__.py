@@ -22,6 +22,7 @@ from app.models.subscription import ProcessedStripeEvent, Subscription
 from app.models.supplier import ProductSupplier, Supplier
 from app.models.upload import Upload
 from app.models.user import User
+from app.models.weather_observation import WeatherObservation
 
 __all__ = [
     "Base",
@@ -55,4 +56,5 @@ __all__ = [
     "Supplier",
     "Upload",
     "User",
+    "WeatherObservation",
 ]

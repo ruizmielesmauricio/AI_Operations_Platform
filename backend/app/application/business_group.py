@@ -421,6 +421,7 @@ def get_forecast_for_group(
     # scoped to its own business_id).
     rows_by_product: dict[uuid.UUID, list[tuple[datetime, Decimal]]] = {}
     products_by_id: dict[uuid.UUID, object] = {}
+    business_by_product: dict[uuid.UUID, Business] = {}
     stock_by_product: dict[uuid.UUID, int] = {}
     category_name_by_id: dict[uuid.UUID, str] = {}
 
@@ -436,6 +437,7 @@ def get_forecast_for_group(
             business_products = [p for p in business_products if p.category_id == category_id]
         business_products_by_id = {p.id: p for p in business_products}
         products_by_id.update(business_products_by_id)
+        business_by_product.update({p.id: business for p in business_products})
 
         business_stock = InventoryMovementRepository(db).sum_by_product_ids(
             business.id, list(business_rows_by_product.keys())
@@ -480,6 +482,8 @@ def get_forecast_for_group(
                 suggested_reorder_quantity=suggested_reorder_quantity,
                 days_of_cover_at_forecast_rate=days_of_cover,
                 category_name=category_name_by_id.get(product.category_id) if product.category_id else None,
+                business_id=business_by_product[product_id].id,
+                business_name=business_by_product[product_id].name,
             )
         )
 

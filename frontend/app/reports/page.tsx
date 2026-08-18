@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
 import { AppNav } from "@/components/AppNav";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -74,7 +75,7 @@ export default function ReportsPage() {
           <select id="business" value={businessId} onChange={(e) => setBusinessId(e.target.value)}>
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.name}
+                {businessDisplayLabel(b)}
               </option>
             ))}
           </select>

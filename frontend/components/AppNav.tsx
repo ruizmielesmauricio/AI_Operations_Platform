@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GlobalSearchBar } from "@/components/GlobalSearchBar";
-import { apiGet } from "@/lib/api/client";
+import { API_URL, apiGet } from "@/lib/api/client";
+import { businessDisplayLabel } from "@/lib/businessLabel";
+import { useCurrentMember } from "@/lib/hooks/useCurrentMember";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
 import { supabase } from "@/lib/supabase/client";
-import type { Member, SubscriptionStatus, SystemStatus } from "@/types";
+import type { Business, SubscriptionStatus, SystemStatus } from "@/types";
 
 /**
  * The first shared nav in this frontend — everything up to now
@@ -27,35 +29,26 @@ export function AppNav({ businessId }: { businessId?: string }) {
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [identityLabel, setIdentityLabel] = useState<string | null>(null);
-
+  // The uploaded company logo (Company Profile "Company logo" section) —
+  // shown here too so it's actually visible somewhere besides the one
+  // settings page it's uploaded from, per direct feedback. `has_logo` +
+  // `updated_at` come off the same GET /businesses/{id} every profile
+  // page already calls; `updated_at` doubles as the <img> cache-buster
+  // (see frontend/app/onboarding/[id]/page.tsx's identical pattern) so a
+  // logo replaced from the profile page doesn't keep showing the old
+  // cached image here.
+  const [logoInfo, setLogoInfo] = useState<{
+    companyName: string;
+    logoBusinessId: string | null;
+    logoVersion: string | null;
+    selectedBusinessName: string;
+  } | null>(null);
   // The signed-in member is resolved from the business's existing
   // membership list, rather than guessing from a name in Supabase metadata.
   // That keeps the role accurate for both owners and staff on every page.
-  useEffect(() => {
-    if (!businessId || !supabase) {
-      setIdentityLabel(null);
-      return;
-    }
-    let active = true;
-    Promise.all([supabase.auth.getUser(), apiGet<Member[]>(`/businesses/${businessId}/members`)])
-      .then(([{ data }, members]) => {
-        if (!active) return;
-        const member = members.find((item) => item.user_id === data.user?.id);
-        if (!member) {
-          setIdentityLabel(data.user?.email ?? null);
-          return;
-        }
-        const name = `${member.first_name} ${member.surname}`.trim() || data.user?.email || "Account";
-        setIdentityLabel(`${name} (${member.role})`);
-      })
-      .catch(() => {
-        if (active) setIdentityLabel(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [businessId]);
+  // Shared with frontend/app/welcome/page.tsx, which needs the identical
+  // resolution — see useCurrentMember's own docstring.
+  const { label: identityLabel } = useCurrentMember(businessId);
 
   // "Upload data" used to render unconditionally here regardless of the
   // selected business's subscription status — the upload/import routes
@@ -72,6 +65,43 @@ export function AppNav({ businessId }: { businessId?: string }) {
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
       .then((s) => setSubscriptionStatus(s.status))
       .catch(() => setSubscriptionStatus(null));
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) {
+      setLogoInfo(null);
+      return;
+    }
+    // A branch change can start a second request before the previous
+    // branch's profile request has finished. Only let the active request
+    // populate this shared header, otherwise its location can briefly
+    // (or permanently, depending on response order) show the old branch.
+    let current = true;
+    setLogoInfo(null);
+    apiGet<Business>(`/businesses/${businessId}`)
+      .then(async (selectedBusiness) => {
+        // Branches use the parent company's logo when they have not
+        // uploaded a separate one. The label always remains the exact
+        // selected branch name, matching the page dropdown.
+        const logoBusiness =
+          selectedBusiness.has_logo || !selectedBusiness.parent_business_id
+            ? selectedBusiness
+            : await apiGet<Business>(`/businesses/${selectedBusiness.parent_business_id}`).catch(() => null);
+        if (current) {
+          setLogoInfo({
+            companyName: logoBusiness?.name ?? selectedBusiness.name,
+            logoBusinessId: logoBusiness?.has_logo ? logoBusiness.id : null,
+            logoVersion: logoBusiness?.has_logo ? logoBusiness.updated_at : null,
+            selectedBusinessName: businessDisplayLabel(selectedBusiness),
+          });
+        }
+      })
+      .catch(() => {
+        if (current) setLogoInfo(null);
+      });
+    return () => {
+      current = false;
+    };
   }, [businessId]);
 
   // Notification Centre's unread badge — a lightweight poll (not a
@@ -209,6 +239,10 @@ export function AppNav({ businessId }: { businessId?: string }) {
           business's full descriptive profile lives now (per-business
           "View profile" from the list, PATCH /businesses/{id}). */}
       <a href="/onboarding">Company Profile</a>
+      {/* Account-level, not business-scoped — same reasoning as Company
+          Profile above having no businessId suffix. Login email lives on
+          the Supabase Auth identity itself, not any one business. */}
+      <a href="/account">Account</a>
         </div>
       {identityLabel && <span className="app-nav__identity">Signed in as {identityLabel}</span>}
       <button className="app-nav__logout" type="button" onClick={handleLogout}>
@@ -218,6 +252,26 @@ export function AppNav({ businessId }: { businessId?: string }) {
       {businessId && (
         <div className="app-nav-search-row">
           <GlobalSearchBar businessId={businessId} />
+        </div>
+      )}
+      {businessId && logoInfo && (
+        <div className="app-business-header" aria-label="Current business">
+          {logoInfo.logoBusinessId && logoInfo.logoVersion && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- public API logo URL, not a Next-managed asset. */}
+              <img
+                src={`${API_URL}/businesses/${logoInfo.logoBusinessId}/logo?v=${encodeURIComponent(logoInfo.logoVersion)}`}
+                alt=""
+                aria-hidden="true"
+                className="app-business-header__logo"
+              />
+            </>
+          )}
+          <div>
+            <span className="app-business-header__eyebrow">Current business</span>
+            <strong>{logoInfo.companyName}</strong>
+            <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+          </div>
         </div>
       )}
     </>

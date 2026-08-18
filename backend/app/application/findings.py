@@ -14,6 +14,8 @@ from app.analytics.findings import Finding, Recommendation, build_recommendation
 from app.analytics.period import MetricPeriod
 from app.application.financial_performance import get_financial_performance
 from app.application.retail_operations import get_retail_operations
+from app.application.weather_insights import get_weather_pattern_findings
+from app.models.business import Business
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,23 @@ def get_findings(
         dead_stock=product_retail.dead_stock,
         returns=financial.returns,
     )
+
+    # Deterministic weather-pattern insight (app/application/
+    # weather_insights.py) — not part of evaluate_all's own C9/C10-fed
+    # pipeline, since it reads a different data source (this business's
+    # own accumulated weather_observations + a live forecast call) and
+    # not just already-computed financial/retail summaries. Always []
+    # when a category filter is active (category_id is not None) — this
+    # finding already names its own specific category per comparison, so
+    # filtering it down further doesn't map onto any existing per-product
+    # filter shape the way stock/margin findings do. Never lets a
+    # weather-provider hiccup break the rest of Findings & Recommendations
+    # — get_weather_pattern_findings itself never raises.
+    if category_id is None:
+        business = db.get(Business, business_id)
+        if business is not None:
+            findings = findings + get_weather_pattern_findings(db, business=business)
+
     recommendations = build_recommendations(findings)
 
     return FindingsSummary(period=financial.period, findings=findings, recommendations=recommendations)
