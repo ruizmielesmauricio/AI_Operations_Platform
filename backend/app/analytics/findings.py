@@ -111,6 +111,20 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
         description="A larger-than-usual share of this period's gross revenue was refunded. Check for a "
         "product quality issue, a sizing/description mismatch, or a specific batch/supplier.",
     ),
+    # Not from evaluate_all's own C9/C10-fed pipeline — built separately by
+    # app/application/weather_insights.py (deterministic weather-pattern
+    # sales comparison, not ML — see docs/governance/11_Development_
+    # Roadmap.md v1.80) and appended to the list app/application/
+    # findings.py::get_findings already builds, before recommendations are
+    # built here. Kept in this same library rather than a second one so it
+    # flows through the identical severity-ranking/impact-scoring machinery
+    # as every other finding.
+    "weather_pattern_insight": RecommendationTemplate(
+        title="Consider this category's weather-linked demand pattern",
+        description="Historically, sales in this category have differed meaningfully during conditions like "
+        "the ones forecast for the coming week — a real pattern from your own sales history, not a "
+        "prediction. Worth a look when planning stock for the week ahead.",
+    ),
 }
 
 
@@ -434,6 +448,13 @@ def _impact_score(finding: Finding) -> Decimal:
         return value_at_cost if value_at_cost is not None else Decimal(evidence["stock_on_hand"])
     if finding.type == "high_return_rate":
         return evidence["returns_amount"]
+    if finding.type == "weather_pattern_insight":
+        # Not dollar-denominated (this finding has no revenue/cost figure
+        # of its own) — a documented magnitude proxy, same convention as
+        # dead_stock's own stock_on_hand fallback: only meaningful for
+        # ranking within this same finding_type, not compared across
+        # dollar-based scores.
+        return abs(evidence["pct_difference"])
     raise ValueError(f"No impact scoring rule for finding type: {finding.type}")  # pragma: no cover
 
 

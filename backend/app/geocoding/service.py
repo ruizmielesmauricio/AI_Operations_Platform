@@ -15,9 +15,10 @@ makes exactly one HTTP call per invocation regardless.
 
 from dataclasses import dataclass
 
-from app.geocoding.client import autocomplete
+from app.geocoding.client import autocomplete, geocode
 from app.geocoding.exceptions import GeocodingNotConfigured, GeocodingProviderError
 from app.geocoding.timezone_lookup import resolve_timezone
+from app.models.business import Business
 
 
 @dataclass(frozen=True)
@@ -71,3 +72,36 @@ def suggest_addresses(text: str) -> list[AddressSuggestion]:
             )
         )
     return suggestions
+
+
+def resolve_and_persist_coordinates(business: Business) -> None:
+    """Sets `business.latitude`/`longitude` from its own already-saved
+    address fields — called by app/repositories/business.py::
+    update_business_profile whenever an address field actually changed,
+    never on every unrelated profile edit. Mutates the passed object and
+    returns nothing; the caller owns commit/refresh, same convention as
+    every other write in that function.
+
+    Feeds app/application/weather_ingestion.py, the one thing in this
+    codebase that currently needs a business's coordinates at all — a
+    business with no address yet, or with geocoding not configured/
+    failing, simply keeps `latitude`/`longitude` at `NULL`, and that
+    feature quietly skips it (same graceful-degradation posture as every
+    other optional provider here). Never raises.
+    """
+    if not business.address_line1:
+        return
+    address_text = ", ".join(
+        part for part in (business.address_line1, business.city, business.postal_code, business.country) if part
+    )
+    try:
+        result = geocode(address_text)
+    except (GeocodingNotConfigured, GeocodingProviderError):
+        return
+    if result is None:
+        return
+    lat, lon = result.get("lat"), result.get("lon")
+    if lat is None or lon is None:
+        return
+    business.latitude = lat
+    business.longitude = lon

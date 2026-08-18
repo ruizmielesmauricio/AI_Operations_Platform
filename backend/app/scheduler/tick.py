@@ -37,6 +37,7 @@ from app.application.notifications import (
 )
 from app.application.report import generate_report
 from app.application.stock_review import get_stock_review
+from app.application.weather_ingestion import snapshot_daily_weather
 from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
 from app.repositories.report import MAX_ATTEMPTS, ReportRepository
@@ -67,6 +68,7 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
     businesses = list(db.scalars(select(Business)))
     subscriptions = SubscriptionRepository(db)
     freshness_checked = 0
+    weather_snapshots_written = 0
 
     # One platform-wide read, not per-business — "is the AI provider
     # itself currently down" has exactly one true answer per tick, not
@@ -96,6 +98,12 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
                 db.commit()
             except Exception:
                 logger.exception("Failed to check AI provider health for business=%s", business.id)
+            try:
+                if snapshot_daily_weather(db, business=business, now=resolved_now):
+                    db.commit()
+                    weather_snapshots_written += 1
+            except Exception:
+                logger.exception("Failed to snapshot weather for business=%s", business.id)
 
     for business in businesses:
         for report_type in REPORT_TYPES:
@@ -225,4 +233,5 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
         "permanently_failed": permanently_failed,
         "not_yet_due": not_yet_due,
         "freshness_checked": freshness_checked,
+        "weather_snapshots_written": weather_snapshots_written,
     }
