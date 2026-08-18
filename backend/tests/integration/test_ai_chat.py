@@ -1319,3 +1319,269 @@ def test_previous_intents_plural_recovers_a_follow_up_against_a_non_first_part(
     )
 
     assert result.intent == "forecast"
+
+
+# --- weather_pattern_lookup / weather_outlook -------------------------------
+# Covers the two new Ask ORLA weather intents (app/ai/service.py::
+# _dispatch_weather_category_lookup, and the direct weather_outlook branch
+# in _build_part) — the compliance boundary (no raw Met Éireann figure ever
+# reaching a chat answer) is already enforced structurally, since neither
+# code path ever puts a rain_mm/temp_mean_c/wind_speed_kph value into
+# context; these tests cover the 0/1/many dispatch and zero-cost paths.
+
+from app.models.business import Business as _Business
+from app.models.product import Product as _Product
+from app.models.product import ProductCategory as _ProductCategory
+from app.models.sale import Sale as _Sale
+from app.models.sale import SaleItem as _SaleItem
+from app.models.weather_observation import WeatherObservation as _WeatherObservation
+from app.weather import client as weather_client
+
+
+def _set_weather_coordinates(db_session, business_id):
+    business = db_session.get(_Business, business_id)
+    business.latitude = Decimal("53.3806")
+    business.longitude = Decimal("-6.1750")
+    db_session.commit()
+    return business
+
+
+def _seed_weather_pattern_history(db_session, business_id, *, category_name, anchor_today):
+    """Same 12-rainy/28-dry, 40-day shape as tests/integration/
+    test_weather_insights.py's own fixture — enough to clear both the
+    sample-size and materiality gates in app/analytics/weather_patterns.py."""
+    from datetime import timedelta
+
+    category = _ProductCategory(business_id=business_id, name=category_name)
+    db_session.add(category)
+    db_session.flush()
+
+    start = anchor_today - timedelta(days=40)
+    for offset in range(40):
+        day = start + timedelta(days=offset)
+        rainy = offset < 12
+        db_session.add(
+            _WeatherObservation(
+                business_id=business_id, observed_date=day,
+                rain_mm=Decimal("5") if rainy else Decimal("0"),
+                temp_mean_c=Decimal("15"), temp_min_c=Decimal("15"), temp_max_c=Decimal("15"),
+                wind_speed_kph=Decimal("10"),
+            )
+        )
+        product = _Product(
+            business_id=business_id, sku=None, name=f"Item {offset}", category_id=category.id,
+            cost_price=Decimal("5.00"), sell_price=Decimal("10.00"),
+        )
+        db_session.add(product)
+        db_session.flush()
+        sale = _Sale(
+            business_id=business_id, sold_at=datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc),
+            total_amount=Decimal("10.00") * (10 if rainy else 2), order_reference=None,
+        )
+        db_session.add(sale)
+        db_session.flush()
+        db_session.add(
+            _SaleItem(
+                business_id=business_id, sale_id=sale.id, product_id=product.id,
+                quantity=10 if rainy else 2, unit_price=Decimal("10.00"), cost_price_at_sale=Decimal("5.00"),
+            )
+        )
+        db_session.flush()
+    db_session.commit()
+    return category
+
+
+def test_weather_pattern_lookup_with_one_match_and_real_history_reaches_the_explain_call(
+    db_session, business_id, monkeypatch
+):
+    _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Waterproof Gear", anchor_today=_NOW.date())
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("weather_pattern_lookup", search_term="Waterproof")
+        return _canned_response(
+            "Rainy days have historically meant more demand for Waterproof Gear, based on your own sales history."
+        )
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Does weather affect sales of Waterproof Gear?", now=_NOW,
+    )
+
+    assert result.intent == "weather_pattern_lookup"
+    assert result.grounded is True
+    assert db_session.query(AIRequest).count() == 2  # classify + explain
+
+
+def test_weather_pattern_lookup_with_no_matching_category_names_real_categories(
+    db_session, business_id, monkeypatch
+):
+    from app.repositories.product import ProductCategoryRepository
+
+    ProductCategoryRepository(db_session).create(business_id=business_id, name="Tyres & Tubes")
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_pattern_lookup", search_term="Sunglasses")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Does weather affect sales of Sunglasses?", now=_NOW,
+    )
+
+    assert result.intent == "weather_pattern_lookup"
+    assert result.grounded is True
+    assert "couldn't find" in result.answer
+    assert "Tyres & Tubes" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only
+
+
+def test_weather_pattern_lookup_with_several_matching_categories_asks_which_one(
+    db_session, business_id, monkeypatch
+):
+    from app.repositories.product import ProductCategoryRepository
+
+    ProductCategoryRepository(db_session).create(business_id=business_id, name="Locks")
+    ProductCategoryRepository(db_session).create(business_id=business_id, name="Lock Oil")
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_pattern_lookup", search_term="Lock")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Does weather affect sales of Lock?", now=_NOW,
+    )
+
+    assert result.intent == "weather_pattern_lookup"
+    assert "found several matching categories" in result.answer
+    assert "Locks" in result.answer and "Lock Oil" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only
+
+
+def test_weather_pattern_lookup_resolved_category_with_no_weather_history_yet(db_session, business_id, monkeypatch):
+    from app.repositories.product import ProductCategoryRepository
+
+    ProductCategoryRepository(db_session).create(business_id=business_id, name="Scooters")
+    db_session.commit()
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_pattern_lookup", search_term="Scooters")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Does weather affect sales of Scooters?", now=_NOW,
+    )
+
+    assert result.intent == "weather_pattern_lookup"
+    assert "don't have enough weather history" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only
+
+
+def test_weather_pattern_lookup_without_a_search_term_falls_back_safely(db_session, business_id, monkeypatch):
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_pattern_lookup", search_term=None)
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="Does weather affect sales?", now=_NOW
+    )
+
+    assert result.intent == "out_of_scope"
+
+
+def test_weather_outlook_with_a_matching_upcoming_forecast_reaches_the_explain_call(
+    db_session, business_id, monkeypatch
+):
+    from app.weather.client import DailyForecast
+    from datetime import timedelta
+
+    business = _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Waterproof Gear", anchor_today=_NOW.date())
+
+    forecast = [
+        DailyForecast(
+            day=_NOW.date() + timedelta(days=i), rain_mm=Decimal("5.00"), temp_mean_c=Decimal("10.00"),
+            temp_min_c=Decimal("8.00"), temp_max_c=Decimal("12.00"), wind_speed_kph=Decimal("10.00"),
+        )
+        for i in range(7)
+    ]
+    monkeypatch.setattr(weather_client, "get_forecast", lambda **kwargs: forecast)
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("weather_outlook")
+        return _canned_response("Rain is forecast this week, which has historically meant more demand for Waterproof Gear.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What should I expect this week given the forecast?", now=_NOW,
+    )
+
+    assert result.intent == "weather_outlook"
+    assert result.grounded is True
+    assert db_session.query(AIRequest).count() == 2  # classify + explain
+
+
+def test_weather_outlook_with_nothing_notable_is_a_deterministic_zero_cost_answer(db_session, business_id, monkeypatch):
+    # No coordinates resolved at all -- get_weather_pattern_findings
+    # degrades to [] gracefully, same as everywhere else it's called.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_outlook")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What should I expect this week given the forecast?", now=_NOW,
+    )
+
+    assert result.intent == "weather_outlook"
+    assert result.grounded is True
+    assert "Nothing weather-notable" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only
+
+
+def test_weather_outlook_recovers_on_a_vague_follow_up_but_weather_pattern_lookup_does_not(
+    db_session, business_id, monkeypatch
+):
+    # weather_outlook is in _CONTINUABLE_INTENTS (a forward-looking intent
+    # a vague period follow-up can safely re-run); weather_pattern_lookup
+    # deliberately is not (continuing it blindly would re-run a stale
+    # category search term), same exclusion reasoning already documented
+    # for product_lookup/purchase_lookup/repair_lookup. Uses the exact
+    # same period-follow-up recovery net (_looks_like_a_period_follow_up_
+    # question) already exercised for financial_performance elsewhere in
+    # this file.
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    recovered = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What about the previous period?", now=_NOW,
+        previous_question="What should I expect this week given the forecast?",
+        previous_answer="Nothing weather-notable stands out for the week ahead right now.",
+        previous_intent="weather_outlook",
+    )
+    assert recovered.intent == "weather_outlook"
+
+    not_recovered = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What about the previous period?", now=_NOW,
+        previous_question="Does weather affect sales of Waterproof Gear?",
+        previous_answer="I don't have enough weather history yet to say.",
+        previous_intent="weather_pattern_lookup",
+    )
+    assert not_recovered.intent == "out_of_scope"

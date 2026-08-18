@@ -25,11 +25,11 @@ from sqlalchemy.orm import Session
 from app.analytics.findings import Finding
 from app.analytics.weather_patterns import (
     DailyWeather,
+    WeatherPatternComparison,
     classify_upcoming_buckets,
     compute_weather_pattern_comparison,
 )
 from app.application.forecast import (
-    _earliest_local_date as earliest_local_date,
     _local_midnight_utc as local_midnight_utc,
     _today_in_business_timezone as today_in_business_timezone,
 )
@@ -52,28 +52,28 @@ _BUCKET_PHRASES = {
 }
 
 
-def get_weather_pattern_findings(db: Session, *, business: Business, now: datetime | None = None) -> list[Finding]:
-    """Zero or more Findings — never raises. Returns [] whenever: the
-    business has no resolved latitude/longitude yet (see
-    app/geocoding/service.py::resolve_and_persist_coordinates), no
-    weather_observations history has accumulated yet at all, the live
-    forecast call fails, or nothing clears app/analytics/
-    weather_patterns.py's own sample-size/materiality gates. Same
-    graceful-degradation posture as every other optional signal in this
-    codebase.
+def _load_weather_and_sales_data(
+    db: Session, business: Business, now: datetime
+) -> tuple[dict[date, DailyWeather], dict[uuid.UUID, dict[date, Decimal]], dict[uuid.UUID, str]] | None:
+    """Shared data-loading for both `get_weather_pattern_findings` (below)
+    and `get_weather_pattern_comparisons_for_category` — this business's
+    own accumulated weather_observations history plus its per-category
+    daily sales history, over the same real (never zero-filled) date
+    range. Returns None whenever there's no resolved location or no
+    weather history accumulated yet at all — both callers treat that the
+    same way (an empty result, never an error).
     """
     if business.latitude is None or business.longitude is None:
-        return []
+        return None
 
-    resolved_now = now or datetime.now(ZoneInfo("UTC"))
-    today = today_in_business_timezone(business.timezone, resolved_now)
+    today = today_in_business_timezone(business.timezone, now)
     yesterday = today - timedelta(days=1)
 
     weather_rows = WeatherObservationRepository(db).list_in_range(
         business_id=business.id, start_date=date.min, end_date=yesterday
     )
     if not weather_rows:
-        return []
+        return None
 
     daily_weather: dict[date, DailyWeather] = {
         row.observed_date: DailyWeather(
@@ -88,7 +88,7 @@ def get_weather_pattern_findings(db: Session, *, business: Business, now: dateti
 
     item_rows = SaleItemRepository(db).list_units_by_product_in_range(business.id, query_start, query_end)
     if not item_rows:
-        return []
+        return None
 
     products = ProductRepository(db).list_for_business(business.id)
     category_by_product = {p.id: p.category_id for p in products if p.category_id is not None}
@@ -104,11 +104,53 @@ def get_weather_pattern_findings(db: Session, *, business: Business, now: dateti
         daily_units_by_category[category_id][local_date] += Decimal(quantity)
 
     if not daily_units_by_category:
-        return []
+        return None
 
-    comparisons = compute_weather_pattern_comparison(
-        daily_weather, {cid: dict(series) for cid, series in daily_units_by_category.items()}, category_names
-    )
+    return daily_weather, {cid: dict(series) for cid, series in daily_units_by_category.items()}, category_names
+
+
+def get_weather_pattern_comparisons_for_category(
+    db: Session, *, business: Business, category_id: uuid.UUID, now: datetime | None = None
+) -> list[WeatherPatternComparison]:
+    """Real comparisons for ONE category, across every bucket with enough
+    history — unlike `get_weather_pattern_findings` below, deliberately
+    **not** gated on the upcoming forecast matching. This is "tell me
+    what my own sales history shows for this category" (Ask ORLA's
+    `weather_pattern_lookup` intent), not "tell me only what's relevant
+    to this exact week" (the Finding, and `weather_outlook`). Empty list
+    for the same reasons `get_weather_pattern_findings` returns []
+    (no location, no history yet), plus when this specific category has
+    no sales history in the loaded range at all.
+    """
+    resolved_now = now or datetime.now(ZoneInfo("UTC"))
+    loaded = _load_weather_and_sales_data(db, business, resolved_now)
+    if loaded is None:
+        return []
+    daily_weather, daily_units_by_category, category_names = loaded
+    category_series = daily_units_by_category.get(category_id)
+    if category_series is None:
+        return []
+    return compute_weather_pattern_comparison(daily_weather, {category_id: category_series}, category_names)
+
+
+def get_weather_pattern_findings(db: Session, *, business: Business, now: datetime | None = None) -> list[Finding]:
+    """Zero or more Findings — never raises. Returns [] whenever: the
+    business has no resolved latitude/longitude yet (see
+    app/geocoding/service.py::resolve_and_persist_coordinates), no
+    weather_observations history has accumulated yet at all, the live
+    forecast call fails, or nothing clears app/analytics/
+    weather_patterns.py's own sample-size/materiality gates. Same
+    graceful-degradation posture as every other optional signal in this
+    codebase.
+    """
+    resolved_now = now or datetime.now(ZoneInfo("UTC"))
+    loaded = _load_weather_and_sales_data(db, business, resolved_now)
+    if loaded is None:
+        return []
+    daily_weather, daily_units_by_category, category_names = loaded
+    today = today_in_business_timezone(business.timezone, resolved_now)
+
+    comparisons = compute_weather_pattern_comparison(daily_weather, daily_units_by_category, category_names)
     if not comparisons:
         return []
 

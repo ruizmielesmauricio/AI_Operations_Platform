@@ -11,7 +11,10 @@ into evidence.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.application.weather_insights import get_weather_pattern_findings
+from app.application.weather_insights import (
+    get_weather_pattern_comparisons_for_category,
+    get_weather_pattern_findings,
+)
 from app.models.business import Business
 from app.models.product import Product, ProductCategory
 from app.models.sale import Sale, SaleItem
@@ -221,3 +224,69 @@ def test_get_findings_excludes_weather_findings_when_a_category_filter_is_active
     )
 
     assert [f for f in summary.findings if f.type == "weather_pattern_insight"] == []
+
+
+# --- get_weather_pattern_comparisons_for_category -----------------------
+# Ask ORLA's "does weather affect sales of [category]" intent
+# (app/ai/service.py::_dispatch_weather_category_lookup) — deliberately
+# NOT gated on the upcoming forecast matching, unlike
+# get_weather_pattern_findings above. No weather_client mocking needed at
+# all in these tests: this function never calls the forecast API.
+
+
+def test_category_comparisons_no_coordinates_resolved_returns_empty(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    category = _make_category(db_session, business_id, name="Waterproof Gear")
+
+    comparisons = get_weather_pattern_comparisons_for_category(
+        db_session, business=business, category_id=category.id, now=_NOW
+    )
+
+    assert comparisons == []
+
+
+def test_category_comparisons_no_weather_history_yet_returns_empty(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    category = _make_category(db_session, business_id, name="Waterproof Gear")
+
+    comparisons = get_weather_pattern_comparisons_for_category(
+        db_session, business=business, category_id=category.id, now=_NOW
+    )
+
+    assert comparisons == []
+
+
+def test_category_comparisons_real_pattern_returned_with_no_upcoming_forecast_at_all(db_session, business_id):
+    # The key distinguishing behavior versus get_weather_pattern_findings:
+    # this must surface the real historical pattern even though nothing
+    # here ever calls/mocks the forecast API — "tell me what my own
+    # history shows," not "tell me only what matches this week."
+    business = _set_coordinates(db_session, business_id)
+    category = _make_category(db_session, business_id, name="Waterproof Gear")
+    _seed_rainy_pattern_history(db_session, business_id, category.id)
+
+    comparisons = get_weather_pattern_comparisons_for_category(
+        db_session, business=business, category_id=category.id, now=_NOW
+    )
+
+    rainy = [c for c in comparisons if c.bucket == "rainy"]
+    assert len(rainy) == 1
+    comparison = rainy[0]
+    assert comparison.category_id == category.id
+    assert comparison.category_name == "Waterproof Gear"
+    assert comparison.bucket_day_count == 12
+    assert comparison.pct_difference > 0
+
+
+def test_category_comparisons_unknown_category_id_returns_empty(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    known_category = _make_category(db_session, business_id, name="Waterproof Gear")
+    _seed_rainy_pattern_history(db_session, business_id, known_category.id)
+
+    other_category = _make_category(db_session, business_id, name="Bells")
+
+    comparisons = get_weather_pattern_comparisons_for_category(
+        db_session, business=business, category_id=other_category.id, now=_NOW
+    )
+
+    assert comparisons == []

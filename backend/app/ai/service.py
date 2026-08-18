@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -41,13 +41,15 @@ from app.application.category_breakdown import get_category_breakdown
 from app.application.financial_performance import get_financial_performance
 from app.application.findings import get_findings
 from app.application.forecast import get_forecast
-from app.application.lookups import find_products, find_purchases, find_repairs
+from app.application.lookups import find_category, find_products, find_purchases, find_repairs
 from app.application.retail_operations import get_retail_operations
+from app.application.weather_insights import get_weather_pattern_comparisons_for_category, get_weather_pattern_findings
 from app.application.workshop_performance import get_workshop_performance
 from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
 from app.repositories.business import list_businesses_for_user
 from app.repositories.inventory_movement import InventoryMovementRepository
+from app.repositories.product import ProductCategoryRepository
 from app.repositories.report import ReportRepository
 from app.schemas.analytics import (
     CategoryBreakdownOut,
@@ -91,6 +93,8 @@ ALLOWED_INTENTS = (
     "purchase_history",
     "repair_lookup",
     "category_breakdown",
+    "weather_pattern_lookup",
+    "weather_outlook",
     "out_of_scope",
 )
 # explicit_date added alongside the lookup intents — a question naming a
@@ -490,6 +494,8 @@ _INTENT_FOCUS_LABELS = {
     "purchase_lookup": "a specific purchase/order",
     "repair_lookup": "a specific repair",
     "latest_report": "the latest report",
+    "weather_pattern_lookup": "a category's weather-linked sales pattern",
+    "weather_outlook": "what the upcoming week's weather means for demand",
 }
 
 
@@ -597,6 +603,49 @@ def _build_part(
             # "product_lookup" — preserve whichever it actually is.
             return _Part(intent=early_result.intent, resolved_answer=early_result.answer)
         return _Part(intent=intent, context=context)
+
+    if intent == "weather_pattern_lookup":
+        context, early_result = _dispatch_weather_category_lookup(
+            db, business=business, classify=classify_item
+        )
+        if early_result is not None:
+            return _Part(intent=early_result.intent, resolved_answer=early_result.answer)
+        return _Part(intent=intent, context=context)
+
+    if intent == "weather_outlook":
+        # Deliberately single-business only, same stated precedent as
+        # category_breakdown/latest_report in _fetch_context's own
+        # docstring — a business's weather is tied to its own location,
+        # not a "combine across branches" concept the way a revenue total
+        # is.
+        findings = get_weather_pattern_findings(db, business=business, now=now)
+        if not findings:
+            return _Part(
+                intent="weather_outlook",
+                resolved_answer=(
+                    "Nothing weather-notable stands out for the week ahead right now — either the "
+                    "forecast doesn't clearly match a pattern I have enough history for yet, or there "
+                    "isn't a strong link in your own sales data."
+                ),
+            )
+        # Explicit, stated outright rather than left for the model to
+        # infer — live-verified real miss: without this note, the model
+        # read `weather_outlook` as unlabelled generic historical figures
+        # with no live forecast attached, and answered "no forecast data
+        # is available" even though every entry below only exists *because*
+        # this business's real upcoming forecast already matched it (see
+        # get_weather_pattern_findings's own forecast-gating above) — the
+        # same category of bug scope_note (below, in _generate_answer)
+        # already exists to prevent for branch scope.
+        weather_outlook_note = (
+            "Each entry below is a category whose historical sales pattern matches this business's "
+            "actual weather forecast for the upcoming week — these are live, forecast-relevant signals "
+            "for the week ahead, not unrelated past history."
+        )
+        return _Part(
+            intent="weather_outlook",
+            context=_json_safe({"note": weather_outlook_note, "weather_outlook": [f.evidence for f in findings]}),
+        )
 
     context = _fetch_context(
         db, business=business, intent=intent, classify=classify_item, now=now, combined_businesses=combined_businesses,
@@ -803,6 +852,7 @@ _CONTINUABLE_INTENTS = frozenset(
         "findings_recommendations",
         "category_breakdown",
         "latest_report",
+        "weather_outlook",
     }
 )
 
@@ -1072,6 +1122,69 @@ def _dispatch_lookup(
         return None, AnswerResult(answer=message, intent=intent, grounded=True)
 
     return result.matches[0], None
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively converts a raw Python structure (Decimal, UUID, date,
+    ...) into the same JSON-primitive shape every other intent's context
+    already arrives in via a Pydantic schema's `.model_dump(mode="json")`
+    (see e.g. FinancialPerformanceOut usage below) — app/ai/guardrail.py::
+    flatten_numeric_values only recognises int/float/str leaves, never a
+    raw Decimal object, so context built by hand (dataclasses.asdict, or
+    a Finding's own `evidence` dict) must go through this or every one of
+    its numbers is silently invisible to the guardrail — live-verified
+    this exact failure mode against real weather-pattern data before
+    adding this: a numerically-correct answer was rejected as
+    'unsupported' because Decimal("21.7") was never in the flattened set
+    at all, having no matching int/float/str branch to fall into."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def _dispatch_weather_category_lookup(
+    db: Session, *, business: Business, classify: ClassifyResult
+) -> tuple[dict | None, AnswerResult | None]:
+    """Same shared 0/1/many-match discipline as `_dispatch_lookup` above,
+    for the `weather_pattern_lookup` intent — resolves the free-text
+    category name via `find_category`, then (on exactly one match) looks
+    up that category's real weather-linked sales comparisons. Returns
+    (None, AnswerResult) for the 0-match, many-match, and "resolved but
+    no comparisons clear the sample-size/materiality gates yet" cases —
+    all zero further AI cost, same as every other lookup dispatch in this
+    module."""
+    if not classify.search_term:
+        return None, AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
+
+    result = find_category(db, business_id=business.id, query=classify.search_term)
+
+    if not result.match_labels:
+        categories = ProductCategoryRepository(db).list_for_business(business.id)
+        if categories:
+            names = "; ".join(c.name for c in categories[:10])
+            message = (
+                f'I couldn\'t find a category matching "{classify.search_term}". Your categories include: '
+                f"{names}."
+            )
+        else:
+            message = f'I couldn\'t find a category matching "{classify.search_term}".'
+        return None, AnswerResult(answer=message, intent="weather_pattern_lookup", grounded=True)
+
+    if len(result.match_labels) > 1:
+        listed = "; ".join(result.match_labels[:5])
+        message = f"I found several matching categories: {listed}. Ask me again naming just the one you mean."
+        return None, AnswerResult(answer=message, intent="weather_pattern_lookup", grounded=True)
+
+    category_id = uuid.UUID(result.matches[0]["category_id"])
+    category_name = result.matches[0]["category_name"]
+    comparisons = get_weather_pattern_comparisons_for_category(db, business=business, category_id=category_id)
+    if not comparisons:
+        message = (
+            f"I don't have enough weather history yet to say whether {category_name} is weather-sensitive — "
+            "check back after a few more weeks of data."
+        )
+        return None, AnswerResult(answer=message, intent="weather_pattern_lookup", grounded=True)
+
+    context = _json_safe({"category_name": category_name, "weather_patterns": [asdict(c) for c in comparisons]})
+    return context, None
 
 
 def _fetch_context(
@@ -1393,7 +1506,19 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     'questions. Different from "financial_performance": that\'s one whole-business revenue/margin figure '
     'with no cost breakdown to point to; this intent is the one with an actual per-category cost/expense '
     'figure to ground an answer in. Use period "explicit_date" the same way as financial_performance for '
-    "a question naming a specific date range.\n\n"
+    "a question naming a specific date range.\n"
+    '- "weather_pattern_lookup": whether weather has historically been linked to demand for ONE specific '
+    'product category, from this business\'s own real sales history — use for "does weather affect '
+    '[category] sales", "do we sell more/less X when it rains or is cold", "is [category] weather-'
+    'sensitive". Set "search_term" to the category name. Different from "category_breakdown": that\'s '
+    "about money (revenue/cost), never weather.\n"
+    '- "weather_outlook": what the upcoming week\'s real forecast means for demand, based on real '
+    'historical weather-linked sales patterns — use for "what should I expect this week", "will the '
+    'weather affect sales this week", "any weather risk coming up". Different from "forecast": that gives '
+    "a demand-quantity/reorder-number projection with no weather link at all. Different from "
+    '"findings_recommendations": a weather pattern may exist in that intent\'s data too, but buried in a '
+    "general list among unrelated issues and possibly cut off by a display cap — use \"weather_outlook\" "
+    "for a direct, dedicated answer about weather specifically.\n\n"
     'Use "metric_definition" when the question asks what a term/metric means, not for one of its numbers. '
     'Use "out_of_scope" for anything not about this business\'s revenue, retail/workshop performance, '
     'forecast, recommendations, reports, or a specific product/purchase/repair — never invent an intent '
@@ -1448,27 +1573,26 @@ def _classify_intent(
         messages.append({"role": "assistant", "content": previous_answer[:_CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS]})
     messages.append({"role": "user", "content": question})
     try:
-        # max_tokens=1000 (raised from 700 when the classify JSON shape
-        # became a 1-3 item "intents" array instead of one object): the
+        # max_tokens=1400 (raised from 1000 after adding the two weather
+        # intents' description paragraphs to the classify prompt): the
         # default model is a reasoning model that spends hidden
         # "reasoning" tokens (billed, counted against this budget) before
         # ever emitting the visible JSON — too tight a budget here just
         # silently truncates before real content comes out (content=
         # None), which _parse_intent_json then has no way to tell apart
-        # from a genuine "out of scope" verdict. 700 was itself raised
-        # from 300 after adding the lookup/explicit-date intents and
-        # live-verified against OpenRouter pushing some real questions
-        # into consistently burning the full 300-token reasoning budget
-        # with zero left for the visible JSON — reproduced
-        # deterministically (temperature=0) across repeated calls, not a
-        # one-off. A genuine 3-part compound question roughly triples the
-        # visible JSON payload on top of that same reasoning-token cost;
-        # 1000 is sized to cover that worst case without repeating the
-        # same regression — live-verify against a real 3-part question
-        # and raise further if truncation shows up again. See
-        # app/settings/config.py's openrouter_model comment.
+        # from a genuine "out of scope" verdict. 700 was raised to 1000
+        # when the classify JSON shape became a 1-3 item "intents" array;
+        # live-verified this round: a real weather_outlook question
+        # (nothing exotic — a single-intent question) burned the full
+        # 1000-token budget with tokens_out=1000 and content=None,
+        # reproduced against real OpenRouter, not a hypothetical — a
+        # bigger system prompt costs more reasoning tokens under this
+        # free model even before a single visible JSON token comes out.
+        # 1400 is sized against that live failure; live-verify again and
+        # raise further if truncation shows up. See app/settings/
+        # config.py's openrouter_model comment.
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=1000, temperature=0.0
+            messages=messages, response_format={"type": "json_object"}, max_tokens=1400, temperature=0.0
         )
     except AIProviderError as exc:
         logger.warning("AI classify call failed business=%s error=%s", business_id, exc)

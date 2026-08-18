@@ -23,7 +23,39 @@ ever leave this module's callers.
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+
+# A plain division of two integer-ish quantities produces an arbitrary-
+# precision repeating Decimal (21.69291338582677165354330709...) that no
+# human phrasing would ever repeat verbatim, so an ungrounded-looking
+# (but numerically correct) rounded figure would fail app/ai/guardrail.py
+# ::validate_grounded's deliberately strict no-rounding check on every
+# single real answer. Quantizing once, here, at computation time — not
+# left for the AI to guess a "reasonable" precision — keeps this a Core
+# Rule-compliant deterministic calculation and gives the explain call a
+# fixed-precision number an honest restatement can actually match.
+#
+# Percentages are quantized to a *whole* number (0.1 was live-tried
+# first and wasn't enough): a real weather_outlook answer summarising
+# three categories at once still rounded every single one further, to
+# the nearest whole percent, in its own natural phrasing — "22%", not
+# "21.7%" — reproduced against real OpenRouter, not hypothetical. Whole
+# numbers also match this module's own Finding message, which already
+# formats pct_difference with `.0f}%` (see app/application/
+# weather_insights.py) — giving the explain call the same precision the
+# deterministic message already commits to, rather than a finer one nothing
+# downstream actually uses. Average-unit figures kept at one decimal —
+# live-verified fine at that precision for a single-category answer.
+_TENTH_UNIT = Decimal("0.1")
+_WHOLE_PERCENT = Decimal("1")
+
+
+def _quantize_units(value: Decimal) -> Decimal:
+    return value.quantize(_TENTH_UNIT, rounding=ROUND_HALF_UP)
+
+
+def _quantize_pct(value: Decimal) -> Decimal:
+    return value.quantize(_WHOLE_PERCENT, rounding=ROUND_HALF_UP)
 
 # A small, fixed taxonomy — deliberately not a continuous/learned
 # embedding, so every classification is auditable by inspecting one
@@ -158,6 +190,12 @@ def compute_weather_pattern_comparison(
             if avg_on_other_days == 0:
                 continue
 
+            # Materiality gate uses the true (unrounded) ratio — quantizing
+            # first could push a value from just-under to just-over the
+            # threshold on the rounding alone, which is exactly the kind
+            # of quiet distortion CLAUDE.md's Decimal-not-float rule
+            # exists to prevent. Only the *reported* value below is
+            # quantized, after this check has already decided.
             pct_difference = (avg_on_bucket_days - avg_on_other_days) / avg_on_other_days * 100
             if abs(pct_difference) < min_pct_difference:
                 continue
@@ -169,9 +207,9 @@ def compute_weather_pattern_comparison(
                     bucket=bucket,
                     bucket_day_count=len(bucket_days),
                     other_day_count=len(other_days),
-                    avg_on_bucket_days=avg_on_bucket_days,
-                    avg_on_other_days=avg_on_other_days,
-                    pct_difference=pct_difference,
+                    avg_on_bucket_days=_quantize_units(avg_on_bucket_days),
+                    avg_on_other_days=_quantize_units(avg_on_other_days),
+                    pct_difference=_quantize_pct(pct_difference),
                 )
             )
     return results

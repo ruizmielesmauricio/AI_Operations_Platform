@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.analytics.period import resolve_period
 from app.models.inventory_movement import InventoryMovement
 from app.repositories.inventory_movement import InventoryMovementRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductCategoryRepository, ProductRepository
 from app.repositories.production_event import ProductionEventRepository
 from app.schemas.analytics import ProductDetailOut, PurchaseDetailOut, RepairDetailOut
 
@@ -47,6 +47,32 @@ class LookupResult:
     # one?" as if the product itself were unclear). Set only by
     # find_purchases's own resolved-identity paths; None everywhere else.
     resolved_rows: list[dict] | None = None
+
+
+def find_category(db: Session, *, business_id: uuid.UUID, query: str) -> LookupResult:
+    """Resolves a free-text category name (Ask ORLA's `weather_pattern_
+    lookup` intent, app/ai/service.py) against this business's own
+    category list. Categories are a small, fully in-memory set per
+    business (typically single digits to a couple dozen) — a case-
+    insensitive substring match over the whole already-loaded list, same
+    "small enough to filter in Python" reasoning app/ai/service.py's own
+    `_detect_named_business` already uses for business names, no new
+    repository query method needed. Feeds the same shared 0/1/many
+    disambiguation every other lookup intent already uses
+    (app/ai/service.py's dispatch functions) — `matches`/`match_labels`,
+    never `resolved_rows` (a category name is never legitimately "one
+    thing with several rows" the way a purchase reference is).
+    """
+    categories = ProductCategoryRepository(db).list_for_business(business_id)
+    lowered = query.strip().lower()
+    if not lowered:
+        return LookupResult()
+    matched = [c for c in categories if lowered in c.name.lower()]
+    if not matched:
+        return LookupResult()
+    matches = [{"category_id": str(c.id), "category_name": c.name} for c in matched]
+    labels = [c.name for c in matched]
+    return LookupResult(matches=matches, match_labels=labels)
 
 
 def find_products(db: Session, *, business_id: uuid.UUID, query: str) -> LookupResult:
