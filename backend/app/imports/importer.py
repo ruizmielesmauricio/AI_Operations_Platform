@@ -691,7 +691,7 @@ _WARNING_MESSAGE_TEMPLATES = {
 }
 
 
-def _build_rejection_summary(
+def build_rejection_summary(
     rejections: list[RejectedRow], warnings: dict[str, list[dict]]
 ) -> dict | None:
     if not rejections and not warnings:
@@ -774,7 +774,7 @@ def _resolve_category_id(
 ) -> uuid.UUID | None:
     """Match-or-create a ProductCategory by name for one row's mapped
     category text — shared by _write_sales/_write_inventory/
-    _write_purchases (never _write_repairs — no product link exists
+    write_purchases_batch (never _write_repairs — no product link exists
     there to hang a category off of). Returns None when the row didn't
     map a category at all; callers must treat that as "nothing to set
     or update this row," never as "clear the product's existing
@@ -826,7 +826,7 @@ def _write_sales(
     category_matcher = CategoryMatcher(category_repo.list_for_business(upload.business_id))
     existing_refs = sale_repo.list_existing_order_references(upload.business_id)
     # Informational only, same "never reject or suppress" posture as
-    # _write_purchases' identical lookup — sum_by_product_ids's date-aware
+    # write_purchases_batch's identical lookup — sum_by_product_ids's date-aware
     # calculation already excludes a sale/return dated on/before a later
     # stock count from current stock, automatically and correctly,
     # regardless of upload order. This exists purely so the client
@@ -917,7 +917,7 @@ def _write_sales(
                 )
             if product_id is not None:
                 sale_event_date = sale.sold_at.date()
-                # Same boundary as _write_purchases' identical check: on-or-
+                # Same boundary as write_purchases_batch's identical check: on-or-
                 # before (not strictly-before) the count's date is "already
                 # reflected in it," matching a shop's own daily routine of
                 # exporting sales and a stock count together, the count
@@ -1073,9 +1073,21 @@ def _write_inventory(
     return rows_imported, warnings, touched_product_ids, []
 
 
-def _write_purchases(
+def write_purchases_batch(
     db: Session, upload: Upload, import_record: ImportRecord, parsed_rows: list[ParsedPurchaseRow]
 ) -> tuple[int, dict[str, list[dict]], set[uuid.UUID], list[RejectedRow]]:
+    """Public (not underscore-prefixed) because it has a second caller:
+    app/invoices/service.py::confirm_invoice_import hands it the lines a
+    human has reviewed/corrected from a PDF invoice, using a synthetic
+    Upload+ImportRecord pair (entity_type="purchases", same literal value
+    CSV purchases already use) built for that purpose — only
+    `upload.business_id` is ever read here, never storage_key/
+    original_filename, so a non-file-backed Upload row works unmodified.
+    This is the ONE consistent write path for "purchases," regardless of
+    source (spec §6) — product/supplier matching, cost updates, and
+    duplicate-reference rejection all apply identically either way, and
+    importer.py's own undo_import (entity_type-dispatched) reverses
+    either source's InventoryMovement rows with zero further code."""
     warnings: dict[str, list[dict]] = defaultdict(list)
     product_repo = ProductRepository(db)
     movement_repo = InventoryMovementRepository(db)
@@ -1207,7 +1219,7 @@ def _write_repairs(
     # (reference, description, price_charged, labour_cost), not reference
     # alone — one invoice/job number can cover more than one repair (see
     # list_existing_repair_reference_signatures's own docstring for why,
-    # and _write_purchases above for the same class of bug, found live,
+    # and write_purchases_batch above for the same class of bug, found live,
     # this mirrors).
     existing_signatures = event_repo.list_existing_repair_reference_signatures(upload.business_id)
     rows_imported = 0
@@ -1307,7 +1319,7 @@ def run_import(db: Session, upload: Upload, import_record: ImportRecord) -> Impo
     # them exactly like any other invalid row.
     rejections.extend(duplicate_rejections)
 
-    rejection_summary = _build_rejection_summary(rejections, warnings)
+    rejection_summary = build_rejection_summary(rejections, warnings)
     rows_total = rows_imported + len(rejections)
 
     ImportRecordRepository(db).update_after_import(
@@ -1496,7 +1508,7 @@ _PARSE_ROW_FNS = {
 _WRITE_FNS = {
     "sales": _write_sales,
     "inventory": _write_inventory,
-    "purchases": _write_purchases,
+    "purchases": write_purchases_batch,
     "repairs": _write_repairs,
 }
 

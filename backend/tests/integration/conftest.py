@@ -12,6 +12,8 @@ from app.models import (
     ImportMappingProfile,
     ImportRecord,
     InventoryMovement,
+    InvoiceDraft,
+    InvoiceDraftLine,
     Membership,
     Notification,
     ProcessedStripeEvent,
@@ -63,6 +65,8 @@ def db_session(_engine):
     session.query(SaleItem).delete()
     session.query(Sale).delete()
     session.query(ProductSupplier).delete()
+    session.query(InvoiceDraftLine).delete()
+    session.query(InvoiceDraft).delete()
     session.query(Product).delete()
     session.query(ProductCategory).delete()
     session.query(Supplier).delete()

@@ -161,6 +161,88 @@ export interface ImportUndoResponse {
   reversed_at: string | null;
 }
 
+// PDF supplier-invoice ingestion (backend/app/schemas/invoice.py) --
+// mirrors those Pydantic response shapes field-for-field.
+
+export interface InvoiceDraftLine {
+  id: string;
+  line_number: number;
+  extracted_fields: Record<string, { raw: string | null; value: unknown; confidence: number; issue: string | null }> | null;
+  description: string | null;
+  supplier_sku: string | null;
+  quantity: string | null; // Decimal serialized as a string
+  unit: string | null;
+  unit_price: string | null;
+  line_total: string | null;
+  tax_rate: string | null;
+  tax_amount: string | null;
+  discount_amount: string | null;
+  resolution_action: "match_existing" | "create_new" | "excluded" | "unresolved";
+  matched_product_id: string | null;
+  matched_product_name: string | null;
+  matched_product_sku: string | null;
+  proposed_name: string | null;
+  proposed_sku: string | null;
+  issue_code: string | null;
+}
+
+export interface InvoiceDraft {
+  id: string;
+  original_filename: string;
+  status: "processing" | "needs_review" | "failed" | "confirmed" | "reversed";
+  failure_reason: string | null;
+  extracted_at: string | null;
+  extracted_header: Record<string, { raw: string | null; value: unknown; confidence: number; issue: string | null }> | null;
+  header_issue_codes: string[] | null;
+  supplier_id: string | null;
+  matched_supplier_name: string | null;
+  supplier_name_input: string | null;
+  invoice_reference: string | null;
+  invoice_date: string | null;
+  due_date: string | null;
+  currency: string | null;
+  subtotal: string | null;
+  tax_total: string | null;
+  discount_total: string | null;
+  shipping_total: string | null;
+  grand_total: string | null;
+  duplicate_status: "none" | "exact" | "plausible";
+  duplicate_of_draft_id: string | null;
+  import_record_id: string | null;
+  reversed_at: string | null;
+  created_at: string;
+  lines: InvoiceDraftLine[];
+}
+
+export interface InvoiceConfirmPreview {
+  products_to_create: number;
+  products_to_match: number;
+  lines_excluded: number;
+  supplier_action: "match_existing" | "create_new" | "unknown";
+  supplier_name: string | null;
+  purchase_movement_count: number;
+  invoice_date: string | null;
+  blocking_issue_count: number;
+  duplicate_status: "none" | "exact" | "plausible";
+}
+
+export interface InvoiceConfirmResponse {
+  invoice_draft_id: string;
+  status: string;
+  import_record_id: string;
+  rows_imported: number;
+  rows_rejected: number;
+  rejection_summary: RejectionSummary | null;
+  preview: InvoiceConfirmPreview;
+}
+
+export interface InvoiceUndoResponse {
+  invoice_draft_id: string;
+  status: string;
+  import_record_id: string;
+  reversed_at: string | null;
+}
+
 export interface FieldCandidate {
   source_column: string;
   confidence: number;

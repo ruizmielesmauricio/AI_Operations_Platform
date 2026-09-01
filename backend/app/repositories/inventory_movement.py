@@ -268,7 +268,7 @@ class InventoryMovementRepository:
         used by this business's purchase movements, across all prior
         imports — one query, not N+1. Used to reject a re-uploaded/
         overlapping purchases file per row instead of silently double-
-        counting stock received (app/imports/importer.py::_write_purchases).
+        counting stock received (app/imports/importer.py::write_purchases_batch).
 
         Keyed by reference AND product, not reference alone — a single PO
         / invoice routinely covers several different products in one
@@ -291,7 +291,7 @@ class InventoryMovementRepository:
         sum_by_product_ids itself no longer treats as a usable baseline;
         see that method's own docstring) — business-wide, not
         product_ids-scoped, since callers here
-        (app/imports/importer.py::_write_purchases, _write_sales) resolve
+        (app/imports/importer.py::write_purchases_batch, _write_sales) resolve
         products row by row as they go, not from a known list upfront.
         Used only to decide whether to show an informational "this
         purchase/sale predates your last stock count" warning — never to

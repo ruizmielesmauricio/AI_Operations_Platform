@@ -108,7 +108,7 @@ class ProductRepository:
         self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal
     ) -> Product | None:
         """First update path on Product ever — originally written by the
-        "purchases" entity type (app/imports/importer.py::_write_purchases),
+        "purchases" entity type (app/imports/importer.py::write_purchases_batch),
         the natural place to learn/refresh a product's current cost; also
         used by "inventory" (::_write_inventory) for shops that only ever
         do stock counts and never a separate purchases export. Unconditionally

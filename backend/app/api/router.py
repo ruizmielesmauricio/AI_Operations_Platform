@@ -11,6 +11,7 @@ from app.api import (
     employee_seats,
     health,
     imports,
+    invoices,
     notifications,
     product_categories,
     products,
@@ -31,6 +32,7 @@ api_router.include_router(billing.router)
 api_router.include_router(billing.webhook_router)
 api_router.include_router(uploads.router)
 api_router.include_router(imports.router)
+api_router.include_router(invoices.router)
 api_router.include_router(analytics.router)
 api_router.include_router(alerts.router)
 api_router.include_router(notifications.router)
