@@ -16,6 +16,7 @@ value. See docs/governance/11_Development_Roadmap.md v1.80.
 
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -24,8 +25,11 @@ from sqlalchemy.orm import Session
 
 from app.analytics.findings import Finding
 from app.analytics.weather_patterns import (
+    BUCKETS,
     DailyWeather,
+    MIN_BUCKET_DAYS,
     WeatherPatternComparison,
+    classify_day,
     classify_upcoming_buckets,
     compute_weather_pattern_comparison,
 )
@@ -50,6 +54,37 @@ _BUCKET_PHRASES = {
     "windy": "windy conditions",
     "mild_dry": "mild, dry conditions",
 }
+
+
+@dataclass(frozen=True)
+class WeatherSalesRanking:
+    """One product or category ranked by units sold on matching weather days.
+
+    units_sold is NET of returns (a return is a negative-quantity sale
+    row, sign-bearing throughout this schema — see SaleItemRepository's
+    own convention) — same "revenue/units already nets out returns"
+    semantics every other unit-based figure in this app already has, so
+    a product with more returns than sales in a bucket can legitimately
+    show a negative value. Callers presenting this to a user should say
+    "net units sold," not a bare "units sold," so a negative or
+    near-zero figure reads as intentional rather than a mistake.
+
+    This deliberately reports shop sales only. The weather bucket is ORLA's
+    fixed classification; raw provider measurements never leave this layer.
+    """
+
+    name: str
+    units_sold: Decimal
+    average_units_per_matching_day: Decimal
+
+
+@dataclass(frozen=True)
+class WeatherSalesAnalysis:
+    bucket: str
+    bucket_day_count: int
+    entity_type: str
+    top: list[WeatherSalesRanking]
+    bottom: list[WeatherSalesRanking]
 
 
 def _load_weather_and_sales_data(
@@ -131,6 +166,110 @@ def get_weather_pattern_comparisons_for_category(
     if category_series is None:
         return []
     return compute_weather_pattern_comparison(daily_weather, {category_id: category_series}, category_names)
+
+
+def get_weather_sales_rankings(
+    db: Session,
+    *,
+    business: Business,
+    bucket: str,
+    entity_type: str,
+    limit: int = 5,
+    now: datetime | None = None,
+) -> WeatherSalesAnalysis | None:
+    """Ranks products or categories by real unit sales on one weather bucket.
+
+    Unlike the weather-pattern comparison, this is a descriptive ranking,
+    not a claim that weather caused a change in demand. Every day with an
+    observed matching bucket counts in the average, including a zero-sales
+    day. Rows with no matching-day sales are omitted so a "bottom" list is
+    useful instead of being filled with arbitrary zero-selling catalogue
+    items.
+    """
+    if bucket not in BUCKETS or entity_type not in {"product", "category"} or not 1 <= limit <= 10:
+        return None
+
+    resolved_now = now or datetime.now(ZoneInfo("UTC"))
+    if business.latitude is None or business.longitude is None:
+        return None
+
+    today = today_in_business_timezone(business.timezone, resolved_now)
+    weather_rows = WeatherObservationRepository(db).list_in_range(
+        business_id=business.id, start_date=date.min, end_date=today - timedelta(days=1)
+    )
+    matching_days = {
+        row.observed_date
+        for row in weather_rows
+        if bucket in classify_day(
+            DailyWeather(
+                day=row.observed_date,
+                rain_mm=row.rain_mm,
+                temp_mean_c=row.temp_mean_c,
+                wind_speed_kph=row.wind_speed_kph,
+            )
+        )
+    }
+    if len(matching_days) < MIN_BUCKET_DAYS:
+        return None
+
+    query_start = local_midnight_utc(min(matching_days), business.timezone)
+    query_end = local_midnight_utc(today, business.timezone)
+    item_rows = SaleItemRepository(db).list_units_by_product_in_range(business.id, query_start, query_end)
+    if not item_rows:
+        return None
+
+    products = {product.id: product for product in ProductRepository(db).list_for_business(business.id)}
+    categories = {category.id: category.name for category in ProductCategoryRepository(db).list_for_business(business.id)}
+    tz = ZoneInfo(business.timezone)
+    units_by_entity: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    names: dict[uuid.UUID, str] = {}
+    for product_id, sold_at, quantity in item_rows:
+        if sold_at.astimezone(tz).date() not in matching_days:
+            continue
+        product = products.get(product_id)
+        if product is None:
+            continue
+        if entity_type == "product":
+            entity_id, name = product.id, product.name
+        elif product.category_id is not None and product.category_id in categories:
+            entity_id, name = product.category_id, categories[product.category_id]
+        else:
+            continue
+        units_by_entity[entity_id] += Decimal(quantity)
+        names[entity_id] = name
+
+    if not units_by_entity:
+        return None
+
+    ranked = sorted(units_by_entity, key=lambda entity_id: (units_by_entity[entity_id], names[entity_id].lower()))
+
+    def _row(entity_id: uuid.UUID) -> WeatherSalesRanking:
+        units = units_by_entity[entity_id]
+        average = (units / len(matching_days)).quantize(Decimal("0.1"))
+        if average == 0:
+            # Real bug, found live: a small negative units_sold (more
+            # returns than sales on matching days — quantity is sign-
+            # bearing everywhere in this schema, see SaleItemRepository's
+            # own convention) can round to Decimal("-0.0") once divided
+            # by a large day count, e.g. -1/82 quantized to one decimal.
+            # -0.0 == 0.0 is True in Python, so this normalizes to the
+            # positive-zero Decimal without changing which value it is —
+            # only how it *displays* ("0.0" per matching day, not the
+            # misleading "-0.0").
+            average = abs(average)
+        return WeatherSalesRanking(
+            name=names[entity_id],
+            units_sold=units,
+            average_units_per_matching_day=average,
+        )
+
+    return WeatherSalesAnalysis(
+        bucket=bucket,
+        bucket_day_count=len(matching_days),
+        entity_type=entity_type,
+        top=[_row(entity_id) for entity_id in reversed(ranked[-limit:])],
+        bottom=[_row(entity_id) for entity_id in ranked[:limit]],
+    )
 
 
 def get_weather_pattern_findings(db: Session, *, business: Business, now: datetime | None = None) -> list[Finding]:

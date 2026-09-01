@@ -43,7 +43,11 @@ from app.application.findings import get_findings
 from app.application.forecast import get_forecast
 from app.application.lookups import find_category, find_products, find_purchases, find_repairs
 from app.application.retail_operations import get_retail_operations
-from app.application.weather_insights import get_weather_pattern_comparisons_for_category, get_weather_pattern_findings
+from app.application.weather_insights import (
+    get_weather_pattern_comparisons_for_category,
+    get_weather_pattern_findings,
+    get_weather_sales_rankings,
+)
 from app.application.workshop_performance import get_workshop_performance
 from app.models.business import Business
 from app.repositories.ai_request import AIRequestRepository
@@ -94,6 +98,7 @@ ALLOWED_INTENTS = (
     "repair_lookup",
     "category_breakdown",
     "weather_pattern_lookup",
+    "weather_sales_analysis",
     "weather_outlook",
     "out_of_scope",
 )
@@ -117,6 +122,11 @@ _MAX_EXPLICIT_DATE_YEARS_FORWARD = 1
 _MIN_HORIZON_DAYS = 1
 _MAX_HORIZON_DAYS = 90
 _DEFAULT_HORIZON_DAYS = 7
+_DEFAULT_WEATHER_RANK_LIMIT = 5
+_MAX_WEATHER_RANK_LIMIT = 10
+_WEATHER_BUCKETS = frozenset({"rainy", "cold", "windy", "mild_dry"})
+_WEATHER_ENTITY_TYPES = frozenset({"product", "category"})
+_WEATHER_RANK_DIRECTIONS = frozenset({"top", "bottom", "both"})
 # Last-exchange-only conversation memory (see answer_question's own
 # docstring): how much of the previous answer's text is given to the
 # *classify* call specifically. Classify only needs enough to tell what
@@ -132,7 +142,7 @@ _PROVIDER = "openrouter"
 
 _SAFE_FALLBACK = (
     "I can help with questions about your revenue, retail and workshop performance, forecast, "
-    "recommendations, or your latest weekly/monthly report — try asking about one of those."
+    "weather-linked sales, recommendations, or your latest weekly/monthly report — try asking about one of those."
 )
 _UNAVAILABLE_MESSAGE = "ORLA is temporarily unavailable — your dashboard and reports are unaffected. Try again shortly."
 _USAGE_LIMIT_MESSAGE = "This business has reached its question limit with ORLA for today. Try again tomorrow."
@@ -188,6 +198,14 @@ class ClassifyResult:
     # step a way to ask for the actual horizon the question named, not
     # loosening the guardrail.
     horizon_days: int | None = None
+    # Only meaningful for weather_sales_analysis. These are intentionally
+    # explicit instead of overloading search_term: the same analysis can
+    # rank products or categories, top/bottom/both, across fixed weather
+    # buckets without a separate intent for every phrasing.
+    weather_bucket: str | None = None
+    entity_type: str | None = None
+    rank_direction: str | None = None
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -329,6 +347,11 @@ def answer_question(
         business_timezone=business.timezone, now=resolved_now,
         previous_question=previous_question, previous_answer=previous_answer,
     )
+    # Small/free classifier models occasionally decline a perfectly clear
+    # weather ranking question because it does not fit the older
+    # one-category weather intent. This deterministic recovery only fires
+    # when both a fixed weather bucket and a ranking request are explicit.
+    classify_list = [_recover_weather_sales_analysis(item, question) for item in classify_list]
 
     if len(classify_list) == 1 and classify_list[0].intent == "provider_unavailable":
         return AnswerResult(
@@ -495,6 +518,7 @@ _INTENT_FOCUS_LABELS = {
     "repair_lookup": "a specific repair",
     "latest_report": "the latest report",
     "weather_pattern_lookup": "a category's weather-linked sales pattern",
+    "weather_sales_analysis": "products or categories ranked for a weather condition",
     "weather_outlook": "what the upcoming week's weather means for demand",
 }
 
@@ -611,6 +635,35 @@ def _build_part(
         if early_result is not None:
             return _Part(intent=early_result.intent, resolved_answer=early_result.answer)
         return _Part(intent=intent, context=context)
+
+    if intent == "weather_sales_analysis":
+        if combined_businesses is not None:
+            return _Part(
+                intent=intent,
+                resolved_answer=(
+                    "Weather-based rankings are location-specific, so I can't combine branches into one reliable "
+                    "weather result yet. Ask about one branch at a time."
+                ),
+            )
+        resolved = _resolve_weather_sales_request(question, classify_item)
+        if resolved is None:
+            return _Part(intent="out_of_scope", resolved_answer=_SAFE_FALLBACK)
+        bucket, entity_type, rank_direction, limit = resolved
+        analysis = get_weather_sales_rankings(
+            db, business=business, bucket=bucket, entity_type=entity_type, limit=limit, now=now
+        )
+        if analysis is None:
+            return _Part(
+                intent=intent,
+                resolved_answer=(
+                    "I don't have enough matching weather and sales history yet to rank "
+                    f"{_weather_entity_plural(entity_type)} for {_weather_bucket_label(bucket)} conditions."
+                ),
+            )
+        return _Part(
+            intent=intent,
+            resolved_answer=_format_weather_sales_analysis(analysis, rank_direction),
+        )
 
     if intent == "weather_outlook":
         # Deliberately single-business only, same stated precedent as
@@ -1187,6 +1240,122 @@ def _dispatch_weather_category_lookup(
     return context, None
 
 
+_WEATHER_BUCKET_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("rainy", ("rain", "rainy", "wet", "shower", "storm")),
+    ("cold", ("cold", "freezing", "frost", "chilly")),
+    ("windy", ("wind", "windy", "gale")),
+    ("mild_dry", ("mild", "dry", "sunny", "sunshine", "good weather", "nice weather", "warm")),
+)
+
+
+def _weather_bucket_from_question(question: str) -> str | None:
+    lowered = question.lower()
+    for bucket, keywords in _WEATHER_BUCKET_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return bucket
+    return None
+
+
+def _resolve_weather_sales_request(
+    question: str, classify: ClassifyResult
+) -> tuple[str, str, str, int] | None:
+    """Completes classifier fields with conservative deterministic cues.
+
+    The classifier still selects the approved intent, but wording such as
+    "best-selling items when it rains" should not fail merely because a
+    small model omitted one enum field from its JSON response.
+    """
+    bucket = classify.weather_bucket if classify.weather_bucket in _WEATHER_BUCKETS else _weather_bucket_from_question(question)
+    if bucket is None:
+        return None
+
+    lowered = question.lower()
+    entity_type = classify.entity_type if classify.entity_type in _WEATHER_ENTITY_TYPES else None
+    if entity_type is None:
+        entity_type = "category" if any(word in lowered for word in ("category", "categories", "department")) else "product"
+
+    rank_direction = classify.rank_direction if classify.rank_direction in _WEATHER_RANK_DIRECTIONS else None
+    if rank_direction is None:
+        has_top = any(word in lowered for word in ("top", "most", "best", "highest", "popular"))
+        has_bottom = any(word in lowered for word in ("bottom", "least", "worst", "lowest"))
+        rank_direction = "both" if has_top and has_bottom else "bottom" if has_bottom else "top"
+
+    limit = classify.limit if isinstance(classify.limit, int) and 1 <= classify.limit <= _MAX_WEATHER_RANK_LIMIT else _DEFAULT_WEATHER_RANK_LIMIT
+    return bucket, entity_type, rank_direction, limit
+
+
+def _looks_like_weather_sales_analysis_question(question: str) -> bool:
+    lowered = question.lower()
+    weather_bucket = _weather_bucket_from_question(question)
+    has_entity = any(word in lowered for word in ("product", "products", "item", "items", "sell", "sales", "category", "categories"))
+    has_ranking = any(word in lowered for word in ("top", "bottom", "most", "least", "best", "worst", "highest", "lowest"))
+    return weather_bucket is not None and has_entity and has_ranking
+
+
+def _recover_weather_sales_analysis(classify: ClassifyResult, question: str) -> ClassifyResult:
+    # Real bug, found before this shipped: this ran unconditionally on
+    # every item in classify_list, including the single-item
+    # "provider_unavailable" sentinel _classify_intent returns on a real
+    # AI-provider failure — a genuine outage, asked as a weather-ranking-
+    # shaped question, was silently rewritten into a normal
+    # weather_sales_analysis intent and answered anyway, masking the
+    # outage instead of the honest "temporarily unavailable" message
+    # (answer_question's own provider_unavailable short-circuit runs
+    # AFTER this list comprehension, so it never saw the swap). This is
+    # exactly the failure class test_network_failure_degrades_gracefully
+    # exists to prevent, just via a code path that test doesn't happen to
+    # exercise (it asks a non-weather-shaped question). Never recover a
+    # sentinel intent — only a genuinely-classified one.
+    if classify.intent in ("weather_sales_analysis", "provider_unavailable"):
+        return classify
+    if not _looks_like_weather_sales_analysis_question(question):
+        return classify
+    return ClassifyResult(
+        intent="weather_sales_analysis",
+        period=classify.period,
+        start_date=classify.start_date,
+        end_date=classify.end_date,
+        weather_bucket=_weather_bucket_from_question(question),
+    )
+
+
+def _weather_bucket_label(bucket: str) -> str:
+    return {"rainy": "rainy", "cold": "cold", "windy": "windy", "mild_dry": "mild, dry"}[bucket]
+
+
+def _weather_entity_plural(entity_type: str) -> str:
+    return "products" if entity_type == "product" else "categories"
+
+
+def _format_weather_sales_analysis(analysis: Any, rank_direction: str) -> str:
+    entity_label = _weather_entity_plural(analysis.entity_type)
+    heading = (
+        f"Across {analysis.bucket_day_count} {_weather_bucket_label(analysis.bucket)} days in your sales history, "
+        f"here are the {entity_label} ranked by net units sold (sales minus any returns)."
+    )
+
+    def _list(title: str, rows: list) -> str:
+        lines = [title]
+        lines.extend(
+            # "net" — see WeatherSalesRanking's own docstring: a product
+            # with more returns than sales on matching days can
+            # legitimately show a negative figure here, real live data
+            # confirmed this (more returns than sales in a thin bucket
+            # window), not a bug in the number itself, only in the label
+            # that used to just say "units" with no "net" qualifier.
+            f"{index}. {row.name} - {row.units_sold:g} net units ({row.average_units_per_matching_day:g} per matching day)"
+            for index, row in enumerate(rows, start=1)
+        )
+        return "\n".join(lines)
+
+    sections = [heading]
+    if rank_direction in {"top", "both"}:
+        sections.append(_list(f"Top {len(analysis.top)}:", analysis.top))
+    if rank_direction in {"bottom", "both"}:
+        sections.append(_list(f"Bottom {len(analysis.bottom)}:", analysis.bottom))
+    return "\n\n".join(sections)
+
+
 def _fetch_context(
     db: Session,
     *,
@@ -1474,6 +1643,12 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '(e.g. "the next two weeks" -> 14, "next month" -> 30, "the next 10 days" -> 10) — the number of '
     "days that timeframe covers, as an integer. Otherwise null (a plain \"what should I reorder\" with "
     "no named timeframe uses a sensible default).\n\n"
+    '"weather_bucket": one of ["rainy", "cold", "windy", "mild_dry"] only when intent is '
+    '"weather_sales_analysis", otherwise null\n'
+    '"entity_type": "product" or "category" only when intent is "weather_sales_analysis", otherwise null\n'
+    '"rank_direction": "top", "bottom", or "both" only when intent is "weather_sales_analysis", otherwise null\n'
+    '"limit": a whole number from 1 to 10 only when intent is "weather_sales_analysis" and the question '
+    'asks for a number of results, otherwise null\n\n'
     "What each intent actually contains, so you pick the one with the real data the question needs:\n"
     '- "forecast": projected demand AND a per-product suggested reorder quantity — use this for any '
     '"what/how much should I order/restock/reorder" question, not "findings_recommendations".\n'
@@ -1512,6 +1687,11 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '[category] sales", "do we sell more/less X when it rains or is cold", "is [category] weather-'
     'sensitive". Set "search_term" to the category name. Different from "category_breakdown": that\'s '
     "about money (revenue/cost), never weather.\n"
+    '- "weather_sales_analysis": ranked products or categories sold in a named historical weather condition. '
+    'Use this for "what products sell most/least when it rains", "top and bottom categories on cold days", '
+    'or "best-selling items in windy weather". Set weather_bucket from the condition, entity_type to product '
+    'or category, rank_direction to top/bottom/both, and limit only when requested. This is a historical unit-sales '
+    'ranking, not a forecast and not a causal claim that weather caused the result.\n'
     '- "weather_outlook": what the upcoming week\'s real forecast means for demand, based on real '
     'historical weather-linked sales patterns — use for "what should I expect this week", "will the '
     'weather affect sales this week", "any weather risk coming up". Different from "forecast": that gives '
@@ -1684,9 +1864,23 @@ def _parse_one_intent(data: dict, *, today: date) -> ClassifyResult:
 
     horizon_days = _parse_horizon_days(data.get("horizon_days"))
 
+    weather_bucket = data.get("weather_bucket")
+    if weather_bucket not in _WEATHER_BUCKETS:
+        weather_bucket = None
+    entity_type = data.get("entity_type")
+    if entity_type not in _WEATHER_ENTITY_TYPES:
+        entity_type = None
+    rank_direction = data.get("rank_direction")
+    if rank_direction not in _WEATHER_RANK_DIRECTIONS:
+        rank_direction = None
+    limit = data.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= _MAX_WEATHER_RANK_LIMIT:
+        limit = None
+
     return ClassifyResult(
         intent=intent, period=period, start_date=start_date, end_date=end_date, metric=metric,
-        search_term=search_term, horizon_days=horizon_days,
+        search_term=search_term, horizon_days=horizon_days, weather_bucket=weather_bucket,
+        entity_type=entity_type, rank_direction=rank_direction, limit=limit,
     )
 
 

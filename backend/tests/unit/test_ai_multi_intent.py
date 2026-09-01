@@ -47,6 +47,54 @@ def test_intents_array_with_two_objects_returns_both_in_order():
     assert result[1].horizon_days == 14
 
 
+def test_weather_sales_analysis_fields_are_parsed_and_bounded():
+    content = json.dumps(
+        {
+            "intents": [
+                {
+                    "intent": "weather_sales_analysis",
+                    "weather_bucket": "rainy",
+                    "entity_type": "product",
+                    "rank_direction": "both",
+                    "limit": 7,
+                }
+            ]
+        }
+    )
+
+    result = _parse_intent_json(content, today=_TODAY)
+
+    assert result == [
+        ClassifyResult(
+            intent="weather_sales_analysis",
+            weather_bucket="rainy",
+            entity_type="product",
+            rank_direction="both",
+            limit=7,
+        )
+    ]
+
+
+def test_invalid_weather_sales_analysis_fields_fail_closed():
+    content = json.dumps(
+        {
+            "intents": [
+                {
+                    "intent": "weather_sales_analysis",
+                    "weather_bucket": "hail",
+                    "entity_type": "sku",
+                    "rank_direction": "middle",
+                    "limit": 100,
+                }
+            ]
+        }
+    )
+
+    result = _parse_intent_json(content, today=_TODAY)
+
+    assert result == [ClassifyResult(intent="weather_sales_analysis")]
+
+
 def test_intents_array_caps_at_max_subintents():
     # A hypothetical model ignoring the "cap at 3" instruction and
     # listing 5 — server-side enforcement, never trust the model's count.

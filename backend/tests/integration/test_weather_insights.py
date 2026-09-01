@@ -14,6 +14,7 @@ from decimal import Decimal
 from app.application.weather_insights import (
     get_weather_pattern_comparisons_for_category,
     get_weather_pattern_findings,
+    get_weather_sales_rankings,
 )
 from app.models.business import Business
 from app.models.product import Product, ProductCategory
@@ -117,6 +118,68 @@ def test_no_weather_history_yet_returns_no_findings(db_session, business_id):
     findings = get_weather_pattern_findings(db_session, business=business, now=_NOW)
 
     assert findings == []
+
+
+def test_weather_sales_rankings_return_top_and_bottom_products_for_rainy_days(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    category = _make_category(db_session, business_id, name="Accessories")
+    top = _make_product(db_session, business_id, name="Rain Cape", category_id=category.id)
+    middle = _make_product(db_session, business_id, name="Mudguard", category_id=category.id)
+    bottom = _make_product(db_session, business_id, name="Bottle", category_id=category.id)
+
+    start = _TODAY - timedelta(days=20)
+    for offset in range(12):
+        day = start + timedelta(days=offset)
+        _make_weather_row(db_session, business_id, day=day, rain=Decimal("5"))
+        sold_at = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=top.id, quantity=10)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=middle.id, quantity=4)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=bottom.id, quantity=1)
+    db_session.commit()
+
+    result = get_weather_sales_rankings(
+        db_session, business=business, bucket="rainy", entity_type="product", limit=2, now=_NOW
+    )
+
+    assert result is not None
+    assert result.bucket_day_count == 12
+    assert [(row.name, row.units_sold) for row in result.top] == [
+        ("Rain Cape", Decimal("120")),
+        ("Mudguard", Decimal("48")),
+    ]
+    assert [(row.name, row.units_sold) for row in result.bottom] == [
+        ("Bottle", Decimal("12")),
+        ("Mudguard", Decimal("48")),
+    ]
+
+
+def test_weather_sales_rankings_aggregate_by_category(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    rain_category = _make_category(db_session, business_id, name="Rain gear")
+    other_category = _make_category(db_session, business_id, name="Other")
+    rain_a = _make_product(db_session, business_id, name="Cape", category_id=rain_category.id)
+    rain_b = _make_product(db_session, business_id, name="Overshoes", category_id=rain_category.id)
+    other = _make_product(db_session, business_id, name="Bottle", category_id=other_category.id)
+
+    start = _TODAY - timedelta(days=20)
+    for offset in range(12):
+        day = start + timedelta(days=offset)
+        _make_weather_row(db_session, business_id, day=day, rain=Decimal("5"))
+        sold_at = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=rain_a.id, quantity=6)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=rain_b.id, quantity=4)
+        _make_sale(db_session, business_id, sold_at=sold_at, product_id=other.id, quantity=2)
+    db_session.commit()
+
+    result = get_weather_sales_rankings(
+        db_session, business=business, bucket="rainy", entity_type="category", limit=5, now=_NOW
+    )
+
+    assert result is not None
+    assert [(row.name, row.units_sold) for row in result.top] == [
+        ("Rain gear", Decimal("120")),
+        ("Other", Decimal("24")),
+    ]
 
 
 def test_a_real_pattern_with_a_matching_upcoming_forecast_produces_a_finding(db_session, business_id, monkeypatch):
