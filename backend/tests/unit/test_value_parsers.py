@@ -27,6 +27,8 @@ def test_parse_money_handles_currency_symbols_and_native_numbers():
     assert parse_money("$12.50") == Decimal("12.50")
     assert parse_money("£9.99") == Decimal("9.99")
     assert parse_money("€1,000.00") == Decimal("1000.00")
+    assert parse_money("EUR 1,125.60") == Decimal("1125.60")
+    assert parse_money("14.50 GBP") == Decimal("14.50")
     assert parse_money(42) == Decimal("42")
     assert parse_money(42.5) == Decimal("42.5")
 

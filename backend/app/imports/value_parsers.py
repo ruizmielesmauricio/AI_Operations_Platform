@@ -15,6 +15,7 @@ _DATE_FORMATS = (
 )
 
 _CURRENCY_RE = re.compile(r"[£$€]")
+_CURRENCY_CODE_RE = re.compile(r"\b(?:EUR|GBP|USD)\b", re.I)
 
 
 def parse_date(value: object) -> date | None:
@@ -47,7 +48,7 @@ def parse_money(value: object) -> Decimal | None:
             return None
     if not isinstance(value, str) or not value.strip():
         return None
-    text = _CURRENCY_RE.sub("", value.strip())
+    text = _CURRENCY_CODE_RE.sub("", _CURRENCY_RE.sub("", value.strip()))
     negative = text.startswith("-") or text.endswith("-")
     text = text.strip("-").strip()
     if not text:

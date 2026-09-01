@@ -10,6 +10,7 @@ from app.models.employee_seat import EmployeeSeat
 from app.models.import_record import ImportMappingProfile, ImportRecord
 from app.models.inventory_lot import InventoryLot
 from app.models.inventory_movement import InventoryMovement
+from app.models.invoice import InvoiceDraft, InvoiceDraftLine
 from app.models.membership import Membership
 from app.models.notification import Notification
 from app.models.prescription_detail import PrescriptionDetail
@@ -38,6 +39,8 @@ __all__ = [
     "ImportRecord",
     "InventoryLot",
     "InventoryMovement",
+    "InvoiceDraft",
+    "InvoiceDraftLine",
     "Membership",
     "Notification",
     "PrescriptionDetail",

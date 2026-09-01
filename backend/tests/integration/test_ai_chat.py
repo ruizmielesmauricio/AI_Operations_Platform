@@ -146,6 +146,33 @@ def test_network_failure_degrades_gracefully(db_session, business_id, monkeypatc
     assert row.success is False
 
 
+def test_network_failure_on_a_weather_sales_analysis_shaped_question_is_not_masked(
+    db_session, business_id, monkeypatch
+):
+    # Same class of bug as test_network_failure_degrades_gracefully above,
+    # via a different path: _recover_weather_sales_analysis used to run
+    # unconditionally on every classify_list item, including the
+    # single-item "provider_unavailable" sentinel — a genuine AI-provider
+    # outage, asked as a weather-ranking-shaped question, was silently
+    # rewritten into a normal weather_sales_analysis intent and answered
+    # anyway instead of surfacing the honest unavailability message.
+    def _raise(*args, **kwargs):
+        from app.ai.exceptions import AIProviderError
+
+        raise AIProviderError("connection refused")
+
+    monkeypatch.setattr(client, "chat_completion", _raise)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What are the top selling products when it rains?", now=_NOW,
+    )
+
+    assert result.intent == "provider_unavailable"
+    assert result.grounded is False
+    assert "temporarily unavailable" in result.answer
+
+
 def test_daily_usage_cap_blocks_further_ai_calls(db_session, business_id, monkeypatch):
     # Reads the real configured limit rather than hardcoding a number —
     # this value has already changed once (30 -> 200 for the testing
@@ -1498,6 +1525,50 @@ def test_weather_pattern_lookup_without_a_search_term_falls_back_safely(db_sessi
     )
 
     assert result.intent == "out_of_scope"
+
+
+def test_weather_sales_analysis_recovers_a_rainy_product_ranking_when_classifier_misses_it(
+    db_session, business_id, monkeypatch
+):
+    _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Waterproof Gear", anchor_today=_NOW.date())
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        # The recovery is intentional: this used to be the live failure
+        # mode for this exact class of question.
+        return _classify_response("out_of_scope")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="What products do I sell the most when it's rainy?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sales_analysis"
+    assert result.grounded is True
+    assert "Across 12 rainy days" in result.answer
+    assert "Top 5:" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only; ranking is deterministic
+
+
+def test_weather_sales_analysis_honors_bottom_category_request(db_session, business_id, monkeypatch):
+    _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Waterproof Gear", anchor_today=_NOW.date())
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        return _classify_response("weather_sales_analysis", weather_bucket="rainy", entity_type="category", rank_direction="bottom")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories sell least when it rains?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sales_analysis"
+    assert "Bottom 1:" in result.answer
+    assert "Top" not in result.answer
 
 
 def test_weather_outlook_with_a_matching_upcoming_forecast_reaches_the_explain_call(

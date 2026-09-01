@@ -187,6 +187,25 @@ class SupplierRepository:
         self.session.flush()
         return link
 
+    def find_product_id_by_supplier_sku(
+        self, business_id: uuid.UUID, *, supplier_id: uuid.UUID, supplier_sku: str
+    ) -> uuid.UUID | None:
+        """The strongest identifier a supplier invoice line can offer
+        (PDF Supplier-Invoice Ingestion spec §3.4: "strong identifiers
+        first — exact supplier SKU/product SKU") — checked by
+        app/invoices/matching.py before falling back to the product's own
+        SKU/name via the existing ProductMatcher. Exact, case-sensitive
+        match only: a supplier's own code is whatever they printed it as,
+        never fuzzy-normalized the way a product name is.
+        """
+        return self.session.scalar(
+            select(ProductSupplier.product_id).where(
+                ProductSupplier.business_id == business_id,
+                ProductSupplier.supplier_id == supplier_id,
+                ProductSupplier.supplier_sku == supplier_sku,
+            )
+        )
+
     def list_links_for_product(self, business_id: uuid.UUID, product_id: uuid.UUID) -> list[ProductSupplier]:
         return list(
             self.session.scalars(

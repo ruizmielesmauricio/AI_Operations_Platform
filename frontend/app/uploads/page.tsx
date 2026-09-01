@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, apiGet, apiPost } from "@/lib/api/client";
+import { useRouter } from "next/navigation";
+import { ApiError, apiGet, apiPost, apiPostFile } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { redirectToCheckout } from "@/lib/billing";
 import { AppNav } from "@/components/AppNav";
@@ -13,6 +14,7 @@ import type {
   DetectMappingResponse,
   ImportRunResponse,
   ImportUndoResponse,
+  InvoiceDraft,
   RejectionSummary,
   SubscriptionStatus,
   Upload,
@@ -183,6 +185,7 @@ const FIELD_HINTS: Record<string, Record<string, string>> = {
 const NOT_PRESENT = "";
 
 export default function UploadsPage() {
+  const router = useRouter();
   const { session, checkingSession } = useRequireSession();
   const { businesses, businessId, setBusinessId } = useBusinessSelector(session);
   // Uploads/imports 402 without an active subscription (require_active_
@@ -241,9 +244,26 @@ export default function UploadsPage() {
   const [confirmingUndoRecordId, setConfirmingUndoRecordId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
+  // PDF supplier-invoice ingestion — a separate, self-contained upload
+  // form/list from the CSV state machine above (the review/correct/
+  // confirm flow has genuinely different states, handled on its own
+  // page: app/uploads/invoices/[id]/page.tsx). This section only
+  // uploads and links out to it.
+  const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [uploadingInvoice, setUploadingInvoice] = useState(false);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const invoiceFileInputRef = useRef<HTMLInputElement>(null);
+
   const loadUploads = useCallback((id: string) => {
     apiGet<Upload[]>(`/businesses/${id}/uploads`)
       .then(setUploads)
+      .catch(() => undefined);
+  }, []);
+
+  const loadInvoiceDrafts = useCallback((id: string) => {
+    apiGet<InvoiceDraft[]>(`/businesses/${id}/invoices`)
+      .then(setInvoiceDrafts)
       .catch(() => undefined);
   }, []);
 
@@ -257,8 +277,9 @@ export default function UploadsPage() {
     if (businessId) {
       loadUploads(businessId);
       loadFreshness(businessId);
+      loadInvoiceDrafts(businessId);
     }
-  }, [businessId, loadUploads, loadFreshness]);
+  }, [businessId, loadUploads, loadFreshness, loadInvoiceDrafts]);
 
   // Fetched together (Promise.all, not the per-business fire-and-forget
   // pattern used elsewhere) specifically so `subscriptionsLoaded` flips
@@ -497,6 +518,35 @@ export default function UploadsPage() {
       }
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleInvoiceUpload(e: React.FormEvent) {
+    e.preventDefault();
+    if (!invoiceFile || !businessId) return;
+    setInvoiceError(null);
+    setUploadingInvoice(true);
+    try {
+      // Goes straight through the backend (not a presigned R2 PUT, unlike
+      // the CSV form above) — small files, synchronously validated and
+      // extracted server-side (app/api/invoices.py::upload_invoice).
+      const draft = await apiPostFile<InvoiceDraft>(`/businesses/${businessId}/invoices`, invoiceFile);
+      setInvoiceFile(null);
+      if (invoiceFileInputRef.current) invoiceFileInputRef.current.value = "";
+      loadInvoiceDrafts(businessId);
+      router.push(`/uploads/invoices/${draft.id}?business=${businessId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 402) {
+        setSubscriptionRequired(true);
+      } else if (err instanceof ApiError && err.status === 429) {
+        setInvoiceError("Too many invoice uploads recently — please try again shortly.");
+      } else if (err instanceof ApiError) {
+        setInvoiceError(err.message || "Upload failed. Make sure the file is a PDF.");
+      } else {
+        setInvoiceError("Upload failed. Make sure the file is a PDF.");
+      }
+    } finally {
+      setUploadingInvoice(false);
     }
   }
 
@@ -768,6 +818,62 @@ export default function UploadsPage() {
           </button>
         </form>
       )}
+
+      <section aria-label="Invoice PDF upload">
+        <h2>Invoice PDF</h2>
+        <p>
+          Don&apos;t have a CSV/XLSX purchase export? Upload a supplier invoice PDF instead — we&apos;ll read it,
+          you review and correct anything before it&apos;s imported. Nothing is added to your stock or purchase
+          records until you confirm.
+        </p>
+        <form onSubmit={handleInvoiceUpload}>
+          <label htmlFor="invoice-file">Supplier invoice (PDF)</label>
+          <br />
+          <input
+            id="invoice-file"
+            ref={invoiceFileInputRef}
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => setInvoiceFile(e.target.files?.[0] ?? null)}
+          />
+          {invoiceError && <p className="status-error">{invoiceError}</p>}
+          <button type="submit" disabled={!invoiceFile || uploadingInvoice}>
+            {uploadingInvoice ? "Uploading…" : "Upload invoice"}
+          </button>
+        </form>
+
+        {invoiceDrafts.length > 0 && (
+          <ul>
+            {invoiceDrafts.map((draft) => (
+              <li className="upload-record" key={draft.id}>
+                <div className="upload-record__details">
+                  {draft.original_filename} —{" "}
+                  <span
+                    className={
+                      draft.status === "confirmed" ? "status-ok" : draft.status === "failed" ? "status-error" : ""
+                    }
+                  >
+                    {draft.status === "needs_review" ? "needs review" : draft.status}
+                    {draft.status === "failed" && draft.failure_reason ? ` (${draft.failure_reason})` : ""}
+                  </span>{" "}
+                  ({new Date(draft.created_at).toLocaleString()})
+                </div>
+                <div className="upload-record__actions">
+                  {draft.status === "needs_review" && (
+                    <a href={`/uploads/invoices/${draft.id}?business=${businessId}`}>Review</a>
+                  )}
+                  {draft.status === "confirmed" && (
+                    <a href={`/uploads/invoices/${draft.id}?business=${businessId}`}>View</a>
+                  )}
+                  {draft.status === "failed" && (
+                    <a href={`/uploads/invoices/${draft.id}?business=${businessId}`}>Details</a>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <h2>Past uploads</h2>
       {uploads.length === 0 ? (

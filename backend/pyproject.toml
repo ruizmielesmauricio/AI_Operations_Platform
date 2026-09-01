@@ -36,6 +36,13 @@ dependencies = [
     # (imports) used a presigned R2 PUT URL instead, so this was never
     # needed before.
     "python-multipart>=0.0.9",
+    # PDF supplier-invoice ingestion (app/invoices/pdf_reader.py) — text
+    # extraction only, no OCR. MIT-licensed, pure-Python-installable, runs
+    # entirely on our own server (no data leaves it), so unlike an OCR/
+    # document-AI vendor this triggers no cost/GDPR review. The one file
+    # allowed to import it (CLAUDE.md: no provider SDK outside its own
+    # boundary module).
+    "pdfplumber>=0.11",
 ]
 
 [project.optional-dependencies]
