@@ -11,6 +11,7 @@ test_weather_patterns.py's own hand-computed fixtures.
 from decimal import Decimal
 
 from app.invoices import extraction, pdf_reader
+from app.invoices.pdf_reader import PdfPageText, PdfReadResult
 from tests.invoice_pdf_helpers import build_invoice_pdf, build_no_table_pdf
 
 
@@ -50,6 +51,53 @@ def test_currency_symbol_is_detected_from_the_document():
     inv = _extract(subtotal="€220.00", tax_total="€50.60", grand_total="€270.60")
 
     assert inv.currency.value == "EUR"
+
+
+def test_invoice_with_currency_codes_extracts_prices_and_totals():
+    pdf = PdfReadResult(
+        pages=[
+            PdfPageText(
+                page_number=1,
+                text="\n".join(
+                    [
+                        "NORTHSHORE SUPPLIER INVOICE",
+                        "Invoice number: NSC-2026-00418",
+                        "Invoice date: 1 September 2026",
+                        "Due date: 1 October 2026",
+                        "Currency: EUR",
+                        "VAT No: IE 6384127Q VAT No: IE 9274518M",
+                        "SKU Description Qty Unit price VAT Line total",
+                        "BRK-PAD-452 Hydraulic Disc Brake Pads - Organic 24 EUR 14.50 23% EUR 356.70",
+                        "CHN-11S-116 11-Speed Chain, 116 Links 12 EUR 27.95 23% EUR 335.40",
+                        "Subtotal EUR 692.10",
+                        "VAT (23%) EUR 159.18",
+                        "Total due EUR 851.28",
+                    ]
+                ),
+                tables=[
+                    [
+                        ["SKU", "Description", "Qty", "Unit price", "VAT", "Line total"],
+                        ["BRK-PAD-452", "Hydraulic Disc Brake Pads - Organic", "24", "EUR 14.50", "23%", "EUR 356.70"],
+                        ["CHN-11S-116", "11-Speed Chain, 116 Links", "12", "EUR 27.95", "23%", "EUR 335.40"],
+                    ]
+                ],
+            )
+        ],
+        page_count=1,
+        source_file_hash="x" * 64,
+    )
+
+    inv = extraction.extract_invoice(pdf)
+
+    assert inv.subtotal.value == Decimal("692.10")
+    assert inv.tax_total.value == Decimal("159.18")
+    assert inv.grand_total.value == Decimal("851.28")
+    assert inv.lines[0].unit_price.value == Decimal("14.50")
+    assert inv.lines[0].line_total.value == Decimal("356.70")
+    assert inv.lines[0].issue_code is None
+    assert inv.lines[1].unit_price.value == Decimal("27.95")
+    assert inv.lines[1].line_total.value == Decimal("335.40")
+    assert inv.header_issue_codes == []
 
 
 def test_a_line_total_sum_mismatch_against_subtotal_is_surfaced_not_corrected():

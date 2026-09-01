@@ -118,7 +118,7 @@ _LABEL_PATTERNS: dict[str, list[re.Pattern]] = {
         re.compile(r"(?:shipping|freight|delivery)\s*[:\-]?\s*(.+)", re.I),
     ],
     "tax_total": [
-        re.compile(r"\b(?:vat|tax|gst)\b\s*(?:total|amount)?\s*[:\-]?\s*(.+)", re.I),
+        re.compile(r"\b(?:vat|tax|gst)\b\s*(?:\([^)]*\))?\s*(?:total|amount)?\s*[:\-]?\s*(?!no\b)(.+)", re.I),
     ],
     "grand_total": [
         re.compile(r"(?:grand\s*total|total\s*due|amount\s*due)\s*[:\-]?\s*(.+)", re.I),
@@ -186,16 +186,34 @@ def _extract_header(all_lines: list[str], all_text: str) -> tuple[dict[str, Fiel
     result: dict[str, FieldProvenance] = {}
     for field in _HEADER_FIELD_ORDER:
         found: tuple[int, str] | None = None
+        fallback: tuple[int, str, FieldProvenance] | None = None
         for pattern in _LABEL_PATTERNS[field]:
             for idx, line in enumerate(all_lines):
                 if idx in claimed:
                     continue
                 m = pattern.search(line)
-                if m:
-                    found = (idx, m.group(1).strip())
-                    break
+                if not m:
+                    continue
+                raw = m.group(1).strip()
+                if field in _DATE_FIELDS:
+                    provenance = _build_date_provenance(raw)
+                elif field in _MONEY_FIELDS:
+                    provenance = _build_money_provenance(raw)
+                else:
+                    provenance = FieldProvenance(raw=raw, value=raw, confidence=0.85)
+
+                if provenance.issue == "unparseable":
+                    fallback = fallback or (idx, raw, provenance)
+                    continue
+                found = (idx, raw)
+                break
             if found:
                 break
+        if found is None and fallback is not None:
+            idx, raw, provenance = fallback
+            claimed.add(idx)
+            result[field] = provenance
+            continue
         if found is None:
             result[field] = _missing()
             continue
