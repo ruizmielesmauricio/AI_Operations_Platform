@@ -159,6 +159,10 @@ export interface ImportUndoResponse {
   import_record_id: string;
   status: string;
   reversed_at: string | null;
+  // Prices/categories the file had overwritten that undo put back, and
+  // ones it left alone because something newer has changed them since.
+  values_restored: number;
+  values_kept: number;
 }
 
 // PDF supplier-invoice ingestion (backend/app/schemas/invoice.py) --
@@ -224,6 +228,8 @@ export interface InvoiceConfirmPreview {
   invoice_date: string | null;
   blocking_issue_count: number;
   duplicate_status: "none" | "exact" | "plausible";
+  // Existing products whose recorded cost price this invoice will change.
+  cost_changes: { product_name: string; old_cost: string | null; new_cost: string }[];
 }
 
 export interface InvoiceConfirmResponse {
@@ -241,6 +247,8 @@ export interface InvoiceUndoResponse {
   status: string;
   import_record_id: string;
   reversed_at: string | null;
+  values_restored: number;
+  values_kept: number;
 }
 
 export interface FieldCandidate {

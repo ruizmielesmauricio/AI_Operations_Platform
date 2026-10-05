@@ -121,6 +121,12 @@ class InvoiceConfirmRequest(BaseModel):
     override_duplicate_warning: bool = False
 
 
+class InvoiceCostChange(BaseModel):
+    product_name: str
+    old_cost: Decimal | None = None
+    new_cost: Decimal
+
+
 class InvoiceConfirmPreview(BaseModel):
     """§3.8's "list exactly what will happen" impact summary — returned
     by both the dry-run preview and, once it actually writes, alongside
@@ -136,6 +142,8 @@ class InvoiceConfirmPreview(BaseModel):
     invoice_date: date | None = None
     blocking_issue_count: int
     duplicate_status: str
+    # Existing products whose recorded cost price this invoice will change.
+    cost_changes: list[InvoiceCostChange] = []
 
 
 class InvoiceConfirmResponse(BaseModel):
@@ -153,3 +161,7 @@ class InvoiceUndoResponse(BaseModel):
     status: str
     import_record_id: uuid.UUID
     reversed_at: datetime | None
+    # Same meaning as ImportUndoResponse's: product prices/categories this
+    # invoice had overwritten that undo put back, and ones it left alone.
+    values_restored: int = 0
+    values_kept: int = 0

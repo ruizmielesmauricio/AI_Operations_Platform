@@ -15,6 +15,7 @@ from app.imports.exceptions import (
 from app.billing.access import require_active_subscription
 from app.models.membership import Membership
 from app.repositories.import_record import ImportRecordRepository
+from app.repositories.product_field_change import ProductFieldChangeRepository
 from app.repositories.upload import UploadRepository
 from app.schemas.import_run import ImportRunResponse, ImportUndoResponse
 from app.security.tenant import get_current_membership
@@ -82,6 +83,9 @@ def undo_import(
     except ImportNotReversible as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    counts = ProductFieldChangeRepository(db).counts_by_status(record.business_id, record.id)
     return ImportUndoResponse(
-        import_record_id=record.id, status=record.status, reversed_at=record.reversed_at
+        import_record_id=record.id, status=record.status, reversed_at=record.reversed_at,
+        values_restored=counts.get("reverted", 0),
+        values_kept=counts.get("superseded", 0) + counts.get("kept_edited", 0),
     )

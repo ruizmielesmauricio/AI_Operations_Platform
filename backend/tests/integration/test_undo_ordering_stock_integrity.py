@@ -209,10 +209,10 @@ def test_1_undoing_a_backdated_sale_with_a_return_removes_everything_correctly(d
     assert _stock(db_session, business_id, product.id) == 40  # unchanged — none of it was ever counted
 
 
-# --- 2: undo a backdated purchase — cost/supplier policy ---------------------
+# --- 2: undo a backdated purchase — stock unchanged, overwritten cost reverted ---
 
 
-def test_2_undoing_a_backdated_purchase_leaves_stock_unchanged_and_documents_the_cost_policy(
+def test_2_undoing_a_backdated_purchase_leaves_stock_unchanged_and_reverts_the_cost_it_overwrote(
     db_session, business_id, _fake_r2
 ):
     _import_inventory(db_session, business_id, _fake_r2, [("Chain Lube", "CL-100", 40, "2026-01-10")])
@@ -233,14 +233,16 @@ def test_2_undoing_a_backdated_purchase_leaves_stock_unchanged_and_documents_the
     ).count() == 0
     assert _stock(db_session, business_id, product.id) == 40  # still unchanged — it was never counted either way
 
-    # Documented, existing policy (same as products auto-created by an
-    # import staying in place on undo): undo removes the transactional
-    # movement/reference facts, never reverse-engineers a "current state"
-    # mutation like Product.cost_price back to its prior value — the same
-    # reason a sale's sell_price update isn't undone either.
+    # Policy CHANGED 06/10/2026 (direct instruction): this used to document
+    # that undo never reverted a "current state" mutation like
+    # Product.cost_price, so a deleted file's price stayed behind. It now
+    # does — every value an import overwrites on an existing product is
+    # remembered and put back (app/imports/revert.py; see
+    # test_import_revert.py for the full set of cases). Products the
+    # import *created* still stay in place, as before.
     db_session.refresh(product)
-    assert product.cost_price == Decimal("3.50")
-    assert product.cost_price != original_cost
+    assert product.cost_price == original_cost
+    assert product.cost_price != Decimal("3.50")
 
 
 # --- 3: undo a post-count movement — exact delta reversal --------------------

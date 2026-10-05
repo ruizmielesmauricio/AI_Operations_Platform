@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.product import Product, ProductCategory
+from app.models.product_field_change import ProductFieldChange
 from app.text_normalize import normalize_dashes, normalize_dashes_column
 
 _SEARCH_LIMIT = 5
@@ -17,6 +18,21 @@ _SEARCH_LIMIT = 5
 # copying one of those labels back verbatim got zero matches, since the
 # literal "(SKU-00175)" text is never part of the stored product name.
 _TRAILING_PAREN_RE = re.compile(r"^(.*?)\s*\(([^()]+)\)\s*$")
+
+
+def _same_value(field: str, old: object, new: object) -> bool:
+    """Whether an overwrite actually changes anything — only real changes
+    are worth remembering (re-importing the same price is not an overwrite).
+    Money compares numerically, so 10.0 and 10.00 are the same price."""
+    if old is None or new is None:
+        return old is None and new is None
+    if field in ("cost_price", "sell_price"):
+        return Decimal(str(old)) == Decimal(str(new))
+    return str(old) == str(new)
+
+
+def _as_text(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 class ProductRepository:
@@ -104,8 +120,25 @@ class ProductRepository:
             )
         )
 
+    def _remember_overwrite(
+        self, product: Product, field: str, old: object, new: object, import_record_id: uuid.UUID | None
+    ) -> None:
+        """When an IMPORT overwrites a value on an existing product, keep
+        what it was (ProductFieldChange) so undoing that import can put it
+        back. Manual edits pass no import_record_id and are never tracked —
+        undo only ever reverses what a file did, not what a person did."""
+        if import_record_id is None or _same_value(field, old, new):
+            return
+        self.session.add(
+            ProductFieldChange(
+                business_id=product.business_id, import_record_id=import_record_id, product_id=product.id,
+                field=field, old_value=_as_text(old), new_value=_as_text(new),
+            )
+        )
+
     def update_cost_price(
-        self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, cost_price: Decimal,
+        import_record_id: uuid.UUID | None = None,
     ) -> Product | None:
         """First update path on Product ever — originally written by the
         "purchases" entity type (app/imports/importer.py::write_purchases_batch),
@@ -121,12 +154,14 @@ class ProductRepository:
         )
         if product is None:
             return None
+        self._remember_overwrite(product, "cost_price", product.cost_price, cost_price, import_record_id)
         product.cost_price = cost_price
         self.session.flush()
         return product
 
     def update_sell_price(
-        self, *, business_id: uuid.UUID, product_id: uuid.UUID, sell_price: Decimal
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, sell_price: Decimal,
+        import_record_id: uuid.UUID | None = None,
     ) -> Product | None:
         """Real bug, found live via the category-breakdown feature's
         "stock value at sell price" figure against a real business: every
@@ -147,12 +182,14 @@ class ProductRepository:
         )
         if product is None:
             return None
+        self._remember_overwrite(product, "sell_price", product.sell_price, sell_price, import_record_id)
         product.sell_price = sell_price
         self.session.flush()
         return product
 
     def update_category(
-        self, *, business_id: uuid.UUID, product_id: uuid.UUID, category_id: uuid.UUID | None
+        self, *, business_id: uuid.UUID, product_id: uuid.UUID, category_id: uuid.UUID | None,
+        import_record_id: uuid.UUID | None = None,
     ) -> Product | None:
         """Mirrors update_cost_price's exact "latest wins" semantics:
         unconditionally overwrites whenever a later row for an existing
@@ -165,6 +202,7 @@ class ProductRepository:
         )
         if product is None:
             return None
+        self._remember_overwrite(product, "category_id", product.category_id, category_id, import_record_id)
         product.category_id = category_id
         self.session.flush()
         return product

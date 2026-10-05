@@ -22,9 +22,11 @@ from app.models.invoice import InvoiceDraft, InvoiceDraftLine
 from app.models.membership import Membership
 from app.repositories.invoice import InvoiceDraftLineRepository, InvoiceDraftRepository
 from app.repositories.product import ProductRepository
+from app.repositories.product_field_change import ProductFieldChangeRepository
 from app.repositories.supplier import SupplierRepository
 from app.schemas.invoice import (
     InvoiceConfirmPreview,
+    InvoiceCostChange,
     InvoiceConfirmRequest,
     InvoiceConfirmResponse,
     InvoiceDraftLineOut,
@@ -102,6 +104,10 @@ def _to_preview_out(preview: service.ConfirmPreview) -> InvoiceConfirmPreview:
         invoice_date=preview.invoice_date,
         blocking_issue_count=preview.blocking_issue_count,
         duplicate_status=preview.duplicate_status,
+        cost_changes=[
+            InvoiceCostChange(product_name=c.product_name, old_cost=c.old_cost, new_cost=c.new_cost)
+            for c in preview.cost_changes
+        ],
     )
 
 
@@ -278,9 +284,12 @@ def undo_invoice(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ImportNotReversible as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    counts = ProductFieldChangeRepository(db).counts_by_status(draft.business_id, draft.import_record_id)
     return InvoiceUndoResponse(
         invoice_draft_id=draft.id, status=draft.status, import_record_id=draft.import_record_id,
         reversed_at=draft.reversed_at,
+        values_restored=counts.get("reverted", 0),
+        values_kept=counts.get("superseded", 0) + counts.get("kept_edited", 0),
     )
 
 

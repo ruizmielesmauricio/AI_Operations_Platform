@@ -12,6 +12,7 @@ import type {
   InvoiceConfirmResponse,
   InvoiceDraft,
   InvoiceDraftLine,
+  InvoiceUndoResponse,
   ProductSearchResult,
   Supplier,
 } from "@/types";
@@ -50,6 +51,16 @@ const AMOUNT_LABELS = {
   shipping_total: "Delivery / shipping",
   grand_total: "Invoice total (what you pay)",
 } as const;
+
+// What undo did to prices/categories — never silent. A "kept" value was
+// changed by something newer (a later file or a manual edit), so undo
+// deliberately left it alone.
+function undoMessage(restored: number, kept: number): string {
+  const parts: string[] = [];
+  if (restored > 0) parts.push(`${restored} price/category change${restored === 1 ? "" : "s"} put back to what they were before`);
+  if (kept > 0) parts.push(`${kept} left as they are because they've been changed since`);
+  return parts.length > 0 ? `${parts.join("; ")}.` : "";
+}
 
 function issueText(code: string): string {
   return ISSUE_LABELS[code] ?? code;
@@ -155,6 +166,7 @@ export default function InvoiceReviewPage() {
   const [overrideDuplicate, setOverrideDuplicate] = useState(false);
   const [confirmResult, setConfirmResult] = useState<InvoiceConfirmResponse | null>(null);
 
+  const [undoNotice, setUndoNotice] = useState<string | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [confirmUndoOpen, setConfirmUndoOpen] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -307,7 +319,8 @@ export default function InvoiceReviewPage() {
     setUndoing(true);
     setActionError(null);
     try {
-      await apiPost(`/businesses/${businessId}/invoices/${params.id}/undo`, {});
+      const result = await apiPost<InvoiceUndoResponse>(`/businesses/${businessId}/invoices/${params.id}/undo`, {});
+      setUndoNotice(undoMessage(result.values_restored, result.values_kept));
       setConfirmUndoOpen(false);
       loadDraft();
     } catch (err) {
@@ -412,7 +425,10 @@ export default function InvoiceReviewPage() {
               (preview.lines_excluded > 0 ? `, and skip ${preview.lines_excluded} excluded line(s)` : "") +
               `. Supplier: ${preview.supplier_action === "unknown" ? "Unknown" : preview.supplier_name ?? "Unknown"}` +
               (preview.supplier_action === "create_new" ? " (new)" : "") +
-              "."
+              "." +
+              (preview.cost_changes.length > 0
+                ? ` The cost price of ${preview.cost_changes.length} existing product(s) will change.`
+                : "")
             : "This will import the reviewed lines into your purchase records."
         }
         confirmLabel="Confirm import"
@@ -424,7 +440,7 @@ export default function InvoiceReviewPage() {
       <ConfirmDialog
         open={confirmUndoOpen}
         title="Undo this import?"
-        description="This reverses the purchase records and stock changes this invoice created. Products or suppliers it created are kept."
+        description="This reverses the purchase records and stock changes this invoice created, and puts back any product cost prices it changed. Products or suppliers it created are kept."
         confirmLabel="Undo import"
         tone="danger"
         busy={undoing}
@@ -465,7 +481,9 @@ export default function InvoiceReviewPage() {
         </p>
       )}
 
-      {draft.status === "reversed" && <p className="status-warn">This import was undone.</p>}
+      {draft.status === "reversed" && (
+        <p className="status-warn">This import was undone.{undoNotice ? ` ${undoNotice}` : ""}</p>
+      )}
 
       {actionError && <p className="status-error">{actionError}</p>}
 
@@ -793,6 +811,23 @@ export default function InvoiceReviewPage() {
                   <li>{preview.purchase_movement_count} purchase movement(s) will be recorded</li>
                   {preview.invoice_date && <li>Purchase date: {preview.invoice_date}</li>}
                 </ul>
+              )}
+              {preview && preview.cost_changes.length > 0 && (
+                <div className="status-warn">
+                  <p>
+                    <strong>This invoice will change the cost price of {preview.cost_changes.length} existing product
+                    {preview.cost_changes.length === 1 ? "" : "s"}</strong> (the latest purchase price becomes the
+                    product&apos;s cost). If you undo the import later, these go back to what they are now.
+                  </p>
+                  <ul>
+                    {preview.cost_changes.map((c) => (
+                      <li key={c.product_name}>
+                        {c.product_name}: {c.old_cost !== null ? `€${Number(c.old_cost).toFixed(2)}` : "no cost recorded"} →{" "}
+                        €{Number(c.new_cost).toFixed(2)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {blockingLines.length > 0 && (
                 <p className="status-error">

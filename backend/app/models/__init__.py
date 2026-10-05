@@ -15,6 +15,7 @@ from app.models.membership import Membership
 from app.models.notification import Notification
 from app.models.prescription_detail import PrescriptionDetail
 from app.models.product import Product, ProductCategory
+from app.models.product_field_change import ProductFieldChange
 from app.models.production_event import ProductionEvent, ProductionEventInput, ProductionEventOutput
 from app.models.report import Report
 from app.models.return_ import Return
@@ -47,6 +48,7 @@ __all__ = [
     "ProcessedStripeEvent",
     "Product",
     "ProductCategory",
+    "ProductFieldChange",
     "ProductSupplier",
     "ProductionEvent",
     "ProductionEventInput",

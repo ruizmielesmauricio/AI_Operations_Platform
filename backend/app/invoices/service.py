@@ -10,6 +10,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -353,6 +354,13 @@ def _blocking_line_ids(lines: list[InvoiceDraftLine]) -> list[uuid.UUID]:
 
 
 @dataclass(frozen=True)
+class CostChange:
+    product_name: str
+    old_cost: Decimal | None
+    new_cost: Decimal
+
+
+@dataclass(frozen=True)
 class ConfirmPreview:
     products_to_create: int
     products_to_match: int
@@ -363,6 +371,10 @@ class ConfirmPreview:
     invoice_date: date | None
     blocking_issue_count: int
     duplicate_status: str
+    # Matched products whose recorded cost price this invoice will change
+    # ("latest purchase wins") — disclosed BEFORE confirming; undo restores
+    # them (app/imports/revert.py).
+    cost_changes: tuple[CostChange, ...] = ()
 
 
 def _resolve_supplier_preview(db: Session, draft: InvoiceDraft) -> tuple[str, str | None]:
@@ -372,6 +384,26 @@ def _resolve_supplier_preview(db: Session, draft: InvoiceDraft) -> tuple[str, st
     if draft.supplier_name_input:
         return "create_new", draft.supplier_name_input
     return "unknown", None
+
+
+def _cost_changes(db: Session, draft: InvoiceDraft, lines: list[InvoiceDraftLine]) -> tuple[CostChange, ...]:
+    """Existing products whose cost price this invoice would overwrite — the
+    last line for a product wins, exactly as write_purchases_batch applies
+    them. A line with no unit price changes nothing."""
+    matched_ids = {ln.matched_product_id for ln in lines if ln.resolution_action == "match_existing" and ln.matched_product_id}
+    if not matched_ids:
+        return ()
+    products = {p.id: p for p in ProductRepository(db).list_for_business(draft.business_id) if p.id in matched_ids}
+    new_cost: dict = {}
+    for ln in lines:
+        if ln.resolution_action == "match_existing" and ln.matched_product_id in products and ln.unit_price is not None:
+            new_cost[ln.matched_product_id] = ln.unit_price
+    changes = []
+    for product_id, cost in new_cost.items():
+        product = products[product_id]
+        if product.cost_price is None or Decimal(str(product.cost_price)) != Decimal(str(cost)):
+            changes.append(CostChange(product.name, product.cost_price, cost))
+    return tuple(sorted(changes, key=lambda c: c.product_name.lower()))
 
 
 def preview_invoice_confirm(db: Session, draft: InvoiceDraft) -> ConfirmPreview:
@@ -395,6 +427,7 @@ def preview_invoice_confirm(db: Session, draft: InvoiceDraft) -> ConfirmPreview:
     )
 
     return ConfirmPreview(
+        cost_changes=_cost_changes(db, draft, non_excluded),
         products_to_create=sum(1 for ln in non_excluded if ln.resolution_action == "create_new"),
         products_to_match=sum(1 for ln in non_excluded if ln.resolution_action == "match_existing"),
         lines_excluded=len(lines) - len(non_excluded),

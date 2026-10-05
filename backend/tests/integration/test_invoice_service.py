@@ -365,3 +365,54 @@ def test_discard_is_rejected_once_confirmed(db_session, business_id):
 
     with pytest.raises(InvoiceDraftNotReady):
         service.discard_invoice_draft(db_session, draft, user_id="user-1")
+
+
+# --- Cost-price changes: disclosed before confirming, reverted by undo ------
+
+
+def _matched_product(db_session, business_id, cost):
+    product = Product(business_id=business_id, sku="TYR-001", name="Road Tyre 700x25c", cost_price=Decimal(cost), sell_price=Decimal("30"))
+    db_session.add(product)
+    db_session.commit()
+    return product
+
+
+def _resolve_unmatched_as_new(db_session, draft):
+    for ln in InvoiceDraftLineRepository(db_session).list_for_draft(draft.business_id, draft.id):
+        if ln.resolution_action == "unresolved":
+            service.update_invoice_draft_line(
+                db_session, draft, ln, {"resolution_action": "create_new", "proposed_name": ln.description}
+            )
+    return InvoiceDraftRepository(db_session).get_for_business(draft.id, draft.business_id)
+
+
+def test_the_confirm_preview_lists_the_cost_prices_the_invoice_will_change(db_session, business_id):
+    _matched_product(db_session, business_id, "12.00")  # the invoice charges 15.00 for it
+    draft = _resolve_unmatched_as_new(db_session, _upload(db_session, business_id))
+
+    preview = service.preview_invoice_confirm(db_session, draft)
+
+    assert [(c.product_name, c.old_cost, c.new_cost) for c in preview.cost_changes] == [
+        ("Road Tyre 700x25c", Decimal("12.00"), Decimal("15.00"))
+    ]
+
+
+def test_the_preview_lists_nothing_when_the_cost_is_already_the_invoice_price(db_session, business_id):
+    _matched_product(db_session, business_id, "15.00")
+    draft = _resolve_unmatched_as_new(db_session, _upload(db_session, business_id))
+
+    assert service.preview_invoice_confirm(db_session, draft).cost_changes == ()
+
+
+def test_confirming_changes_the_cost_and_undoing_the_invoice_puts_it_back(db_session, business_id):
+    product = _matched_product(db_session, business_id, "12.00")
+    draft = _resolve_unmatched_as_new(db_session, _upload(db_session, business_id))
+
+    draft, _ = service.confirm_invoice_import(db_session, draft, confirming_user_id="user-1")
+    db_session.expire_all()
+    assert db_session.get(Product, product.id).cost_price == Decimal("15.00")
+
+    service.undo_invoice_import(db_session, draft, user_id="user-1")
+
+    db_session.expire_all()
+    assert db_session.get(Product, product.id).cost_price == Decimal("12.00")

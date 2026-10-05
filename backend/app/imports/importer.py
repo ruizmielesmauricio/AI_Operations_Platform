@@ -25,6 +25,7 @@ from app.imports.exceptions import (
     MappedColumnMissing,
 )
 from app.imports.file_parser import normalize_cell
+from app.imports.revert import revert_import_overwrites
 from app.imports.service import download_checked
 from app.imports.value_parsers import parse_date, parse_int, parse_money
 from app.application.alerts import refresh_low_stock_alerts
@@ -881,7 +882,8 @@ def _write_sales(
                     )
                 if category_id is not None:
                     product_repo.update_category(
-                        business_id=upload.business_id, product_id=product_id, category_id=category_id
+                        business_id=upload.business_id, product_id=product_id, category_id=category_id,
+                        import_record_id=import_record.id,
                     )
                 # Real gap, found live: sell_price was only ever set at
                 # product-creation time — a product first created via
@@ -892,7 +894,8 @@ def _write_sales(
                 # return row — both negatives divide to a real positive
                 # per-unit price). See ProductRepository.update_sell_price.
                 product_repo.update_sell_price(
-                    business_id=upload.business_id, product_id=product_id, sell_price=row.unit_price
+                    business_id=upload.business_id, product_id=product_id, sell_price=row.unit_price,
+                    import_record_id=import_record.id,
                 )
 
             item = sale_item_repo.create(
@@ -1008,7 +1011,8 @@ def _write_inventory(
                 )
             if category_id is not None:
                 product_repo.update_category(
-                    business_id=upload.business_id, product_id=match.product_id, category_id=category_id
+                    business_id=upload.business_id, product_id=match.product_id, category_id=category_id,
+                    import_record_id=import_record.id,
                 )
             resolved.append(
                 ResolvedInventoryRow(
@@ -1068,7 +1072,8 @@ def _write_inventory(
             # benefit. Cost doesn't affect stock-cover/low-stock, so this
             # never adds to touched_product_ids.
             product_repo.update_cost_price(
-                business_id=upload.business_id, product_id=result.product_id, cost_price=result.unit_cost
+                business_id=upload.business_id, product_id=result.product_id, cost_price=result.unit_cost,
+                import_record_id=import_record.id,
             )
     return rows_imported, warnings, touched_product_ids, []
 
@@ -1143,7 +1148,8 @@ def write_purchases_batch(
             product_id = match.product_id
             if category_id is not None:
                 product_repo.update_category(
-                    business_id=upload.business_id, product_id=product_id, category_id=category_id
+                    business_id=upload.business_id, product_id=product_id, category_id=category_id,
+                    import_record_id=import_record.id,
                 )
 
         # Informational only — see latest_adjustment_by_product's own
@@ -1179,7 +1185,8 @@ def write_purchases_batch(
                 if product_id in cost_updated_products:
                     warnings["duplicate_product_cost_overwritten"].append({"row_number": row.row_number})
                 product_repo.update_cost_price(
-                    business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost
+                    business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost,
+                    import_record_id=import_record.id,
                 )
                 cost_updated_products.add(product_id)
 
@@ -1423,6 +1430,11 @@ def undo_import(db: Session, import_record: ImportRecord) -> ImportRecord:
     # (it was already excluded from the total); deleting one dated after it
     # correctly reduces the total by exactly its own contribution.
     touched_product_ids = _UNDO_FNS[import_record.entity_type](db, import_record)
+
+    # Put back any price/category the file overwrote on an existing product
+    # (app/imports/revert.py) — undoing a file must not leave its values
+    # behind. Same transaction as the undo itself.
+    revert_import_overwrites(db, import_record)
 
     ImportRecordRepository(db).mark_reversed(import_record, reversed_at=datetime.now(timezone.utc))
     db.commit()

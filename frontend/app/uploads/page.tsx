@@ -466,10 +466,17 @@ export default function UploadsPage() {
     setUndoingRecordId(importRecordId);
     setActionErrors((prev) => ({ ...prev, [importRecordId]: "" }));
     try {
-      await apiPost<ImportUndoResponse>(
+      const undone = await apiPost<ImportUndoResponse>(
         `/businesses/${businessId}/import-records/${importRecordId}/undo`,
         {}
       );
+      if (undone.values_restored > 0 || undone.values_kept > 0) {
+        setNotice(
+          `Import undone. ${undone.values_restored} price/category change${undone.values_restored === 1 ? "" : "s"} ` +
+            `put back to what they were before` +
+            (undone.values_kept > 0 ? `; ${undone.values_kept} left as they are because they've been changed since.` : ".")
+        );
+      }
       loadUploads(businessId);
       loadFreshness(businessId);
     } catch (err) {
@@ -611,7 +618,7 @@ export default function UploadsPage() {
       <ConfirmDialog
         open={confirmingUndoRecordId !== null}
         title="Undo this import?"
-        description="This reverses the records and stock changes created by this upload. It cannot be restored automatically; re-import the file if you need it again."
+        description="This reverses the records and stock changes created by this upload, and puts back any product prices or categories it had changed. It cannot be restored automatically; re-import the file if you need it again."
         confirmLabel="Undo import"
         tone="danger"
         busy={confirmingUndoRecordId !== null && undoingRecordId === confirmingUndoRecordId}

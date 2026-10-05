@@ -8,6 +8,8 @@ tests/tenant_isolation/test_invoices_isolation.py — matching this
 codebase's established split (see that directory's own README).
 """
 
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -252,3 +254,37 @@ def test_confirming_an_exact_duplicate_returns_409_with_the_original_linked(clie
     # The draft's own field (fetched before Confirm is ever attempted) is
     # the real source for which invoice this duplicates, not the error body.
     assert second["duplicate_status"] == "exact"
+
+
+def test_preview_warns_about_cost_changes_and_undo_reports_what_it_restored(client):
+    headers = bearer_header("user-a", "a@example.com")
+    business = _create_business(client, headers)
+    from app.models.product import Product
+
+    db = sessionmaker(bind=client._engine)()
+    import uuid as _uuid
+    product = Product(
+        business_id=_uuid.UUID(business["id"]), sku="TYR-001", name="Road Tyre 700x25c",
+        cost_price=Decimal("12.00"), sell_price=Decimal("30"),
+    )
+    db.add(product)
+    db.commit()
+    product_id = product.id
+    db.close()
+
+    invoice = _upload_invoice(client, headers, business["id"]).json()
+    _resolve_all_lines(client, headers, business["id"], invoice["id"], [l for l in invoice["lines"] if l["resolution_action"] == "unresolved"])
+
+    preview = client.post(f"/businesses/{business['id']}/invoices/{invoice['id']}/confirm/preview", headers=headers).json()
+    assert len(preview["cost_changes"]) == 1
+    change = preview["cost_changes"][0]
+    assert change["product_name"] == "Road Tyre 700x25c"
+    assert Decimal(change["old_cost"]) == Decimal("12.00") and Decimal(change["new_cost"]) == Decimal("15.00")
+
+    assert client.post(f"/businesses/{business['id']}/invoices/{invoice['id']}/confirm", headers=headers).status_code == 200
+    undo = client.post(f"/businesses/{business['id']}/invoices/{invoice['id']}/undo", headers=headers).json()
+
+    assert undo["values_restored"] == 1 and undo["values_kept"] == 0
+    db = sessionmaker(bind=client._engine)()
+    assert db.get(Product, product_id).cost_price == Decimal("12.00")
+    db.close()
