@@ -41,6 +41,16 @@ const ISSUE_LABELS: Record<string, string> = {
   not_found: "Not found in the document",
 };
 
+// Plain-language labels for the invoice's money fields — never the raw
+// database field names.
+const AMOUNT_LABELS = {
+  subtotal: "Total before VAT",
+  tax_total: "VAT",
+  discount_total: "Discount",
+  shipping_total: "Delivery / shipping",
+  grand_total: "Invoice total (what you pay)",
+} as const;
+
 function issueText(code: string): string {
   return ISSUE_LABELS[code] ?? code;
 }
@@ -445,7 +455,7 @@ export default function InvoiceReviewPage() {
 
       {draft.status === "confirmed" && (
         <p className="status-ok">
-          Imported successfully. <a href={`/transactions?business=${businessId}&tab=purchases`}>View in Transactions</a>.
+          Imported successfully. <a href={`/transactions?business=${businessId}&type=purchases`}>View in Transactions</a>.
         </p>
       )}
       {confirmResult && (
@@ -571,7 +581,7 @@ export default function InvoiceReviewPage() {
             </div>
             {(["subtotal", "tax_total", "discount_total", "shipping_total", "grand_total"] as const).map((field) => (
               <div key={field}>
-                <label htmlFor={field}>{field.replace("_", " ")}</label>
+                <label htmlFor={field}>{AMOUNT_LABELS[field]}</label>
                 <br />
                 <input
                   id={field}
@@ -606,6 +616,7 @@ export default function InvoiceReviewPage() {
               screen yet — try a CSV/XLSX export, or contact support.
             </p>
           ) : (
+            <div style={{ overflowX: "auto" }}>
             <table>
               <thead>
                 <tr>
@@ -763,6 +774,7 @@ export default function InvoiceReviewPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
 
           {draft.status === "needs_review" && (
