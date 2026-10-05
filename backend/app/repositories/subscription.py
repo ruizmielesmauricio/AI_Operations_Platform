@@ -38,6 +38,36 @@ class SubscriptionRepository:
         self.session.flush()
         return subscription
 
+    def grant_complimentary(self, business_id: uuid.UUID) -> Subscription:
+        """Free active access with no Stripe involvement. Never overwrites
+        a real Stripe subscription (active/past_due/etc. with a Stripe
+        subscription id) — that business is already paying; raising keeps
+        an operator typo from silently erasing a customer's billing."""
+        subscription = self.get_by_business_id(business_id)
+        if subscription is not None and not subscription.is_complimentary and subscription.stripe_subscription_id:
+            if subscription.status not in ("canceled", "incomplete", "incomplete_expired"):
+                raise ValueError("This business already has a real Stripe subscription")
+        if subscription is None:
+            subscription = Subscription(business_id=business_id, stripe_customer_id=f"complimentary_{business_id}")
+            self.session.add(subscription)
+        elif not subscription.is_complimentary:
+            # A dead/unfinished Stripe row being replaced by a complimentary one.
+            subscription.stripe_customer_id = f"complimentary_{business_id}"
+            subscription.stripe_subscription_id = None
+        subscription.status = "active"
+        subscription.is_complimentary = True
+        self.session.flush()
+        return subscription
+
+    def revoke_complimentary(self, business_id: uuid.UUID) -> Subscription | None:
+        subscription = self.get_by_business_id(business_id)
+        if subscription is None or not subscription.is_complimentary:
+            return None
+        subscription.status = "canceled"
+        subscription.is_complimentary = False
+        self.session.flush()
+        return subscription
+
     def upsert_from_stripe(
         self,
         *,
@@ -60,6 +90,9 @@ class SubscriptionRepository:
             subscription = Subscription(business_id=business_id, status=status or "incomplete")
             self.session.add(subscription)
         subscription.stripe_customer_id = stripe_customer_id
+        # Any real Stripe event is the conversion from a complimentary
+        # pilot account to a paying customer.
+        subscription.is_complimentary = False
         if stripe_subscription_id is not None:
             subscription.stripe_subscription_id = stripe_subscription_id
         if status is not None:

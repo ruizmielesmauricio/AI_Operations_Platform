@@ -89,4 +89,6 @@ class EmployeeSeatCreateResponse(BaseModel):
     employee_seat: EmployeeSeatOut
     # Where the frontend sends the owner next — Stripe Checkout, exactly
     # like Add a branch's own redirectToCheckout pattern.
-    checkout_url: str
+    # None for a complimentary pilot account (the seat is already active,
+    # no payment step).
+    checkout_url: str | None = None

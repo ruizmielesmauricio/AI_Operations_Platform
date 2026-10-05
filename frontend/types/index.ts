@@ -58,7 +58,8 @@ export interface EmployeeSeat {
 
 export interface EmployeeSeatCreateResponse {
   employee_seat: EmployeeSeat;
-  checkout_url: string;
+  // null for a complimentary pilot account — the seat is already active.
+  checkout_url: string | null;
 }
 
 // GET /businesses/{id}/members — the owner (from the business's own
@@ -109,6 +110,9 @@ export interface BusinessProfileUpdate {
 export interface SubscriptionStatus {
   status: string | null;
   current_period_end: string | null;
+  // A free pilot/tester account (no Stripe) — shown as "Complimentary",
+  // with no Subscribe/Manage billing button.
+  is_complimentary?: boolean;
 }
 
 export interface RejectionReason {

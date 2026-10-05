@@ -36,6 +36,7 @@ from app.models.membership import Membership
 from app.models.user import User
 from app.repositories.audit_log import record_audit_event
 from app.repositories.employee_seat import EmployeeSeatRepository
+from app.repositories.subscription import SubscriptionRepository
 from app.settings.config import get_settings
 
 MAX_EMPLOYEE_SEATS_PER_BUSINESS = 2
@@ -89,9 +90,10 @@ def add_employee(
     city: str | None = None,
     postal_code: str | None = None,
     country: str | None = None,
-) -> tuple[EmployeeSeat, str]:
+) -> tuple[EmployeeSeat, str | None]:
     """Returns the new (pending) seat and the Stripe Checkout URL to send
-    the owner to next. Raises before creating anything if the request
+    the owner to next — or None for a complimentary pilot account, whose
+    seats are simply active with no payment step. Raises before creating anything if the request
     can't succeed — a rejected attempt leaves zero rows behind, same
     posture as app/repositories/business.py::create_business_with_owner.
 
@@ -167,6 +169,26 @@ def add_employee(
                 target_type="employee_seat",
                 target_id=str(seat.id),
             )
+    subscription = SubscriptionRepository(db).get_by_business_id(business_id)
+    if subscription is not None and subscription.is_complimentary and subscription.status == "active":
+        # A complimentary pilot account has no Stripe subscription to hang
+        # a paid seat on: the seat is simply active (and gets its
+        # Membership right away if that email already has an account, or
+        # the moment it first signs in — reconcile_pending_employee_seats).
+        seat.status = "active"
+        db.flush()
+        try_activate_employee_seat(db, seat)
+        record_audit_event(
+            db,
+            business_id=business_id,
+            user_id=invited_by_user_id,
+            action="employee_complimentary_activated",
+            target_type="employee_seat",
+            target_id=str(seat.id),
+        )
+        db.commit()
+        db.refresh(seat)
+        return seat, None
     checkout_url = start_employee_seat_checkout(
         db=db, business_id=business_id, employee_seat_id=seat.id, business_email=business_email
     )

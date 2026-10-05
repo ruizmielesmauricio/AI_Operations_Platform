@@ -122,7 +122,7 @@ function seatStatusLabel(seat: { status: string; account_linked: boolean }): str
   if (seat.status === "payment_failed") return "Payment failed";
   if (seat.status === "canceled") return "Removed";
   if (seat.status === "active" && seat.account_linked) return "Active";
-  if (seat.status === "active") return "Paid — waiting for them to sign in";
+  if (seat.status === "active") return "Ready — waiting for them to sign in";
   if (seat.account_linked) return "Pending payment";
   return "Pending payment and signup";
 }
@@ -131,8 +131,9 @@ function seatStatusLabel(seat: { status: string; account_linked: boolean }): str
 // Stripe subscription status (active/past_due/incomplete/.../null) plus
 // this app's own soft-delete flag — direct request: exactly these four
 // labels, not the raw Stripe vocabulary.
-function statusLabel(business: Business, subscriptionStatus: string | null): string {
+function statusLabel(business: Business, subscriptionStatus: string | null, isComplimentary = false): string {
   if (business.deleted_at) return "Deleted";
+  if (isComplimentary && subscriptionStatus === "active") return "Complimentary (pilot)";
   if (subscriptionStatus === "active") return "Subscribed";
   if (subscriptionStatus === "canceled") return "Cancelled";
   return "Pending Payment";
@@ -586,7 +587,8 @@ export default function OnboardingPage() {
         ...prev,
         [businessId]: [...(prev[businessId] ?? []), employee_seat],
       }));
-      window.location.href = checkout_url;
+      // Complimentary pilot accounts add staff with no payment step.
+      if (checkout_url) window.location.href = checkout_url;
     } catch (err) {
       // The backend's own message is specific per failure (already
       // invited, seat limit reached, ...) — shown directly rather than a
@@ -755,7 +757,8 @@ export default function OnboardingPage() {
             }
 
             const status = subscriptions[b.id]?.status ?? null;
-            const label = statusLabel(b, status);
+            const isComplimentary = subscriptions[b.id]?.is_complimentary === true;
+            const label = statusLabel(b, status, isComplimentary);
             // A recoverable subscription (past_due, incomplete…) sends the
             // owner to the Customer Portal to fix it — new payment method,
             // retry, etc. A canceled subscription is a dead end there (no
@@ -779,7 +782,7 @@ export default function OnboardingPage() {
                     {b.name}
                   </strong>{" "}
                   — {b.template} ({b.role}) —{" "}
-                  <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
+                  <span className={label === "Subscribed" || isComplimentary ? "status-ok" : "status-error"}>{label}</span>
                 </div>
                 {/* Company Profile rows are about the profile record
                     itself, not a second navigation menu — every
@@ -882,7 +885,12 @@ export default function OnboardingPage() {
                     on checkout-session/portal-session too — this is UX,
                     not the real boundary): a staff/manager member would
                     otherwise see a live-looking button that just 403s. */}
-                {b.role === "owner" && (
+                {b.role === "owner" && isComplimentary && (
+                  <div className="company-owner-action hint">
+                    You have free pilot access — nothing to pay. We&apos;ll set up billing with you before the pilot ends.
+                  </div>
+                )}
+                {b.role === "owner" && !isComplimentary && (
                   <div className="company-owner-action">
                     {isRecoverableInPortal ? (
                       <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>

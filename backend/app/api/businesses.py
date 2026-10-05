@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.billing.service import inherit_complimentary_for_branch
 from app.application.employee_seats import EmployeeSeatNotFound, get_own_employee_seat, update_own_employee_profile
 from app.application.members import list_business_members
 from app.billing.service import cancel_subscription
@@ -368,6 +369,8 @@ def create_branch(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can add a branch"
         ) from exc
+    if inherit_complimentary_for_branch(db, parent_business_id=business_id, branch_id=branch.id):
+        db.commit()
     return _to_business_out(branch, role="owner")
 
 

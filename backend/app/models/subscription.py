@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, String, UniqueConstraint, false
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +25,13 @@ class Subscription(Base, TimestampMixin, TenantScopedMixin):
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="incomplete")
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A free pilot/tester account granted by the operator (app/cli/
+    # pilot_accounts.py), not a Stripe subscription: stripe_customer_id is
+    # then only a unique placeholder ("complimentary_<business_id>") and
+    # must never be sent to Stripe. Cleared the moment a real Stripe
+    # event arrives for the business (upsert_from_stripe) — that is the
+    # conversion to a paying customer.
+    is_complimentary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
 
 class ProcessedStripeEvent(Base):

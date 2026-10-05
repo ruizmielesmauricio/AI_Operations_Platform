@@ -51,6 +51,11 @@ def create_portal_session(
     subscription = SubscriptionRepository(db).get_by_business_id(membership.business_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No subscription for this business")
+    if subscription.is_complimentary:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This is a complimentary pilot account — there is no billing to manage",
+        )
     portal_url = service.start_portal_session(stripe_customer_id=subscription.stripe_customer_id)
     return PortalSessionResponse(portal_url=portal_url)
 
@@ -64,6 +69,7 @@ def get_subscription_status(
     return SubscriptionStatusResponse(
         status=subscription.status if subscription else None,
         current_period_end=subscription.current_period_end if subscription else None,
+        is_complimentary=bool(subscription and subscription.is_complimentary),
     )
 
 

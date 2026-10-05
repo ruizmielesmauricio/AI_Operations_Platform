@@ -47,11 +47,25 @@ def start_checkout(*, db: Session, business_id: uuid.UUID, business_email: str) 
         business_id=business_id,
         business_email=business_email,
         price_id=price_id,
-        existing_stripe_customer_id=existing.stripe_customer_id if existing else None,
+        # A complimentary pilot account's customer id is a local placeholder,
+        # never a real Stripe customer — Checkout mints a fresh one.
+        existing_stripe_customer_id=existing.stripe_customer_id if existing and not existing.is_complimentary else None,
         success_url=f"{settings.app_base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{settings.app_base_url}/billing/cancel",
     )
     return session.url
+
+
+def inherit_complimentary_for_branch(db: Session, *, parent_business_id: uuid.UUID, branch_id: uuid.UUID) -> bool:
+    """A branch added under a complimentary pilot shop is complimentary
+    too — a tester shouldn't hit a payment wall adding their second
+    location. Returns whether it granted one."""
+    repo = SubscriptionRepository(db)
+    parent = repo.get_by_business_id(parent_business_id)
+    if parent is None or not parent.is_complimentary or parent.status != "active":
+        return False
+    repo.grant_complimentary(branch_id)
+    return True
 
 
 def cancel_subscription(db: Session, *, business_id: uuid.UUID) -> bool:
@@ -103,7 +117,7 @@ def start_employee_seat_checkout(
         business_id=business_id,
         business_email=business_email,
         price_id=settings.stripe_employee_seat_price_id,
-        existing_stripe_customer_id=existing.stripe_customer_id if existing else None,
+        existing_stripe_customer_id=existing.stripe_customer_id if existing and not existing.is_complimentary else None,
         success_url=f"{settings.app_base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{settings.app_base_url}/billing/cancel",
         extra_metadata={"employee_seat_id": str(employee_seat_id)},
