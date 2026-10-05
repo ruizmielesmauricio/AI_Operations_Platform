@@ -1356,10 +1356,10 @@ def test_previous_intents_plural_recovers_a_follow_up_against_a_non_first_part(
 # code path ever puts a rain_mm/temp_mean_c/wind_speed_kph value into
 # context; these tests cover the 0/1/many dispatch and zero-cost paths.
 
-from app.models.business import Business as _Business
 from app.models.product import Product as _Product
 from app.models.product import ProductCategory as _ProductCategory
 from app.models.sale import Sale as _Sale
+from app.models.business import Business as _Business
 from app.models.sale import SaleItem as _SaleItem
 from app.models.weather_observation import WeatherObservation as _WeatherObservation
 from app.weather import client as weather_client
@@ -1656,3 +1656,166 @@ def test_weather_outlook_recovers_on_a_vague_follow_up_but_weather_pattern_looku
         previous_intent="weather_pattern_lookup",
     )
     assert not_recovered.intent == "out_of_scope"
+
+
+# --- weather_sensitivity_ranking ("which categories are weather-sensitive?") ---
+
+
+def _seeded_weather_business(db_session, business_id):
+    _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Waterproof Gear", anchor_today=_NOW.date())
+
+
+def _classify_as(monkeypatch, intent, **extra):
+    monkeypatch.setattr(
+        client, "chat_completion",
+        lambda *, messages, response_format=None, max_tokens=500, temperature=0.2: _classify_response(intent, **extra),
+    )
+
+
+def test_weather_sensitivity_ranking_is_answered_deterministically_with_one_ai_call(db_session, business_id, monkeypatch):
+    _seeded_weather_business(db_session, business_id)
+    _classify_as(monkeypatch, "weather_sensitivity_ranking")
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories are weather sensitive?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sensitivity_ranking"
+    assert result.grounded is True
+    assert "Most weather-sensitive first:" in result.answer
+    assert "1. Waterproof Gear - +400% on rainy days (12 days)" in result.answer
+    assert "not proof that weather caused them" in result.answer
+    assert db_session.query(AIRequest).count() == 1  # classify only; the answer is deterministic
+
+
+def test_weather_sensitivity_ranking_is_recovered_when_the_classifier_misses_it(db_session, business_id, monkeypatch):
+    _seeded_weather_business(db_session, business_id)
+    _classify_as(monkeypatch, "out_of_scope")
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which product categories are most affected by the weather?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sensitivity_ranking"
+
+
+def test_weather_sensitivity_ranking_is_recovered_from_a_category_lookup_with_no_category(
+    db_session, business_id, monkeypatch
+):
+    _seeded_weather_business(db_session, business_id)
+    _classify_as(monkeypatch, "weather_pattern_lookup", search_term=None)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories depend on the weather?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sensitivity_ranking"
+
+
+def test_a_named_category_lookup_is_not_hijacked_into_the_ranking(db_session, business_id, monkeypatch):
+    _seeded_weather_business(db_session, business_id)
+    _classify_as(monkeypatch, "weather_pattern_lookup", search_term="Waterproof")
+    monkeypatch.setattr(
+        client, "chat_completion",
+        lambda *, messages, response_format=None, max_tokens=500, temperature=0.2: (
+            _classify_response("weather_pattern_lookup", search_term="Waterproof")
+            if response_format is not None
+            else _canned_response("Rainy days mean more demand for Waterproof Gear.")
+        ),
+    )
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Is the Waterproof Gear category weather sensitive?", now=_NOW,
+    )
+
+    assert result.intent == "weather_pattern_lookup"
+
+
+def test_a_named_condition_ranking_question_stays_weather_sales_analysis(db_session, business_id, monkeypatch):
+    _seeded_weather_business(db_session, business_id)
+    _classify_as(monkeypatch, "out_of_scope")
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories sell the most when it rains?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sales_analysis"
+
+
+def test_a_provider_outage_on_a_weather_sensitivity_question_is_not_masked(db_session, business_id, monkeypatch):
+    def _raise(*args, **kwargs):
+        from app.ai.exceptions import AIProviderError
+
+        raise AIProviderError("connection refused")
+
+    monkeypatch.setattr(client, "chat_completion", _raise)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories are weather sensitive?", now=_NOW,
+    )
+
+    assert result.intent == "provider_unavailable"
+    assert "temporarily unavailable" in result.answer
+
+
+def test_weather_sensitivity_ranking_without_history_says_so_honestly(db_session, business_id, monkeypatch):
+    _classify_as(monkeypatch, "weather_sensitivity_ranking")
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories are weather sensitive?", now=_NOW,
+    )
+
+    assert result.intent == "weather_sensitivity_ranking"
+    assert "enough weather and sales history" in result.answer
+
+
+def test_weather_sensitivity_ranking_reports_when_no_category_shows_a_link(db_session, business_id, monkeypatch):
+    # Real history exists, but every category sells the same on every weather day.
+    _set_weather_coordinates(db_session, business_id)
+    _seed_weather_pattern_history(db_session, business_id, category_name="Bells", anchor_today=_NOW.date())
+    from app.models.sale import SaleItem as _SI
+    for item in db_session.query(_SI).filter(_SI.business_id == business_id):
+        item.quantity = 5
+    db_session.commit()
+    _classify_as(monkeypatch, "weather_sensitivity_ranking")
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Which categories are weather sensitive?", now=_NOW,
+    )
+
+    assert "none show a clear link to weather yet" in result.answer
+
+
+def test_weather_pattern_lookup_tells_the_explain_step_the_averages_are_units_not_money(
+    db_session, business_id, monkeypatch
+):
+    # Real bug found live: with no unit stated, the model described
+    # "average units per day" as "sales average EUR4.90" — a currency the
+    # data never carried.
+    _seeded_weather_business(db_session, business_id)
+    seen = []
+
+    def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _classify_response("weather_pattern_lookup", search_term="Waterproof")
+        seen.append(json.dumps(messages))
+        return _canned_response("Rainy days sell more.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
+
+    answer_question(
+        db_session, business_id=business_id, user_id="user-1",
+        question="Does weather affect sales of Waterproof Gear?", now=_NOW,
+    )
+
+    assert len(seen) == 1
+    assert "UNITS sold per day" in seen[0] and "never describe them in euros" in seen[0]

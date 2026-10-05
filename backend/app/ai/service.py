@@ -27,6 +27,7 @@ from app.ai.exceptions import AIProviderError
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
 from app.analytics.period import compute_report_period
+from app.analytics.weather_patterns import DEFAULT_MIN_PCT_DIFFERENCE, MIN_BUCKET_DAYS
 from app.application.business_group import (
     MixedTimezoneGroup,
     NotGroupMember,
@@ -47,6 +48,7 @@ from app.application.weather_insights import (
     get_weather_pattern_comparisons_for_category,
     get_weather_pattern_findings,
     get_weather_sales_rankings,
+    get_weather_sensitivity_ranking,
 )
 from app.application.workshop_performance import get_workshop_performance
 from app.models.business import Business
@@ -99,6 +101,7 @@ ALLOWED_INTENTS = (
     "category_breakdown",
     "weather_pattern_lookup",
     "weather_sales_analysis",
+    "weather_sensitivity_ranking",
     "weather_outlook",
     "out_of_scope",
 )
@@ -123,6 +126,7 @@ _MIN_HORIZON_DAYS = 1
 _MAX_HORIZON_DAYS = 90
 _DEFAULT_HORIZON_DAYS = 7
 _DEFAULT_WEATHER_RANK_LIMIT = 5
+_WEATHER_SENSITIVITY_LIMIT = 10
 _MAX_WEATHER_RANK_LIMIT = 10
 _WEATHER_BUCKETS = frozenset({"rainy", "cold", "windy", "mild_dry"})
 _WEATHER_ENTITY_TYPES = frozenset({"product", "category"})
@@ -352,6 +356,7 @@ def answer_question(
     # one-category weather intent. This deterministic recovery only fires
     # when both a fixed weather bucket and a ranking request are explicit.
     classify_list = [_recover_weather_sales_analysis(item, question) for item in classify_list]
+    classify_list = [_recover_weather_sensitivity_ranking(item, question) for item in classify_list]
 
     if len(classify_list) == 1 and classify_list[0].intent == "provider_unavailable":
         return AnswerResult(
@@ -519,6 +524,7 @@ _INTENT_FOCUS_LABELS = {
     "latest_report": "the latest report",
     "weather_pattern_lookup": "a category's weather-linked sales pattern",
     "weather_sales_analysis": "products or categories ranked for a weather condition",
+    "weather_sensitivity_ranking": "which categories are most weather-sensitive",
     "weather_outlook": "what the upcoming week's weather means for demand",
 }
 
@@ -664,6 +670,29 @@ def _build_part(
             intent=intent,
             resolved_answer=_format_weather_sales_analysis(analysis, rank_direction),
         )
+
+    if intent == "weather_sensitivity_ranking":
+        if combined_businesses is not None:
+            return _Part(
+                intent=intent,
+                resolved_answer=(
+                    "Weather sensitivity is location-specific, so I can't combine branches into one reliable "
+                    "weather result yet. Ask about one branch at a time."
+                ),
+            )
+        ranking = get_weather_sensitivity_ranking(db, business=business, limit=_WEATHER_SENSITIVITY_LIMIT, now=now)
+        if ranking is None:
+            return _Part(
+                intent=intent,
+                resolved_answer=(
+                    "I don't have enough weather and sales history yet to say which categories are "
+                    "weather-sensitive — check back after a few more weeks of data."
+                ),
+            )
+        # Deterministic end to end — assembled straight from the ranking,
+        # never through the AI explain step (same as weather_sales_analysis),
+        # so no AI-restated number is possible.
+        return _Part(intent=intent, resolved_answer=_format_weather_sensitivity_ranking(ranking))
 
     if intent == "weather_outlook":
         # Deliberately single-business only, same stated precedent as
@@ -1236,7 +1265,22 @@ def _dispatch_weather_category_lookup(
         )
         return None, AnswerResult(answer=message, intent="weather_pattern_lookup", grounded=True)
 
-    context = _json_safe({"category_name": category_name, "weather_patterns": [asdict(c) for c in comparisons]})
+    context = _json_safe(
+        {
+            # Explicit unit statement, found live: without it the explain
+            # step read avg_on_bucket_days/avg_on_other_days as money and
+            # answered "sales average EUR4.90 vs EUR5.90" — those are
+            # average UNITS sold per day. Same "don't leave the model to
+            # infer what a payload means" fix as weather_outlook's note.
+            "note": (
+                "avg_on_bucket_days and avg_on_other_days are the average number of UNITS sold per day "
+                "(a quantity, not money — never describe them in euros). pct_difference is the % change "
+                "between them. bucket_day_count is how many days matched that weather type."
+            ),
+            "category_name": category_name,
+            "weather_patterns": [asdict(c) for c in comparisons],
+        }
+    )
     return context, None
 
 
@@ -1354,6 +1398,69 @@ def _format_weather_sales_analysis(analysis: Any, rank_direction: str) -> str:
     if rank_direction in {"bottom", "both"}:
         sections.append(_list(f"Bottom {len(analysis.bottom)}:", analysis.bottom))
     return "\n\n".join(sections)
+
+
+def _looks_like_weather_sensitivity_question(question: str) -> bool:
+    """"Which categories are weather-sensitive?" — the plural "categories"
+    is the deliberate signal for the all-categories ranking; a single named
+    category ("is the Locks category weather-sensitive") stays with
+    weather_pattern_lookup."""
+    lowered = question.lower()
+    return (
+        "categories" in lowered
+        and "weather" in lowered
+        and any(w in lowered for w in ("sensitiv", "affect", "depend", "react", "influenc", "impact", "swing"))
+    )
+
+
+def _recover_weather_sensitivity_ranking(classify: ClassifyResult, question: str) -> ClassifyResult:
+    # Only ever promotes a miss (out_of_scope) or the one-category lookup
+    # the classifier reached for without a category to name — never touches
+    # a sentinel like provider_unavailable (see _recover_weather_sales_analysis's
+    # own note on that exact bug) or any other real intent.
+    if classify.intent not in ("out_of_scope", "weather_pattern_lookup"):
+        return classify
+    if classify.intent == "weather_pattern_lookup" and classify.search_term:
+        return classify
+    if not _looks_like_weather_sensitivity_question(question):
+        return classify
+    return ClassifyResult(
+        intent="weather_sensitivity_ranking", period=classify.period, start_date=classify.start_date,
+        end_date=classify.end_date,
+    )
+
+
+def _format_weather_sensitivity_ranking(ranking: Any) -> str:
+    threshold = f"{int(DEFAULT_MIN_PCT_DIFFERENCE)}%"
+    if not ranking.ranked:
+        return (
+            f"Across your {ranking.categories_examined} categories with sales history, none show a clear link to "
+            f"weather yet (a difference of {threshold} or more on at least {MIN_BUCKET_DAYS} matching days). "
+            "That can change as more history builds up."
+        )
+
+    def _pattern(c: Any) -> str:
+        return f"{int(c.pct_difference):+d}% on {_weather_bucket_label(c.bucket)} days ({c.bucket_day_count} days)"
+
+    lines = [
+        f"{ranking.categories_with_a_clear_link} of your {ranking.categories_examined} categories show a clear link "
+        f"to weather (a difference of {threshold} or more on at least {MIN_BUCKET_DAYS} matching days). "
+        "Most weather-sensitive first:"
+    ]
+    for index, entry in enumerate(ranking.ranked, start=1):
+        patterns = "; ".join(_pattern(c) for c in [entry.strongest, *entry.other_patterns])
+        lines.append(f"{index}. {entry.category_name} - {patterns}")
+    hidden = ranking.categories_with_a_clear_link - len(ranking.ranked)
+    if hidden > 0:
+        lines.append(f"(+{hidden} more with a clear link not shown.)")
+    quiet = ranking.categories_examined - ranking.categories_with_a_clear_link
+    if quiet > 0:
+        lines.append(f"{quiet} other categories show no clear weather link yet.")
+    lines.append(
+        "Each figure compares your average daily units on those weather days with all other days. "
+        "These are patterns in your own sales history, not proof that weather caused them."
+    )
+    return "\n".join(lines)
 
 
 def _fetch_context(
@@ -1687,6 +1794,12 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     '[category] sales", "do we sell more/less X when it rains or is cold", "is [category] weather-'
     'sensitive". Set "search_term" to the category name. Different from "category_breakdown": that\'s '
     "about money (revenue/cost), never weather.\n"
+    '- "weather_sensitivity_ranking": which product categories (plural — ALL of them) are most affected by weather, '
+    'ranked, from this business\'s own real sales history — use for "which categories are weather-sensitive", '
+    '"what sells differently depending on the weather", "which categories depend most on the weather". '
+    'Different from "weather_pattern_lookup": that is ONE named category; this ranks every category and needs '
+    'no search_term. Different from "weather_sales_analysis": that ranks sales within ONE named condition '
+    '(rain, cold, ...); this ranks categories by how much weather in general moves their sales.\n'
     '- "weather_sales_analysis": ranked products or categories sold in a named historical weather condition. '
     'Use this for "what products sell most/least when it rains", "top and bottom categories on cold days", '
     'or "best-selling items in windy weather". Set weather_bucket from the condition, entity_type to product '

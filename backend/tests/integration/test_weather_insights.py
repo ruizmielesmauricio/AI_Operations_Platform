@@ -15,6 +15,7 @@ from app.application.weather_insights import (
     get_weather_pattern_comparisons_for_category,
     get_weather_pattern_findings,
     get_weather_sales_rankings,
+    get_weather_sensitivity_ranking,
 )
 from app.models.business import Business
 from app.models.product import Product, ProductCategory
@@ -353,3 +354,100 @@ def test_category_comparisons_unknown_category_id_returns_empty(db_session, busi
     )
 
     assert comparisons == []
+
+
+# --- get_weather_sensitivity_ranking ("which categories are weather-sensitive?") ---
+
+
+def _seed_three_categories(db_session, business_id):
+    """40 days ending the day before _TODAY, the first 12 rainy. Hand-computed:
+    Waterproof Gear sells 10/day rainy vs 2/day dry (+400% rainy, -80% mild/dry);
+    Gloves 6 vs 4 (+50% rainy, -33% mild/dry); Bells a flat 5/day (no pattern)."""
+    start = _TODAY - timedelta(days=40)
+    products = {
+        name: _make_product(db_session, business_id, name=name, category_id=_make_category(db_session, business_id, name=name).id)
+        for name in ("Waterproof Gear", "Gloves", "Bells")
+    }
+    for offset in range(40):
+        day = start + timedelta(days=offset)
+        rainy = offset < 12
+        _make_weather_row(db_session, business_id, day=day, rain=Decimal("5") if rainy else Decimal("0"))
+        sold_at = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        for name, rainy_qty, dry_qty in (("Waterproof Gear", 10, 2), ("Gloves", 6, 4), ("Bells", 5, 5)):
+            _make_sale(
+                db_session, business_id, sold_at=sold_at, product_id=products[name].id,
+                quantity=rainy_qty if rainy else dry_qty,
+            )
+    db_session.commit()
+
+
+def test_sensitivity_ranking_orders_categories_by_their_strongest_weather_swing(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    _seed_three_categories(db_session, business_id)
+
+    result = get_weather_sensitivity_ranking(db_session, business=business, now=_NOW)
+
+    assert result is not None
+    assert [e.category_name for e in result.ranked] == ["Waterproof Gear", "Gloves"]
+    top, second = result.ranked
+    assert (top.strongest.bucket, top.strongest.pct_difference) == ("rainy", Decimal("400"))
+    assert (second.strongest.bucket, second.strongest.pct_difference) == ("rainy", Decimal("50"))
+    # The flat category has no pattern, so it is counted as examined but not ranked.
+    assert result.categories_examined == 3
+    assert result.categories_with_a_clear_link == 2
+
+
+def test_sensitivity_ranking_keeps_a_categorys_other_patterns_after_its_strongest(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    _seed_three_categories(db_session, business_id)
+
+    top = get_weather_sensitivity_ranking(db_session, business=business, now=_NOW).ranked[0]
+
+    assert [(p.bucket, p.pct_difference) for p in top.other_patterns] == [("mild_dry", Decimal("-80"))]
+
+
+def test_sensitivity_ranking_limit_trims_the_list_but_not_the_counts(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    _seed_three_categories(db_session, business_id)
+
+    result = get_weather_sensitivity_ranking(db_session, business=business, limit=1, now=_NOW)
+
+    assert [e.category_name for e in result.ranked] == ["Waterproof Gear"]
+    assert result.categories_with_a_clear_link == 2  # the trimmed one is still counted
+
+
+def test_sensitivity_ranking_with_history_but_no_pattern_is_empty_not_none(db_session, business_id):
+    business = _set_coordinates(db_session, business_id)
+    flat = _make_product(db_session, business_id, name="Bells", category_id=_make_category(db_session, business_id, name="Bells").id)
+    for offset in range(40):
+        day = _TODAY - timedelta(days=40) + timedelta(days=offset)
+        _make_weather_row(db_session, business_id, day=day, rain=Decimal("5") if offset < 12 else Decimal("0"))
+        _make_sale(
+            db_session, business_id, sold_at=datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc),
+            product_id=flat.id, quantity=5,
+        )
+    db_session.commit()
+
+    result = get_weather_sensitivity_ranking(db_session, business=business, now=_NOW)
+
+    assert result is not None and result.ranked == []
+    assert result.categories_examined == 1
+
+
+def test_sensitivity_ranking_without_coordinates_or_history_is_none(db_session, business_id):
+    business = db_session.get(Business, business_id)
+    assert get_weather_sensitivity_ranking(db_session, business=business, now=_NOW) is None
+
+    business = _set_coordinates(db_session, business_id)  # location, but no weather history yet
+    assert get_weather_sensitivity_ranking(db_session, business=business, now=_NOW) is None
+
+
+def test_sensitivity_ranking_never_carries_a_raw_weather_figure(db_session, business_id):
+    # Compliance boundary: only ORLA's own bucket labels + the shop's own sales numbers.
+    business = _set_coordinates(db_session, business_id)
+    _seed_three_categories(db_session, business_id)
+
+    entry = get_weather_sensitivity_ranking(db_session, business=business, now=_NOW).ranked[0]
+
+    forbidden = {"rain_mm", "temp_mean_c", "temp_min_c", "temp_max_c", "wind_speed_kph"}
+    assert not forbidden & set(vars(entry.strongest))

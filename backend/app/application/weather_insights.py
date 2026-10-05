@@ -79,6 +79,25 @@ class WeatherSalesRanking:
 
 
 @dataclass(frozen=True)
+class CategoryWeatherSensitivity:
+    """One category's weather link: its strongest pattern plus any other
+    pattern that also cleared the gates. Carries only ORLA's own bucket
+    labels and this business's real sales figures (compliance boundary —
+    see the module docstring)."""
+
+    category_name: str
+    strongest: WeatherPatternComparison
+    other_patterns: list[WeatherPatternComparison]
+
+
+@dataclass(frozen=True)
+class WeatherSensitivityRanking:
+    ranked: list[CategoryWeatherSensitivity]  # most weather-sensitive first, already limited
+    categories_examined: int  # every category with sales history in the loaded window
+    categories_with_a_clear_link: int  # before `limit` was applied
+
+
+@dataclass(frozen=True)
 class WeatherSalesAnalysis:
     bucket: str
     bucket_day_count: int
@@ -166,6 +185,52 @@ def get_weather_pattern_comparisons_for_category(
     if category_series is None:
         return []
     return compute_weather_pattern_comparison(daily_weather, {category_id: category_series}, category_names)
+
+
+def get_weather_sensitivity_ranking(
+    db: Session, *, business: Business, limit: int = 10, now: datetime | None = None
+) -> WeatherSensitivityRanking | None:
+    """Ranks every category by how strongly its sales swing with weather,
+    from this business's own real history — Ask ORLA's `weather_sensitivity_
+    ranking` intent ("which categories are weather-sensitive?").
+
+    Deliberately reuses `compute_weather_pattern_comparison` unchanged, so
+    a category only appears when it clears the same two gates every other
+    weather feature uses (MIN_BUCKET_DAYS matching days, and at least
+    DEFAULT_MIN_PCT_DIFFERENCE materiality) — no new threshold, no new
+    math. A category's sensitivity is its single largest absolute
+    difference across the four weather buckets; ties break on more
+    supporting days, then name. Not gated on the upcoming forecast (a
+    descriptive "what does my history show", like the per-category lookup).
+
+    None when there's no location or no weather/sales history yet (the
+    caller says so honestly); an empty `ranked` when history exists but no
+    category clears the gates.
+    """
+    resolved_now = now or datetime.now(ZoneInfo("UTC"))
+    loaded = _load_weather_and_sales_data(db, business, resolved_now)
+    if loaded is None:
+        return None
+    daily_weather, daily_units_by_category, category_names = loaded
+
+    by_category: dict[uuid.UUID, list[WeatherPatternComparison]] = defaultdict(list)
+    for comparison in compute_weather_pattern_comparison(daily_weather, daily_units_by_category, category_names):
+        by_category[comparison.category_id].append(comparison)
+
+    def _strength(c: WeatherPatternComparison) -> tuple:
+        return (-abs(c.pct_difference), -c.bucket_day_count, c.bucket)
+
+    entries = []
+    for comparisons in by_category.values():
+        ordered = sorted(comparisons, key=_strength)
+        entries.append(CategoryWeatherSensitivity(ordered[0].category_name, ordered[0], ordered[1:]))
+    entries.sort(key=lambda e: (-abs(e.strongest.pct_difference), -e.strongest.bucket_day_count, e.category_name.lower()))
+
+    return WeatherSensitivityRanking(
+        ranked=entries[:limit],
+        categories_examined=len(daily_units_by_category),
+        categories_with_a_clear_link=len(entries),
+    )
 
 
 def get_weather_sales_rankings(
