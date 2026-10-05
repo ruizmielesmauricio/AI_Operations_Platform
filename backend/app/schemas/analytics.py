@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 
 class PeriodOut(BaseModel):
@@ -18,6 +18,13 @@ class RevenueOut(BaseModel):
     change_pct: Decimal | None
 
     model_config = {"from_attributes": True}
+
+    # The euro difference, computed here so that nobody (least of all the
+    # AI explainer) has to subtract two figures to state it.
+    @computed_field
+    @property
+    def change_amount(self) -> Decimal:
+        return self.current - self.previous
 
 
 class GrossMarginOut(BaseModel):
@@ -119,6 +126,18 @@ class RetailOperationsOut(BaseModel):
     sell_through_rate: Decimal | None
 
     model_config = {"from_attributes": True}
+
+    # Totals over the WHOLE dead-stock list (the explainer only ever sees a
+    # shortened list, and must never add rows up itself).
+    @computed_field
+    @property
+    def dead_stock_count(self) -> int:
+        return len(self.dead_stock)
+
+    @computed_field
+    @property
+    def dead_stock_total_value_at_cost(self) -> Decimal:
+        return sum((row.value_at_cost for row in self.dead_stock if row.value_at_cost is not None), Decimal("0"))
 
 
 class WorkshopMarginOut(BaseModel):

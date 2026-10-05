@@ -63,6 +63,14 @@ class GrossMarginResult:
     tax_data_coverage_pct: Decimal | None = None
 
 
+def compute_average_sale(revenue: Decimal, sale_count: int) -> Decimal | None:
+    """Revenue divided by the number of sales, to the cent. None when there
+    were no sales (nothing to average)."""
+    if sale_count <= 0:
+        return None
+    return (revenue / sale_count).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+
 @dataclass(frozen=True)
 class RevenueTrend:
     current: Decimal

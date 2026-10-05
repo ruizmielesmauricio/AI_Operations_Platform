@@ -47,7 +47,7 @@ def test_metric_definition_question_never_calls_the_ai_provider(db_session, busi
 
     assert result.intent == "metric_definition"
     assert result.grounded is True
-    assert "cost of goods sold" in result.answer
+    assert "paying for the stock" in result.answer
     assert db_session.query(AIRequest).count() == 0
 
 
@@ -1819,3 +1819,115 @@ def test_weather_pattern_lookup_tells_the_explain_step_the_averages_are_units_no
 
     assert len(seen) == 1
     assert "UNITS sold per day" in seen[0] and "never describe them in euros" in seen[0]
+
+
+# --- One corrective retry when the first answer fails the number check -------
+
+
+def _scripted_provider(monkeypatch, explain_answers):
+    """Classify -> financial_performance; each explain call returns the next scripted answer."""
+    explain_calls = []
+
+    def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _canned_response(json.dumps({"intents": [{"intent": "financial_performance", "period": "default_recent"}]}))
+        explain_calls.append(messages)
+        return _canned_response(explain_answers[min(len(explain_calls), len(explain_answers)) - 1])
+
+    monkeypatch.setattr(client, "chat_completion", _fake)
+    return explain_calls
+
+
+def test_an_answer_that_fails_the_number_check_gets_one_corrective_retry(db_session, business_id, monkeypatch):
+    calls = _scripted_provider(
+        monkeypatch,
+        ["Revenue was down €13,483.77 on the period before.", "Your gross margin coverage is 0% right now."],
+    )
+
+    result = answer_question(db_session, business_id=business_id, user_id="user-1", question="How are sales?", now=_NOW)
+
+    assert result.grounded is True
+    assert "coverage is 0%" in result.answer
+    assert len(calls) == 2
+    # The second attempt is told exactly which figure was not in the data, and is shown its own rejected answer.
+    retry_messages = calls[1]
+    assert retry_messages[-2] == {"role": "assistant", "content": "Revenue was down €13,483.77 on the period before."}
+    assert "13,483.77" in retry_messages[-1]["content"]
+
+
+def test_a_retry_that_is_still_ungrounded_ends_in_the_honest_fallback_and_stops_at_one_retry(db_session, business_id, monkeypatch):
+    calls = _scripted_provider(monkeypatch, ["Revenue was €9,999.99.", "Actually revenue was €8,888.88."])
+
+    result = answer_question(db_session, business_id=business_id, user_id="user-1", question="How are sales?", now=_NOW)
+
+    assert result.grounded is False
+    assert "couldn't confidently answer" in result.answer
+    assert "9,999.99" not in result.answer and "8,888.88" not in result.answer
+    assert len(calls) == 2  # exactly one retry, never a loop
+
+
+def test_a_grounded_first_answer_is_never_retried(db_session, business_id, monkeypatch):
+    calls = _scripted_provider(monkeypatch, ["Your gross margin coverage is 0% right now."])
+
+    result = answer_question(db_session, business_id=business_id, user_id="user-1", question="How are sales?", now=_NOW)
+
+    assert result.grounded is True
+    assert len(calls) == 1
+
+
+def test_the_numbers_the_explainer_used_to_work_out_are_now_supplied(db_session, business_id):
+    from app.schemas.analytics import RetailOperationsOut, RevenueOut
+
+    revenue = RevenueOut(current=Decimal("64004.90"), previous=Decimal("77487.37"), change_pct=Decimal("-17.4"))
+    assert revenue.model_dump(mode="json")["change_amount"] == "-13482.47"
+
+    from app.analytics.retail import DeadStockEntry  # noqa: F401 - shape documented by the schema below
+
+    out = RetailOperationsOut.model_validate({
+        "period": {"start": "2026-07-01T00:00:00Z", "end": "2026-08-01T00:00:00Z"},
+        "top_sellers_by_units": [], "top_sellers_by_revenue": [], "stock_cover": [],
+        "dead_stock": [
+            {"product_id": "00000000-0000-0000-0000-000000000001", "name": "A", "stock_on_hand": 2, "value_at_cost": "10.50"},
+            {"product_id": "00000000-0000-0000-0000-000000000002", "name": "B", "stock_on_hand": 1, "value_at_cost": None},
+            {"product_id": "00000000-0000-0000-0000-000000000003", "name": "C", "stock_on_hand": 4, "value_at_cost": "4.50"},
+        ],
+        "inventory_value": {"value_at_cost": "100", "products_missing_cost": 0}, "sell_through_rate": None,
+    })
+    dumped = out.model_dump(mode="json")
+    assert dumped["dead_stock_count"] == 3
+    assert dumped["dead_stock_total_value_at_cost"] == "15.00"
+
+
+def test_a_short_why_follow_up_stays_on_the_previous_topic_even_if_classify_gives_up(db_session, business_id, monkeypatch):
+    def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _canned_response(json.dumps({"intents": [{"intent": "out_of_scope"}]}))
+        return _canned_response("Your gross margin coverage is 0% right now.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake)
+
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="Why is it like that?", now=_NOW,
+        previous_question="How much did I sell last week?", previous_answer="You sold €0.00.",
+        previous_intent="financial_performance", previous_intents=["financial_performance"],
+    )
+
+    assert result.intent == "financial_performance"
+    # ...but a "why" with nothing to follow stays a refusal.
+    fresh = answer_question(db_session, business_id=business_id, user_id="user-1", question="Why is the sky blue?", now=_NOW)
+    assert fresh.intent == "out_of_scope"
+
+
+def test_the_financial_context_carries_the_sale_count_and_average_sale(db_session, business_id, monkeypatch):
+    seen = {}
+
+    def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
+        if response_format is not None:
+            return _canned_response(json.dumps({"intents": [{"intent": "financial_performance"}]}))
+        seen["system"] = messages[0]["content"]
+        return _canned_response("Your gross margin coverage is 0% right now.")
+
+    monkeypatch.setattr(client, "chat_completion", _fake)
+    answer_question(db_session, business_id=business_id, user_id="user-1", question="How many sales did I make?", now=_NOW)
+
+    assert '"sale_count"' in seen["system"] and '"average_sale"' in seen["system"]

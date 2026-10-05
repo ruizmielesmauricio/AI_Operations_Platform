@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.ai import client
 from app.ai.exceptions import AIProviderError
+from app.analytics.financial import compute_average_sale
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
 from app.analytics.period import compute_report_period
@@ -57,6 +58,7 @@ from app.repositories.business import list_businesses_for_user
 from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.product import ProductCategoryRepository
 from app.repositories.report import ReportRepository
+from app.repositories.sale import SaleRepository
 from app.schemas.analytics import (
     CategoryBreakdownOut,
     FinancialPerformanceOut,
@@ -145,8 +147,8 @@ _LANE = "business_qa"
 _PROVIDER = "openrouter"
 
 _SAFE_FALLBACK = (
-    "I can help with questions about your revenue, retail and workshop performance, forecast, "
-    "weather-linked sales, recommendations, or your latest weekly/monthly report — try asking about one of those."
+    "I can answer questions about your sales and profit, what's selling and what's sitting on the shelves, "
+    "what to reorder, repairs, weather and sales, what to do next, or your latest report — try asking about one of those."
 )
 _UNAVAILABLE_MESSAGE = "ORLA is temporarily unavailable — your dashboard and reports are unaffected. Try again shortly."
 _USAGE_LIMIT_MESSAGE = "This business has reached its question limit with ORLA for today. Try again tomorrow."
@@ -412,7 +414,22 @@ def answer_question(
                 "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
                 business_id, part.intent, result.unsupported_claims,
             )
-            return AnswerResult(answer=_UNGROUNDED_FALLBACK, intent=part.intent, grounded=False, intents=(part.intent,))
+            # One more try, telling the model which figures were not in the
+            # data. Same check again afterwards; still nothing unsupported
+            # can get through.
+            retry_text = _generate_answer(
+                request_repo, business_id=business_id, user_id=user_id, question=question, context=part.context,
+                scope_label=scope_label, previous_question=previous_question, previous_answer=previous_answer,
+                rejected=(answer_text, result.unsupported_claims),
+            )
+            if retry_text is not None:
+                retry_result = validate_grounded(
+                    retry_text, part.context, question=question, previous_answer=previous_answer
+                )
+                if retry_result.grounded:
+                    answer_text, result = retry_text, retry_result
+            if not result.grounded:
+                return AnswerResult(answer=_UNGROUNDED_FALLBACK, intent=part.intent, grounded=False, intents=(part.intent,))
 
         final_answer, links = _assemble_final_answer(
             [part], {0: answer_text}, question=question, previous_intent=previous_intent
@@ -456,58 +473,78 @@ def answer_question(
             intents=("provider_unavailable",),
         )
 
-    segments = _split_multi_part_answer(answer_text, expected_parts=len(ai_parts))
-    if segments is None:
-        # Fail closed, same posture as every other "don't trust the
-        # model's exact output shape" spot in this module: the model
-        # didn't follow the marker instruction cleanly, so parts can't be
-        # told apart reliably — fall back to one whole-answer guardrail
-        # check instead of risking a misattributed split. Markers are
-        # stripped either way so a stray one is never shown to the user.
-        cleaned = _PART_MARKER_PATTERN.sub("", answer_text).strip()
-        result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
-        ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
-        if not result.grounded:
-            logger.warning(
-                "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
-                business_id, all_intents, result.unsupported_claims,
-            )
-        resolved_texts = [p.resolved_answer for p in parts if p.resolved_answer is not None]
-        final_answer = _join_parts_for_display([*resolved_texts, ai_text])
-        contexts = [p.context for p in parts if p.context is not None]
-        final_answer = _append_truncation_disclosure(final_answer, contexts)
-        links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts) else ()
-        return AnswerResult(
-            answer=final_answer, intent=parts[0].intent, grounded=result.grounded, links=links, intents=all_intents,
+    def _finish_multi(text: str) -> tuple[AnswerResult, list[str]]:
+        """Split, check and assemble one multi-part answer; also returns the
+        figures that failed the number check (empty when all passed)."""
+        segments = _split_multi_part_answer(text, expected_parts=len(ai_parts))
+        if segments is None:
+            # Fail closed, same posture as every other "don't trust the
+            # model's exact output shape" spot in this module: the model
+            # didn't follow the marker instruction cleanly, so parts can't be
+            # told apart reliably — fall back to one whole-answer guardrail
+            # check instead of risking a misattributed split. Markers are
+            # stripped either way so a stray one is never shown to the user.
+            cleaned = _PART_MARKER_PATTERN.sub("", text).strip()
+            result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
+            ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
+            if not result.grounded:
+                logger.warning(
+                    "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
+                    business_id, all_intents, result.unsupported_claims,
+                )
+            resolved_texts = [p.resolved_answer for p in parts if p.resolved_answer is not None]
+            final_answer = _join_parts_for_display([*resolved_texts, ai_text])
+            contexts = [p.context for p in parts if p.context is not None]
+            final_answer = _append_truncation_disclosure(final_answer, contexts)
+            links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts) else ()
+            return AnswerResult(
+                answer=final_answer, intent=parts[0].intent, grounded=result.grounded, links=links, intents=all_intents,
+            ), list(result.unsupported_claims)
+
+        ai_text_by_index: dict[int, str] = {}
+        any_segment_failed = False
+        unsupported_all: list[str] = []
+        for key, part_index in part_index_by_key.items():
+            n = int(key.rsplit("_", 1)[1])
+            segment_text = segments.get(n)
+            part = parts[part_index]
+            if segment_text is None:
+                ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
+                any_segment_failed = True
+                continue
+            result = validate_grounded(segment_text, part.context, question=question, previous_answer=previous_answer)
+            if result.grounded:
+                ai_text_by_index[part_index] = segment_text
+            else:
+                logger.warning(
+                    "Ungrounded AI answer rejected for one part business=%s intent=%s unsupported=%s",
+                    business_id, part.intent, result.unsupported_claims,
+                )
+                ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
+                any_segment_failed = True
+                unsupported_all.extend(result.unsupported_claims)
+
+        final_answer, links = _assemble_final_answer(
+            parts, ai_text_by_index, question=question, previous_intent=previous_intent
         )
+        return AnswerResult(
+            answer=final_answer, intent=parts[0].intent, grounded=not any_segment_failed, links=links, intents=all_intents,
+        ), unsupported_all
 
-    ai_text_by_index: dict[int, str] = {}
-    any_segment_failed = False
-    for key, part_index in part_index_by_key.items():
-        n = int(key.rsplit("_", 1)[1])
-        segment_text = segments.get(n)
-        part = parts[part_index]
-        if segment_text is None:
-            ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
-            any_segment_failed = True
-            continue
-        result = validate_grounded(segment_text, part.context, question=question, previous_answer=previous_answer)
-        if result.grounded:
-            ai_text_by_index[part_index] = segment_text
-        else:
-            logger.warning(
-                "Ungrounded AI answer rejected for one part business=%s intent=%s unsupported=%s",
-                business_id, part.intent, result.unsupported_claims,
-            )
-            ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
-            any_segment_failed = True
-
-    final_answer, links = _assemble_final_answer(
-        parts, ai_text_by_index, question=question, previous_intent=previous_intent
-    )
-    return AnswerResult(
-        answer=final_answer, intent=parts[0].intent, grounded=not any_segment_failed, links=links, intents=all_intents,
-    )
+    outcome, bad_figures = _finish_multi(answer_text)
+    if not outcome.grounded and bad_figures:
+        # One more try, telling the model which figures were not in the
+        # data — same checks again afterwards (see the single-intent path).
+        retry_text = _generate_answer(
+            request_repo, business_id=business_id, user_id=user_id, question=question, context=merged_context,
+            scope_label=scope_label, previous_question=previous_question, previous_answer=previous_answer,
+            multi_part=True, rejected=(answer_text, bad_figures),
+        )
+        if retry_text is not None:
+            retry_outcome, _ = _finish_multi(retry_text)
+            if retry_outcome.grounded:
+                outcome = retry_outcome
+    return outcome
 
 
 _INTENT_FOCUS_LABELS = {
@@ -580,7 +617,9 @@ def _recover_out_of_scope_intent(
     # other unresolved out_of_scope, never guessed.
     continuable = _first_continuable_intent(previous_intent, previous_intents)
     if continuable is not None and (
-        _looks_like_a_period_follow_up_question(question) or _looks_like_aggregate_follow_up_question(question)
+        _looks_like_a_period_follow_up_question(question)
+        or _looks_like_aggregate_follow_up_question(question)
+        or _looks_like_an_explain_follow_up_question(question)
     ):
         return continuable
     return None
@@ -964,6 +1003,13 @@ _AGGREGATE_FOLLOW_UP_KEYWORDS = (
     "merge", "merged", "combine", "combined", "total", "overall", "together", "sum", "add them", "add those",
     "full business", "whole business", "entire business", "full company", "whole company", "all together",
 )
+
+
+_EXPLAIN_FOLLOW_UP_PATTERN = re.compile(r"\b(why|how come|what caused|what's behind|what is behind|reason for)\b", re.IGNORECASE)
+
+
+def _looks_like_an_explain_follow_up_question(question: str) -> bool:
+    return bool(_EXPLAIN_FOLLOW_UP_PATTERN.search(question)) and len(question.split()) <= 12
 
 
 def _looks_like_aggregate_follow_up_question(question: str) -> bool:
@@ -1492,6 +1538,7 @@ def _fetch_context(
                 db, businesses=combined_businesses, start_date=start_date, end_date=end_date
             )
             context = FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+            _add_sale_count(db, context, businesses=combined_businesses, summary=summary)
             context["branches"] = [
                 _financial_branch_context(
                     business,
@@ -1504,7 +1551,9 @@ def _fetch_context(
             return context
         else:
             summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
-        return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+        context = FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+        _add_sale_count(db, context, businesses=[business], summary=summary)
+        return context
     if intent == "retail_operations":
         if combined_businesses is not None:
             summary = get_retail_operations_for_group(
@@ -1554,6 +1603,19 @@ def _fetch_context(
             return None
         return _trim_report_payload(reports[0].payload)
     return None
+
+
+def _add_sale_count(db: Session, context: dict, *, businesses: list[Business], summary: Any) -> None:
+    """How many sales rang through in the period, and the average sale —
+    worked out here (never by the explainer) so "how many sales did I make"
+    and "what's my average sale" can be answered from the data."""
+    count = sum(
+        len(SaleRepository(db).list_amounts_in_range(b.id, summary.period.start, summary.period.end))
+        for b in businesses
+    )
+    context["sale_count"] = count
+    average = compute_average_sale(summary.revenue.current, count)
+    context["average_sale"] = str(average) if average is not None else None
 
 
 # Live-verified this matters, not theoretical: a real business's forecast
@@ -1758,12 +1820,17 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     'asks for a number of results, otherwise null\n\n'
     "What each intent actually contains, so you pick the one with the real data the question needs:\n"
     '- "forecast": projected demand AND a per-product suggested reorder quantity — use this for any '
-    '"what/how much should I order/restock/reorder" question, not "findings_recommendations".\n'
+    '"what/how much should I order/restock/reorder" question, not "findings_recommendations". Also for "how '
+    'busy/quiet will I be next week" and "what will I sell".\n'
     '- "findings_recommendations": flagged issues (low stock, dead stock, thin margin, revenue decline) '
     "with a plain-language recommendation each — no order quantities live here.\n"
     '- "retail_operations": top sellers, stock cover, dead stock, inventory value, sell-through.\n'
     '- "financial_performance": revenue, gross profit/profit, gross margin, top/bottom-margin products, and returns/refunds '
-    "(gross vs net revenue, how much was refunded, return rate). Use period \"explicit_date\" for a "
+    "(gross vs net revenue, how much was refunded, return rate). Any question about how much MONEY came in or "
+    'was made ("how much did I sell/make/take/earn", "how are sales") belongs here, even though it says "sell" — '
+    'the question of WHICH products sold best is "retail_operations" instead. Also here: how many sales were made, '
+    'the average sale, and any comparison between periods ("this month vs last month", "are sales up or down", '
+    '"compare to before") — its data already includes the previous period. Use period "explicit_date" for a '
     'question naming a specific day or date range (e.g. "revenue on the 24th of June", "sales last '
     'Tuesday").\n'
     '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (bike-shop businesses '
@@ -2108,10 +2175,20 @@ _MULTI_PART_INSTRUCTION = (
 )
 
 
+def _correction_message(bad_figures: list[str]) -> str:
+    shown = ", ".join(sorted(set(bad_figures))[:6])
+    return (
+        f"Your answer was rejected because these figures are not in the data: {shown}. Answer the same question "
+        "again using only figures copied exactly from the data — no totals, differences, sums, averages, counts or "
+        "percentages that you worked out yourself, and no rounding. If a figure the question needs is not in the "
+        "data, say plainly that it isn't shown instead of working it out."
+    )
+
+
 def _generate_answer(
     request_repo: AIRequestRepository, *, business_id: uuid.UUID, user_id: str, question: str, context: dict,
     scope_label: str, previous_question: str | None = None, previous_answer: str | None = None,
-    multi_part: bool = False,
+    multi_part: bool = False, rejected: tuple[str, list[str]] | None = None,
 ) -> str | None:
     # Explicit, stated outright rather than left for the model to infer —
     # live-reproduced bug: without this, a branch-scoped or combined-
@@ -2137,6 +2214,15 @@ def _generate_answer(
         messages.append({"role": "user", "content": previous_question})
         messages.append({"role": "assistant", "content": previous_answer})
     messages.append({"role": "user", "content": question})
+    if rejected is not None:
+        # Second and last attempt: the first answer failed the number check.
+        # Show the model exactly which figures were not in the data. The
+        # retried answer goes through the identical check again — this only
+        # gives it a fair chance to quote the data instead of working
+        # something out; it never loosens what is accepted.
+        rejected_text, bad_figures = rejected
+        messages.append({"role": "assistant", "content": rejected_text})
+        messages.append({"role": "user", "content": _correction_message(bad_figures)})
     try:
         # Same reasoning-token headroom rationale as _classify_intent
         # above; raised from 500 after a live fire-test run showed a

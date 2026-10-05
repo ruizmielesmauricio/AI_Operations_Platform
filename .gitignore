@@ -38,3 +38,6 @@ frontend/certs/*.crt
 
 # --- Logs ---
 *.log
+
+# Ask ORLA evaluation run output (regenerable)
+backend/eval_results/

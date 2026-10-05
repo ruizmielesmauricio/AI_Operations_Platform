@@ -30,11 +30,11 @@ Principle: **use free tiers until a limit actually forces a paid plan** (see "Fr
 | A2 | Invoice screen warns about cost-price changes before confirming | Done — v1.90 |
 | A3 | Complimentary pilot accounts (no Stripe), incl. staff and branches | Done — v1.91 |
 | A4 | Plain-English audit of every screen/menu; central term list; "What's this?" hints | First pass done (v1.92) — see `22_Plain_Language_Audit.md`; a second pass follows the testers' own list of confusing terms |
-| A5 | Ask ORLA question bank (~200 questions) + automated scorer; tune until consistently good; log unanswered questions during the pilot | Not started (needs the $10 OpenRouter credit to run at volume) |
+| A5 | Ask ORLA question bank (243 questions) + automated scorer; tune until consistently good; log unanswered questions during the pilot | Done for the first round (v1.93): 90% → ~99% on the free model — see `23_Ask_ORLA_Quality.md`. Pilot question log waits for the legal session; paid-model re-run when testers start |
 | A6 | Invoice review: stacked layout for small screens; manual "add a line" for table-less invoices | Not started |
 | A7 | First-run guidance and empty states (what a brand-new shop sees) | Not started — to be scoped in the audit |
 | A8 | Pilot usage counters (report compute, exports, AI use per customer) to replace cost estimates with real numbers | Not started — meaningful only once testers use it |
-| A9 | Switch Ask ORLA from the free model to a paid one (~$0.0002/question) | When the testers start — the free tier failed ~18% of calls in measurement |
+| A9 | Switch Ask ORLA from the free model to a paid one (~$0.0002/question) | When the testers start (the $10 OpenRouter credit is being saved for them, 06/10/2026) — the free tier failed ~18% of calls in earlier measurement |
 
 Out of scope for now: legal documents, privacy notice, retention policy, Stripe live mode (waiting on the legal session and company setup); prescriptions (PD-011); OCR (PD-012).
 

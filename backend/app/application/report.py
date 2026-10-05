@@ -15,6 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.orm import Session
 
+from app.analytics.financial import compute_average_sale
 from app.analytics.period import compute_report_period, resolve_period
 from app.analytics.report_narrative import build_executive_narrative
 from app.analytics.retail import classify_movers, compute_inventory_turnover
@@ -119,11 +120,7 @@ def _assemble_payload(
 
     sale_rows = SaleRepository(db).list_amounts_in_range(business.id, financial.period.start, financial.period.end)
     transaction_count = len(sale_rows)
-    average_sale = (
-        (financial.revenue.current / transaction_count).quantize(_CENTS, rounding=ROUND_HALF_UP)
-        if transaction_count
-        else None
-    )
+    average_sale = compute_average_sale(financial.revenue.current, transaction_count)
 
     # Reuses the same persisted alerts a user already sees on the
     # dashboard (Stage C12) rather than re-deriving threshold logic here —
