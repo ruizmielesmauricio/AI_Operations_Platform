@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { HelpHint } from "@/components/HelpHint";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api/client";
 import { redirectToCheckout } from "@/lib/billing";
@@ -21,6 +22,14 @@ import type {
 // models this as a template choice, not a hardcoded assumption, so adding
 // cafe/garage later is a new option here, not new UI.
 const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
+
+// Never show the raw code ("bicycle_shop", "owner") to the user.
+function templateLabel(value: string): string {
+  return TEMPLATES.find((t) => t.value === value)?.label ?? value.replace(/_/g, " ");
+}
+function roleLabel(role: string): string {
+  return role === "owner" ? "Owner" : role === "manager" ? "Manager" : role === "staff" ? "Staff" : role;
+}
 
 // The branch-creation flow's own form state — collects the full profile
 // up front, all fields required, before a branch can proceed to payment
@@ -134,9 +143,9 @@ function seatStatusLabel(seat: { status: string; account_linked: boolean }): str
 function statusLabel(business: Business, subscriptionStatus: string | null, isComplimentary = false): string {
   if (business.deleted_at) return "Deleted";
   if (isComplimentary && subscriptionStatus === "active") return "Complimentary (pilot)";
-  if (subscriptionStatus === "active") return "Subscribed";
-  if (subscriptionStatus === "canceled") return "Cancelled";
-  return "Pending Payment";
+  if (subscriptionStatus === "active") return "Plan active";
+  if (subscriptionStatus === "canceled") return "Plan cancelled";
+  return "Plan not started";
 }
 
 export default function OnboardingPage() {
@@ -709,14 +718,14 @@ export default function OnboardingPage() {
           handleCancelAddBranch();
         }}
       />
-      <h1>Your businesses</h1>
+      <h1>Your shops</h1>
       {/* Drives every link in the top nav above — same list GET /businesses
           already scopes to the caller's own memberships, so a staff
           member can only ever pick a business/branch they're actually
           assigned to, never a sibling branch they don't belong to. */}
       {activeBusinessesForNav.length > 0 && (
         <p>
-          <label htmlFor="nav-business-select">Business context for navigation</label>
+          <label htmlFor="nav-business-select">Shop shown in the menu above</label>
           <br />
           <select
             id="nav-business-select"
@@ -749,7 +758,7 @@ export default function OnboardingPage() {
                 <li key={b.id} style={{ marginBottom: "1em" }}>
                   <div className="hint">
                     {parent ? <>↳ Branch of {parent.name} — </> : null}
-                    {b.name} — {b.template} ({b.role})
+                    {b.name} — {templateLabel(b.template)} ({roleLabel(b.role)})
                   </div>
                   <div className="hint">Deleted</div>
                 </li>
@@ -781,8 +790,8 @@ export default function OnboardingPage() {
                     {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
                     {b.name}
                   </strong>{" "}
-                  — {b.template} ({b.role}) —{" "}
-                  <span className={label === "Subscribed" || isComplimentary ? "status-ok" : "status-error"}>{label}</span>
+                  — {templateLabel(b.template)} ({roleLabel(b.role)}) —{" "}
+                  <span className={label === "Plan active" || isComplimentary ? "status-ok" : "status-error"}>{label}</span>
                 </div>
                 {/* Company Profile rows are about the profile record
                     itself, not a second navigation menu — every
@@ -1296,15 +1305,15 @@ export default function OnboardingPage() {
         </p>
       ) : (
         <>
-          <h2>Create a business</h2>
+          <h2>Set up your shop</h2>
           <form onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="name">Business name</label>
+              <label htmlFor="name">Shop name</label>
               <br />
               <input id="name" required value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div>
-              <label htmlFor="template">Business type</label>
+              <label htmlFor="template">What kind of shop?</label>
               <br />
               <select id="template" value={template} onChange={(e) => setTemplate(e.target.value)}>
                 {TEMPLATES.map((t) => (
@@ -1315,13 +1324,13 @@ export default function OnboardingPage() {
               </select>
             </div>
             <div>
-              <label htmlFor="timezone">Timezone</label>
+              <label htmlFor="timezone">Timezone<HelpHint term="timezone" /></label>
               <br />
               <input id="timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
             </div>
             {error && <p className="status-error">{error}</p>}
             <button type="submit" disabled={submitting}>
-              {submitting ? "Creating…" : "Create business"}
+              {submitting ? "Setting up…" : "Set up my shop"}
             </button>
           </form>
         </>

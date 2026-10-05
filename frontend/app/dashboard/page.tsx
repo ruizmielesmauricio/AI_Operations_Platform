@@ -5,6 +5,8 @@ import { ApiError, apiGet } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
+import { HelpHint, TermLabel } from "@/components/HelpHint";
+import { TERMS } from "@/lib/terms";
 import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
 import { businessDisplayLabel } from "@/lib/businessLabel";
@@ -24,23 +26,6 @@ import type {
   RetailOperations,
   WorkshopPerformance,
 } from "@/types";
-
-// PR-3.7 — plain-language definitions on demand. Static strings for now;
-// a fetched "Business Knowledge" definitions API doesn't exist yet.
-const DEFINITIONS: Record<string, string> = {
-  revenue: "Total sales recorded in the selected period.",
-  returns: "Sales rows with a negative quantity — returns/refunds — are counted as returns, not sales, and already netted out of revenue.",
-  grossMargin: "Revenue minus the cost of goods sold, as a percentage of revenue with a known cost.",
-  costCoverage: "Share of revenue where a cost price was actually recorded — margin below this is only an estimate.",
-  taxCoverage: "Share of cost-known revenue that also has a confirmed tax figure, letting margin be computed net of tax rather than assumed.",
-  stockCover: "How many days of stock are left at the recent sales rate. Blank means not enough recent sales to estimate.",
-  sellThrough: "Units sold divided by units sold plus stock still on hand — an approximation, not an exact sell-through rate.",
-  workshopMargin: "Price charged minus labour cost. Parts cost isn't tracked yet, so this understates true repair cost.",
-  revenueForecast:
-    "A simple projection from recent sales history (same weekday pattern, or a plain average if there isn't enough history yet) — not AI, just deterministic math. The shaded range is a typical spread, not a guarantee.",
-  reorderSuggestion:
-    "A starting suggestion only: forecasted demand's upper estimate minus current stock. Doesn't account for supplier lead time or safety stock.",
-};
 
 type SectionKey = "financial" | "retail" | "workshop" | "findings" | "alerts" | "forecast";
 
@@ -189,12 +174,12 @@ export default function DashboardPage() {
         <aside id="dashboard-section-menu" className="dashboard-section-menu">
           <p>On this page</p>
           <nav aria-label="Dashboard sections">
-            <a href="#financial">Financial performance</a>
-            <a href="#retail">Retail operations</a>
-            <a href="#workshop">Workshop performance</a>
-            <a href="#forecast">Forecast</a>
-            <a href="#findings">Recommendations</a>
-            <a href="#alerts">Active alerts</a>
+            <a href="#financial">{TERMS.financialPerformance.label}</a>
+            <a href="#retail">{TERMS.retailOperations.label}</a>
+            <a href="#workshop">{TERMS.workshopPerformance.label}</a>
+            <a href="#forecast">{TERMS.forecast.label}</a>
+            <a href="#findings">{TERMS.findings.label}</a>
+            <a href="#alerts">{TERMS.alerts.label}</a>
           </nav>
         </aside>
         <div className="dashboard-content">
@@ -202,7 +187,7 @@ export default function DashboardPage() {
       <div className="dashboard-filters">
       {businesses.length > 1 && (
         <div className="dashboard-filter-group">
-          <label htmlFor="business">Business</label>
+          <label htmlFor="business">Shop</label>
           <br />
           <select
             id="business"
@@ -276,8 +261,8 @@ function FinancialSection({
   setCategoryId: (id: string) => void;
 }) {
   const categoryFilter = <CategoryFilterSelect id="financial-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
-  if (error) return <Section title="Financial Performance">{categoryFilter}<p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Financial Performance">{categoryFilter}<p>Loading…</p></Section>;
+  if (error) return <Section title={TERMS.financialPerformance.label} hint="financialPerformance">{categoryFilter}<p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={TERMS.financialPerformance.label} hint="financialPerformance">{categoryFilter}<p>Loading…</p></Section>;
 
   const { revenue, gross_margin: grossMargin } = data;
   const marginRows = dedupeByProduct([...data.bottom_margin_products, ...data.top_margin_products]);
@@ -285,35 +270,34 @@ function FinancialSection({
   // grossMarginDisplay merges the net-of-tax/plain branches into one call
   // (its note text already says which one applies) — this just picks the
   // matching hover definition for whichever branch it picked.
-  const grossMarginNoteTitle = grossMargin.net_gross_margin_pct !== null ? DEFINITIONS.taxCoverage : DEFINITIONS.costCoverage;
+  const grossMarginNoteTitle = grossMargin.net_gross_margin_pct !== null ? TERMS.taxCoverage.hint : TERMS.costCoverage.hint;
 
   return (
-    <Section title="Financial Performance">
+    <Section title={TERMS.financialPerformance.label} hint="financialPerformance">
       {categoryFilter}
-      <Stat label="Revenue" title={DEFINITIONS.revenue} value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
+      <Stat term="revenue" value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
       {Number(data.returns.returns_amount) > 0 && (
-        <p className="hint" title={DEFINITIONS.returns}>
-          Includes {data.returns.return_count} return{data.returns.return_count === 1 ? "" : "s"} totaling{" "}
-          {formatMoney(data.returns.returns_amount)} — already netted out of the revenue above (gross revenue
-          before returns: {formatMoney(data.returns.gross_revenue)}).
+        <p className="hint">
+          Includes {data.returns.return_count} return{data.returns.return_count === 1 ? "" : "s"} worth{" "}
+          {formatMoney(data.returns.returns_amount)} — already taken off the sales figure above (before returns you
+          sold {formatMoney(data.returns.gross_revenue)}).<HelpHint term="returns" />
         </p>
       )}
       <Stat
-        label="Gross margin"
-        title={DEFINITIONS.grossMargin}
+        term="grossMargin"
         value={grossMarginDisplayed.value}
         note={grossMarginDisplayed.note}
         noteTitle={grossMarginNoteTitle}
       />
       {data.products_excluded_from_ranking > 0 && (
         <p className="status-warn">
-          {data.products_excluded_from_ranking} product(s) excluded from ranking — no recorded cost price.
+          {data.products_excluded_from_ranking} product(s) left out of this chart because ORLA doesn&apos;t know what they cost you. Add a cost price to include them.
         </p>
       )}
       {marginRows.length > 0 ? (
-        <Chart option={marginBarOption(marginRows, "Gross profit by product (€)")} />
+        <Chart option={marginBarOption(marginRows, "Profit on sales by product (€)")} />
       ) : (
-        <p>No product margin data for this period.</p>
+        <p>No profit figures for this period yet — they need products with a known cost price.</p>
       )}
     </Section>
   );
@@ -337,41 +321,40 @@ function RetailSection({
   businessId: string;
 }) {
   const categoryFilter = <CategoryFilterSelect id="retail-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
-  if (error) return <Section title="Retail Operations">{categoryFilter}<p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Retail Operations">{categoryFilter}<p>Loading…</p></Section>;
+  if (error) return <Section title={TERMS.retailOperations.label} hint="retailOperations">{categoryFilter}<p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={TERMS.retailOperations.label} hint="retailOperations">{categoryFilter}<p>Loading…</p></Section>;
 
   const withCover = data.stock_cover.filter((r) => r.cover_days !== null);
   const noRecentSales = data.stock_cover.filter((r) => r.cover_days === null && r.stock_on_hand > 0);
   const salesTxHref = `/transactions?business=${businessId}&type=sales${categoryId ? `&category_id=${categoryId}` : ""}`;
 
   return (
-    <Section title="Retail Operations">
+    <Section title={TERMS.retailOperations.label} hint="retailOperations">
       {categoryFilter}
-      <Stat label="Inventory value" value={formatMoney(data.inventory_value.value_at_cost)} />
-      <Stat label="Sell-through rate" title={DEFINITIONS.sellThrough} value={formatRate(data.sell_through_rate)} />
+      <Stat term="valueAtCost" value={formatMoney(data.inventory_value.value_at_cost)} />
+      <Stat term="sellThrough" value={formatRate(data.sell_through_rate)} />
       <p>
-        <a href={salesTxHref}>View individual sale transactions{categoryId ? " in this category" : ""} →</a>
+        <a href={salesTxHref}>See the individual sales{categoryId ? " in this category" : ""} →</a>
       </p>
 
       <TopSellers byUnits={data.top_sellers_by_units} byRevenue={data.top_sellers_by_revenue} businessId={businessId} />
 
-      <h3 title={DEFINITIONS.stockCover}>Stock cover</h3>
+      <h3><TermLabel term="stockCover" /></h3>
       {withCover.length > 0 ? (
         <Chart option={stockCoverBarOption(withCover)} />
       ) : (
-        <p>Not enough recent sales to estimate stock cover.</p>
+        <p>Not enough recent sales yet to estimate how long your stock will last.</p>
       )}
       {noRecentSales.length > 0 && (
         <p className="status-warn">
-          {noRecentSales.length} product(s) have stock but no recent sales, so cover can&apos;t be estimated —
-          see Dead Stock below.
+          {noRecentSales.length} product(s) have stock but no recent sales, so ORLA can&apos;t say how long they&apos;ll last —
+          see &quot;Stock that isn&apos;t selling&quot; below.
         </p>
       )}
 
-      <h3>Dead stock</h3>
-      <p className="hint">Products with stock on hand but zero sales in the selected period — worth investigating before reordering more.</p>
+      <h3><TermLabel term="deadStock" /></h3>
       {data.dead_stock.length === 0 ? (
-        <p>None — every product with stock on hand sold at least once this period.</p>
+        <p>None — everything you have in stock sold at least once in these dates.</p>
       ) : (
         <DeadStockTable rows={data.dead_stock} />
       )}
@@ -406,7 +389,7 @@ function TopSellers({
           </button>{" "}
           /{" "}
           <button type="button" onClick={() => setSortBy("revenue")} disabled={sortBy === "revenue"}>
-            most revenue
+            most sales (€)
           </button>
           )
         </span>
@@ -419,7 +402,7 @@ function TopSellers({
             <tr>
               <th>Product</th>
               <th>Units sold</th>
-              <th>Revenue</th>
+              <th>Sales (€)</th>
               <th></th>
             </tr>
           </thead>
@@ -434,7 +417,7 @@ function TopSellers({
                 <td>{formatMoney(row.revenue)}</td>
                 <td>
                   <a href={`/transactions?business=${businessId}&type=sales&product_id=${row.product_id}`}>
-                    View transactions →
+                    See the sales →
                   </a>
                 </td>
               </tr>
@@ -452,8 +435,8 @@ function DeadStockTable({ rows }: { rows: DeadStockRow[] }) {
       <thead>
         <tr>
           <th>Product</th>
-          <th>Stock on hand</th>
-          <th>Value at cost</th>
+          <th>In stock</th>
+          <th>Stock value (at cost)</th>
         </tr>
       </thead>
       <tbody>
@@ -517,31 +500,30 @@ function WorkshopSection({
   error?: string;
   businessId: string;
 }) {
-  if (error) return <Section title="Workshop Performance"><p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Workshop Performance"><p>Loading…</p></Section>;
+  if (error) return <Section title={TERMS.workshopPerformance.label} hint="workshopPerformance"><p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={TERMS.workshopPerformance.label} hint="workshopPerformance"><p>Loading…</p></Section>;
 
   const { revenue, margin } = data;
   const workshopMargin = workshopMarginDisplay(margin);
 
   return (
-    <Section title="Workshop Performance">
+    <Section title={TERMS.workshopPerformance.label} hint="workshopPerformance">
       <Stat label="Repairs completed" value={String(margin.repair_count)} />
-      <Stat label="Revenue" value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
-      <Stat label="Average ticket" value={margin.average_ticket !== null ? formatMoney(margin.average_ticket) : "—"} />
+      <Stat term="revenue" value={formatMoney(revenue.current)} trendPct={revenue.change_pct} />
+      <Stat label="Average repair price" value={margin.average_ticket !== null ? formatMoney(margin.average_ticket) : "—"} />
       <Stat
-        label="Gross margin (labour only)"
-        title={DEFINITIONS.workshopMargin}
+        term="workshopMargin"
         value={workshopMargin.value}
         note={workshopMargin.note}
       />
       {margin.revenue_coverage_pct !== null && Number(margin.revenue_coverage_pct) < 100 && (
         <p className="status-warn">
-          Only {formatPct(margin.revenue_coverage_pct)} of repairs have a recorded price — revenue may understate
-          actual work done.
+          Only {formatPct(margin.revenue_coverage_pct)} of repairs have a price recorded — your sales figure may be
+          lower than the work you actually did.
         </p>
       )}
       <p>
-        <a href={`/transactions?business=${businessId}&type=repairs`}>View individual repairs →</a>
+        <a href={`/transactions?business=${businessId}&type=repairs`}>See the individual repairs →</a>
       </p>
     </Section>
   );
@@ -570,7 +552,7 @@ function ForecastSection({
 }) {
   const title = (
     <>
-      Forecast{" "}
+      {TERMS.forecast.label}<HelpHint term="forecast" />{" "}
       <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
         (next{" "}
         {HORIZON_OPTIONS.map((days, i) => (
@@ -599,14 +581,14 @@ function ForecastSection({
         apart). The shaded range shows how much that history has typically varied, not a calculated probability.
       </p>
 
-      <h3 title={DEFINITIONS.revenueForecast}>Revenue</h3>
+      <h3><TermLabel term="revenue" /></h3>
       {result.insufficient_data ? (
-        <p>Not enough sales history yet to forecast revenue — check back once you have at least two weeks of data.</p>
+        <p>Not enough sales history yet to estimate your next sales — check back once you have at least two weeks of data.</p>
       ) : (
         <>
           <Stat
-            label={`Expected revenue, next ${data.horizon_days} days`}
-            title={DEFINITIONS.revenueForecast}
+            label={`Expected sales, next ${data.horizon_days} days`}
+            title={TERMS.forecast.hint}
             value={`${formatMoney(result.total_point)} (typically ${formatMoney(result.total_low)}–${formatMoney(result.total_high)})`}
             note={`based on ${result.history_days_used} days of history — ${
               result.method === "seasonal_day_of_week"
@@ -618,25 +600,25 @@ function ForecastSection({
         </>
       )}
 
-      <h3 title={DEFINITIONS.reorderSuggestion}>Products to watch</h3>
+      <h3>Products to watch <HelpHint text="Products ORLA expects to sell, and how many you may need to order." /></h3>
       <CategoryFilterSelect id="forecast-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />
       {data.products.length === 0 ? (
         <p>No products have enough sales history yet to forecast demand.</p>
       ) : (
         <>
         <p className="hint">
-          &quot;Suggested reorder&quot; is a starting point only: forecast demand&apos;s upper estimate minus current
-          stock. It doesn&apos;t know your supplier&apos;s delivery time or how much safety buffer you want — treat
-          it as a number to sanity-check, not a purchase order.
+          &quot;Suggested order&quot; is only a starting point: the most ORLA expects you to sell, minus what you have now.
+          It doesn&apos;t know your supplier&apos;s delivery time — treat it as a number to sanity-check, not an order
+          to place blindly.
         </p>
         <table>
           <thead>
             <tr>
               <th>Product</th>
-              <th>Current stock</th>
-              <th>Forecast demand</th>
-              <th>Cover left</th>
-              <th title={DEFINITIONS.reorderSuggestion}>Suggested reorder</th>
+              <th>In stock now</th>
+              <th>Expected to sell (range)</th>
+              <th>Days of stock left</th>
+              <th>{TERMS.suggestedReorder.label}<HelpHint term="suggestedReorder" /></th>
             </tr>
           </thead>
           <tbody>
@@ -682,12 +664,12 @@ function FindingsSection({
   categoryId: string;
   setCategoryId: (id: string) => void;
 }) {
-  if (error) return <Section title="Findings & Recommendations"><p className="status-error">{error}</p></Section>;
-  if (!data) return <Section title="Findings & Recommendations"><p>Loading…</p></Section>;
+  if (error) return <Section title={TERMS.findings.label} hint="findings"><p className="status-error">{error}</p></Section>;
+  if (!data) return <Section title={TERMS.findings.label} hint="findings"><p>Loading…</p></Section>;
   if (data.recommendations.length === 0) {
     return (
-      <Section title="Findings & Recommendations">
-        <p>Nothing to flag for this period.</p>
+      <Section title={TERMS.findings.label} hint="findings">
+        <p>Nothing to flag for these dates — nothing needs your attention.</p>
       </Section>
     );
   }
@@ -696,10 +678,10 @@ function FindingsSection({
   const { businessWide, stockAndProducts } = splitRecommendations(data.recommendations);
 
   return (
-    <Section title="Findings & Recommendations">
+    <Section title={TERMS.findings.label} hint="findings">
       {businessWide.length > 0 && (
         <>
-          <h3>Business performance</h3>
+          <h3>Your business overall</h3>
           <RecommendationList recommendations={businessWide} findingByKey={findingByKey} showCategory={false} />
         </>
       )}
@@ -707,7 +689,7 @@ function FindingsSection({
       <h3>Stock &amp; products</h3>
       <CategoryFilterSelect id="findings-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />
       {stockAndProducts.length === 0 ? (
-        <p>Nothing to flag for this period.</p>
+        <p>Nothing to flag for these dates — nothing needs your attention.</p>
       ) : (
         <RecommendationList recommendations={stockAndProducts} findingByKey={findingByKey} showCategory={true} />
       )}
@@ -718,17 +700,17 @@ function FindingsSection({
 // --- Alerts ----------------------------------------------------------------
 
 function AlertsSection({ alerts, error }: { alerts: Alert[]; error?: string }) {
-  if (error) return <Section title="Active Alerts"><p className="status-error">{error}</p></Section>;
+  if (error) return <Section title={TERMS.alerts.label} hint="alerts"><p className="status-error">{error}</p></Section>;
   if (alerts.length === 0) {
     return (
-      <Section title="Active Alerts">
-        <p>No active alerts.</p>
+      <Section title={TERMS.alerts.label} hint="alerts">
+        <p>No warnings right now.</p>
       </Section>
     );
   }
 
   return (
-    <Section title="Active Alerts">
+    <Section title={TERMS.alerts.label} hint="alerts">
       <ul>
         {alerts.map((alert) => (
           <li key={alert.id} className={severityClass(alert.payload.severity)}>

@@ -153,17 +153,16 @@ export default function ChatPage() {
       <AppNav businessId={businessId} />
       <h1>Ask ORLA</h1>
       <p className="hint">
-        ORLA can answer questions about your revenue, retail or workshop performance, forecast, recommendations, or
-        your latest report — and can answer a few of these at once if you ask them together (e.g. "what's my
-        revenue and what should I reorder?"). Not a general chatbot — answers are grounded only in your own
-        calculated data, and questions outside that scope get a plain "I can't help with that" response rather
-        than a guess. ORLA remembers your last question and answer, so a follow-up like "what about the previous
-        period?" works — but only one exchange back, not the whole conversation.
+        Ask about your sales, profit, stock, repairs or reports in your own words — for example{" "}
+        &quot;How did we do last week?&quot;, &quot;What should I reorder?&quot; or &quot;Which products aren&apos;t selling?&quot;.
+        You can ask more than one thing at once. ORLA only answers from your own numbers and will say so if it
+        can&apos;t help, rather than guess. It remembers your last question, so you can follow up with &quot;and the
+        week before?&quot;.
       </p>
 
       {businesses.length > 1 && (
         <div>
-          <label htmlFor="business">Business</label>
+          <label htmlFor="business">Shop</label>
           <br />
           <select
             id="business"
@@ -190,7 +189,7 @@ export default function ChatPage() {
           <p className="hint">
             <strong>ORLA:</strong> Hello, I&apos;m ORLA — Operational Reporting and Logic Analytics.
             {businesses.length > 1
-              ? " Which branch would you like information about? Pick one above, or just name it in your question."
+              ? " Which branch do you mean? Pick one above, or just name it in your question."
               : ' Try asking something like "How is my revenue doing?"'}
           </p>
         )}

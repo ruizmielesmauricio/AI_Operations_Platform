@@ -277,25 +277,25 @@ export default function SuppliersPage() {
             </table>
           )}
 
-          <h2>Spend by supplier (last 30 days)</h2>
+          <h2>What you spent with each supplier (last 30 days)</h2>
           {analytics && analytics.rows.length === 0 ? (
-            <p>No purchases with a known cost in this period yet.</p>
+            <p>No deliveries with a known cost in this period yet.</p>
           ) : (
             analytics && (
               <>
                 {analytics.unknown_supplier_share_pct !== null && Number(analytics.unknown_supplier_share_pct) > 0 && (
                   <p className="hint">
-                    {analytics.unknown_supplier_share_pct}% of spend has no supplier recorded — map a Supplier
-                    column on future purchases uploads to close this gap.
+                    {analytics.unknown_supplier_share_pct}% of what you spent has no supplier recorded. Next time you upload
+                    deliveries, match the supplier column so ORLA can fill this in.
                   </p>
                 )}
                 <table>
                   <thead>
                     <tr>
                       <th>Supplier</th>
-                      <th>Spend</th>
+                      <th>Spent</th>
                       <th>Products</th>
-                      <th>Purchases</th>
+                      <th>Deliveries</th>
                     </tr>
                   </thead>
                   <tbody>

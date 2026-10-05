@@ -229,7 +229,7 @@ export default function NotificationsPage() {
         <div className="notifications-content">
           <div className="notifications-header">
             <div>
-              <h1>Notification Centre</h1>
+              <h1>Notifications</h1>
               <p className="hint">
                 {isOwner
                   ? "Updates about stock, uploads, reports, insights, team, and billing, with a direct route to each next action."

@@ -29,12 +29,12 @@ const ISSUE_LABELS: Record<string, string> = {
   missing_price: "No unit price or line total found",
   negative_quantity: "Quantity is negative",
   negative_price: "Price is negative",
-  quantity_not_whole: "Quantity isn't a whole number — stock is tracked in whole units",
+  quantity_not_whole: "Quantity isn't a whole number — ORLA counts stock in whole items",
   line_items_not_detected: "We couldn't find a line-item table in this PDF",
-  line_total_sum_mismatch_subtotal: "Line totals don't add up to the subtotal",
-  grand_total_mismatch: "Subtotal + tax − discount + shipping doesn't match the grand total",
+  line_total_sum_mismatch_subtotal: "The line totals don't add up to the total before VAT",
+  grand_total_mismatch: "Total before VAT + VAT − discount + delivery doesn't match the invoice total",
   duplicate_line_detected: "Two lines look identical — check this isn't a duplicate",
-  label_found_no_value: "Found a label but no value next to it",
+  label_found_no_value: "Found a heading but no amount next to it",
   unparseable: "Found a value we couldn't read",
   low_confidence_fallback: "Guessed — please double-check this",
   no_supplier_signal: "Couldn't find a supplier name in the document",
@@ -79,7 +79,7 @@ const FAILURE_REASON_TEXT: Record<string, string> = {
   corrupt: "This file couldn't be read as a PDF — it may be damaged or incomplete.",
   oversized: "This PDF has too many pages to process.",
   unsupported_file_type: "This file isn't a real PDF.",
-  no_extractable_text: "This looks like a scanned or image-only PDF — we can't read text from it yet. Try a text-based PDF, or use a CSV/XLSX export instead.",
+  no_extractable_text: "This looks like a scan or a photo saved as a PDF, which ORLA can't read yet. Try the PDF your supplier emailed, or upload a CSV/Excel file instead.",
 };
 
 function ProductPicker({
@@ -112,7 +112,7 @@ function ProductPicker({
     <div className="invoice-line__product-picker">
       <input
         type="text"
-        placeholder="Search products by name or SKU…"
+        placeholder="Search your products by name or product code…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -471,7 +471,7 @@ export default function InvoiceReviewPage() {
 
       {draft.status === "confirmed" && (
         <p className="status-ok">
-          Imported successfully. <a href={`/transactions?business=${businessId}&type=purchases`}>View in Transactions</a>.
+          Added to ORLA. <a href={`/transactions?business=${businessId}&type=purchases`}>See it in Activity</a>.
         </p>
       )}
       {confirmResult && (
@@ -639,12 +639,12 @@ export default function InvoiceReviewPage() {
               <thead>
                 <tr>
                   <th>Description</th>
-                  <th>Supplier SKU</th>
-                  <th>Qty</th>
+                  <th>Supplier&apos;s product code</th>
+                  <th>Quantity</th>
                   <th>Unit price</th>
                   <th>Line total</th>
-                  <th>Match</th>
-                  <th>Issue</th>
+                  <th>Which of your products?</th>
+                  <th>Needs a look</th>
                 </tr>
               </thead>
               <tbody>
@@ -722,10 +722,10 @@ export default function InvoiceReviewPage() {
                           value={line.resolution_action}
                           onChange={(e) => saveLine(line.id, { resolution_action: e.target.value })}
                         >
-                          <option value="unresolved">Not resolved yet</option>
-                          <option value="match_existing">Match existing product</option>
-                          <option value="create_new">Create new product</option>
-                          <option value="excluded">Exclude this line</option>
+                          <option value="unresolved">Choose what to do…</option>
+                          <option value="match_existing">It&apos;s a product I already have</option>
+                          <option value="create_new">It&apos;s a new product — add it</option>
+                          <option value="excluded">Leave this line out</option>
                         </select>
                         {line.resolution_action === "match_existing" && (
                           <div>
@@ -774,7 +774,7 @@ export default function InvoiceReviewPage() {
                             />
                             <input
                               type="text"
-                              placeholder="New SKU (optional)"
+                              placeholder="Product code for the new product (optional)"
                               disabled={!editable}
                               defaultValue={line.proposed_sku ?? ""}
                               onBlur={(e) => {
@@ -797,19 +797,19 @@ export default function InvoiceReviewPage() {
 
           {draft.status === "needs_review" && (
             <>
-              <h2>Confirm import</h2>
+              <h2>Check, then add to ORLA</h2>
               {previewLoading && <p>Checking what will happen…</p>}
               {preview && (
                 <ul>
-                  <li>{preview.products_to_match} product(s) matched to existing products</li>
-                  <li>{preview.products_to_create} new product(s) will be created</li>
-                  {preview.lines_excluded > 0 && <li>{preview.lines_excluded} line(s) excluded</li>}
+                  <li>{preview.products_to_match} line(s) matched to products you already have</li>
+                  <li>{preview.products_to_create} new product(s) will be added</li>
+                  {preview.lines_excluded > 0 && <li>{preview.lines_excluded} line(s) left out</li>}
                   <li>
                     Supplier: {preview.supplier_action === "unknown" ? "Unknown" : preview.supplier_name ?? "Unknown"}
                     {preview.supplier_action === "create_new" ? " (new)" : ""}
                   </li>
-                  <li>{preview.purchase_movement_count} purchase movement(s) will be recorded</li>
-                  {preview.invoice_date && <li>Purchase date: {preview.invoice_date}</li>}
+                  <li>{preview.purchase_movement_count} delivery line(s) will be recorded as stock received</li>
+                  {preview.invoice_date && <li>Stock counted as received on: {preview.invoice_date}</li>}
                 </ul>
               )}
               {preview && preview.cost_changes.length > 0 && (

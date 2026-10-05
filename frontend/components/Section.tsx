@@ -5,13 +5,18 @@ import type { ReactNode } from "react";
 import type { Finding, Recommendation } from "@/types";
 import { severityClass } from "@/lib/format";
 import { findingKey } from "@/lib/findings";
+import { HelpHint } from "@/components/HelpHint";
+import { TERMS, type TermKey } from "@/lib/terms";
 
 export function Section({
   title,
   children,
   id,
+  hint,
 }: {
   title: ReactNode;
+  // Glossary key: adds a tappable "?" explanation beside the heading.
+  hint?: TermKey;
   children: ReactNode;
   // Optional anchor target for a page-level table of contents (reports
   // page only — the dashboard has no TOC, so its callers just omit this).
@@ -19,13 +24,17 @@ export function Section({
 }) {
   return (
     <section id={id}>
-      <h2>{title}</h2>
+      <h2>
+        {title}
+        {hint && <HelpHint term={hint} />}
+      </h2>
       {children}
     </section>
   );
 }
 
 export function Stat({
+  term,
   label,
   value,
   title,
@@ -34,7 +43,11 @@ export function Stat({
   note,
   noteTitle,
 }: {
-  label: string;
+  // A glossary key (lib/terms.ts): shows the plain-English name plus a
+  // tappable "?" explanation. `label`/`title` remain for stats with a
+  // dynamic name (e.g. "Expected sales, next 7 days").
+  term?: TermKey;
+  label?: string;
   value: string;
   title?: string;
   trendPct?: string | null;
@@ -49,7 +62,15 @@ export function Stat({
 }) {
   return (
     <div>
-      <span title={title}>{label}</span>: <strong>{value}</strong>
+      {term ? (
+        <span>
+          {TERMS[term].label}
+          <HelpHint term={term} />
+        </span>
+      ) : (
+        <span title={title}>{label}</span>
+      )}
+      : <strong>{value}</strong>
       {trendPct !== undefined && trendPct !== null && (
         <span className={Number(trendPct) >= 0 ? "status-ok" : "status-error"}>
           {" "}

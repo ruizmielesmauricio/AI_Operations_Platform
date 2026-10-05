@@ -90,14 +90,14 @@ export default function WelcomePage() {
     <main>
       <AppNav businessId={businessId} />
       <h1>{firstName ? `Welcome back, ${firstName}` : "Welcome back"}</h1>
-      <p className="hint">Here's a quick look at what's new — check the full picture on your Dashboard.</p>
+      <p className="hint">Here's a quick look at what's new — the full picture is on your Dashboard.</p>
 
-      <h2>Newest findings</h2>
+      <h2>What ORLA spotted</h2>
       {findingsError && <p className="status-error">{findingsError}</p>}
       {!findingsError && !findings && <p>Loading…</p>}
       {!findingsError && findings && preview.length === 0 && (
         <p>
-          No findings yet — <a href={`/uploads${businessId ? `?business=${businessId}` : ""}`}>upload your data</a> to
+          Nothing to show yet — <a href={`/uploads${businessId ? `?business=${businessId}` : ""}`}>upload your data</a> to
           get started.
         </p>
       )}

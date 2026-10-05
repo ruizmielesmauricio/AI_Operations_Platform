@@ -6,6 +6,8 @@ import { apiGet, apiGetBlob } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { ReportExpiryCountdown } from "@/components/ReportExpiryCountdown";
 import { Chart } from "@/components/Chart";
+import { HelpHint, TermLabel } from "@/components/HelpHint";
+import { TERMS } from "@/lib/terms";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
 import { formatMoney, formatPct, formatRate, grossMarginDisplay, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
@@ -102,15 +104,15 @@ function ReportView({
   const { businessWide, stockAndProducts } = splitRecommendations(findings?.recommendations ?? []);
 
   const sections: { id: string; title: string }[] = [
-    { id: "executive-summary", title: "Executive Summary" },
-    { id: "revenue-performance", title: "Revenue Performance" },
-    { id: "sales-performance", title: "Sales Performance" },
-    { id: "category-breakdown", title: "Category Breakdown" },
-    { id: "inventory-health", title: "Inventory Health" },
-    { id: "forecast-outlook", title: "Forecast & Future Outlook" },
-    { id: "purchasing-recommendations", title: "Purchasing Recommendations" },
-    ...(workshop ? [{ id: "workshop-performance", title: "Workshop Performance" }] : []),
-    { id: "action-plan", title: "Action Plan" },
+    { id: "executive-summary", title: "Summary" },
+    { id: "revenue-performance", title: "Sales and profit" },
+    { id: "sales-performance", title: "Best sellers" },
+    { id: "category-breakdown", title: "By category" },
+    { id: "inventory-health", title: "Stock health" },
+    { id: "forecast-outlook", title: "What to expect" },
+    { id: "purchasing-recommendations", title: "What to order" },
+    ...(workshop ? [{ id: "workshop-performance", title: "Repairs & workshop" }] : []),
+    { id: "action-plan", title: "What to do next" },
   ];
 
   return (
@@ -142,30 +144,30 @@ function ReportView({
         ))}
       </nav>
 
-      <Section id="executive-summary" title="Executive Summary">
+      <Section id="executive-summary" title="Summary">
         <ul>
           {summary.narrative.map((sentence, i) => (
             <li key={i}>{sentence}</li>
           ))}
         </ul>
-        <Stat label="Revenue" value={formatMoney(financial.revenue.current)} trendPct={financial.revenue.change_pct} trendLabel={trendLabel} />
-        <Stat label="Transactions" value={String(summary.transactions)} />
-        <Stat label="Average sale" value={summary.average_sale !== null ? formatMoney(summary.average_sale) : "—"} />
-        <Stat label="Gross margin" value={grossMargin.value} note={grossMargin.note} />
-        <Stat label="Inventory value" value={formatMoney(retail.inventory_value.value_at_cost)} />
-        <Stat label="Low stock" value={String(summary.low_stock_count)} />
-        <Stat label="Dead stock" value={String(summary.dead_stock_count)} />
+        <Stat term="revenue" value={formatMoney(financial.revenue.current)} trendPct={financial.revenue.change_pct} trendLabel={trendLabel} />
+        <Stat label="Number of sales" value={String(summary.transactions)} />
+        <Stat label="Average sale value" value={summary.average_sale !== null ? formatMoney(summary.average_sale) : "—"} />
+        <Stat term="grossMargin" value={grossMargin.value} note={grossMargin.note} />
+        <Stat term="valueAtCost" value={formatMoney(retail.inventory_value.value_at_cost)} />
+        <Stat label="Products running low" value={String(summary.low_stock_count)} />
+        <Stat term="deadStock" value={String(summary.dead_stock_count)} />
 
         {summary.top_recommendations.length > 0 && (
           <>
-            <h3>Top recommendations</h3>
+            <h3>Most important things to do</h3>
             <RecommendationList recommendations={summary.top_recommendations} findingByKey={findingByKey} showCategory={true} />
           </>
         )}
       </Section>
 
-      <Section id="revenue-performance" title="Revenue Performance">
-        <Stat label="Revenue" value={formatMoney(financial.revenue.current)} trendPct={financial.revenue.change_pct} trendLabel={trendLabel} />
+      <Section id="revenue-performance" title="Sales and profit">
+        <Stat term="revenue" value={formatMoney(financial.revenue.current)} trendPct={financial.revenue.change_pct} trendLabel={trendLabel} />
         {/* financial.returns may be absent on a report stored before that
             field was added — a report payload is a JSON snapshot from
             generation time, never re-serialized against a later schema,
@@ -174,24 +176,24 @@ function ReportView({
         {financial.returns && Number(financial.returns.returns_amount) > 0 && (
           <p className="hint">
             Includes {financial.returns.return_count} return{financial.returns.return_count === 1 ? "" : "s"}{" "}
-            totaling {formatMoney(financial.returns.returns_amount)} — already netted out of the revenue above
-            (gross revenue before returns: {formatMoney(financial.returns.gross_revenue)}).
+            worth {formatMoney(financial.returns.returns_amount)} — already taken off the sales figure above
+            (before returns you sold {formatMoney(financial.returns.gross_revenue)}).
           </p>
         )}
-        <Stat label="Gross margin" value={grossMargin.value} note={grossMargin.note} />
+        <Stat term="grossMargin" value={grossMargin.value} note={grossMargin.note} />
         {marginRows.length > 0 ? (
-          <Chart option={marginBarOption(marginRows, "Gross profit by product (€)")} />
+          <Chart option={marginBarOption(marginRows, "Profit on sales by product (€)")} />
         ) : (
-          <p>No product margin data for this period.</p>
+          <p>No profit figures for this period — they need products with a known cost price.</p>
         )}
       </Section>
 
-      <Section id="sales-performance" title="Sales Performance">
-        <TopSellersTable title="Top sellers by units" rows={retail.top_sellers_by_units} />
-        <TopSellersTable title="Top sellers by revenue" rows={retail.top_sellers_by_revenue} />
+      <Section id="sales-performance" title="Best sellers">
+        <TopSellersTable title="Best sellers — most units sold" rows={retail.top_sellers_by_units} />
+        <TopSellersTable title="Best sellers — most sales (€)" rows={retail.top_sellers_by_revenue} />
       </Section>
 
-      <Section id="category-breakdown" title="Category Breakdown">
+      <Section id="category-breakdown" title="By category">
         <p className="hint">
           Revenue, expenses, and stock value per product category. Expenses is purchase cost (what you paid
           buying stock), not cost of goods sold — a different figure from Gross margin above. Stock value here is
@@ -208,57 +210,50 @@ function ReportView({
         )}
       </Section>
 
-      <Section id="inventory-health" title="Inventory Health">
-        <Stat label="Inventory value" value={formatMoney(retail.inventory_value.value_at_cost)} />
-        <Stat label="Sell-through rate" value={formatRate(retail.sell_through_rate)} />
-        <Stat label="Inventory turnover" value={inventory.turnover_ratio !== null ? `${inventory.turnover_ratio}x` : "—"} />
+      <Section id="inventory-health" title="Stock health">
+        <Stat term="valueAtCost" value={formatMoney(retail.inventory_value.value_at_cost)} />
+        <Stat term="sellThrough" value={formatRate(retail.sell_through_rate)} />
+        <Stat term="inventoryTurnover" value={inventory.turnover_ratio !== null ? `${inventory.turnover_ratio}x` : "—"} />
 
-        <h3>Stock cover</h3>
+        <h3><TermLabel term="stockCover" /></h3>
         {withCover.length > 0 ? (
           <Chart option={stockCoverBarOption(withCover)} />
         ) : (
-          <p>Not enough recent sales to estimate stock cover.</p>
+          <p>Not enough recent sales yet to estimate how long your stock will last.</p>
         )}
 
-        <h3>Fast movers</h3>
-        <p className="hint">Products selling through quickly (14 days of cover or less).</p>
+        <h3><TermLabel term="fastMovers" /></h3>
         {inventory.fast_movers.length > 0 ? (
           <StockRowsTable rows={inventory.fast_movers} />
         ) : (
           <p>None this period.</p>
         )}
 
-        <h3>Slow movers</h3>
-        <p className="hint">Products with 60+ days of cover — consider a discount, bundle, or supplier return.</p>
+        <h3><TermLabel term="slowMovers" /></h3>
         {inventory.slow_movers.length > 0 ? (
           <StockRowsTable rows={inventory.slow_movers} />
         ) : (
           <p>None this period.</p>
         )}
 
-        <h3>Dead stock</h3>
-        <p className="hint">
-          Products with stock on hand but zero sales this period at all — even less recent activity than Slow
-          Movers above, which at least still have a measurable (if slow) cover figure. Worth investigating before
-          reordering more, and a candidate for a discount, bundle, or supplier return.
-        </p>
+        <h3><TermLabel term="deadStock" /></h3>
         {retail.dead_stock.length === 0 ? (
-          <p>None — every product with stock on hand sold at least once this period.</p>
+          <p>None — everything you have in stock sold at least once in this period.</p>
         ) : (
           <DeadStockTable rows={retail.dead_stock} />
         )}
       </Section>
 
-      <Section id="forecast-outlook" title="Forecast & Future Outlook">
+      <Section id="forecast-outlook" title="What to expect" hint="forecast">
         <p className="hint">
-          A plain projection from recent sales history — not AI, not a formal statistical guarantee.
+          A simple estimate from your recent sales — not a promise.
         </p>
         {forecast.revenue.result.insufficient_data ? (
-          <p>Not enough sales history yet to forecast revenue.</p>
+          <p>Not enough sales history yet to estimate your next sales.</p>
         ) : (
           <>
             <Stat
-              label={`Expected revenue, next ${forecast.horizon_days} days`}
+              label={`Expected sales, next ${forecast.horizon_days} days`}
               value={`${formatMoney(forecast.revenue.result.total_point)} (typically ${formatMoney(forecast.revenue.result.total_low)}–${formatMoney(forecast.revenue.result.total_high)})`}
             />
             <Chart option={revenueForecastLineOption(forecast.revenue.result.daily)} />
@@ -266,7 +261,7 @@ function ReportView({
         )}
       </Section>
 
-      <Section id="purchasing-recommendations" title="Purchasing Recommendations">
+      <Section id="purchasing-recommendations" title="What to order">
         {forecast.products.length === 0 ? (
           <p>No products have enough sales history yet to forecast demand.</p>
         ) : (
@@ -274,10 +269,10 @@ function ReportView({
             <thead>
               <tr>
                 <th>Product</th>
-                <th>Current stock</th>
-                <th>Forecast demand</th>
-                <th>Cover left</th>
-                <th>Suggested reorder</th>
+                <th>In stock now</th>
+                <th>Expected to sell (range)</th>
+                <th>Days of stock left</th>
+                <th>{TERMS.suggestedReorder.label}<HelpHint term="suggestedReorder" /></th>
               </tr>
             </thead>
             <tbody>
@@ -301,29 +296,29 @@ function ReportView({
       </Section>
 
       {workshop && (
-        <Section id="workshop-performance" title="Workshop Performance">
+        <Section id="workshop-performance" title="Repairs & workshop" hint="workshopPerformance">
           <Stat label="Repairs completed" value={String(workshop.margin.repair_count)} />
-          <Stat label="Revenue" value={formatMoney(workshop.revenue.current)} trendPct={workshop.revenue.change_pct} trendLabel={trendLabel} />
+          <Stat term="revenue" value={formatMoney(workshop.revenue.current)} trendPct={workshop.revenue.change_pct} trendLabel={trendLabel} />
           <Stat
-            label="Average ticket"
+            label="Average repair price"
             value={workshop.margin.average_ticket !== null ? formatMoney(workshop.margin.average_ticket) : "—"}
           />
           <Stat
-            label="Gross margin (labour only)"
+            term="workshopMargin"
             value={workshopMarginDisplay(workshop.margin).value}
             note={workshopMarginDisplay(workshop.margin).note}
           />
         </Section>
       )}
 
-      <Section id="action-plan" title="Action Plan">
+      <Section id="action-plan" title="What to do next">
         {businessWide.length === 0 && stockAndProducts.length === 0 ? (
-          <p>Nothing to flag for this period.</p>
+          <p>Nothing to flag for this period — nothing needs your attention.</p>
         ) : (
           <>
             {businessWide.length > 0 && (
               <>
-                <h3>Business performance</h3>
+                <h3>Your business overall</h3>
                 <RecommendationList recommendations={businessWide} findingByKey={findingByKey} showCategory={false} />
               </>
             )}
@@ -358,7 +353,7 @@ function TopSellersTable({
             <tr>
               <th>Product</th>
               <th>Units sold</th>
-              <th>Revenue</th>
+              <th>Sales (€)</th>
             </tr>
           </thead>
           <tbody>
@@ -385,8 +380,8 @@ function StockRowsTable({ rows }: { rows: StockCoverRow[] }) {
       <thead>
         <tr>
           <th>Product</th>
-          <th>Stock on hand</th>
-          <th>Cover left</th>
+          <th>In stock</th>
+          <th>Days of stock left</th>
         </tr>
       </thead>
       <tbody>
@@ -411,8 +406,8 @@ function DeadStockTable({ rows }: { rows: DeadStockRow[] }) {
       <thead>
         <tr>
           <th>Product</th>
-          <th>Stock on hand</th>
-          <th>Value at cost</th>
+          <th>In stock</th>
+          <th>Stock value (at cost)</th>
         </tr>
       </thead>
       <tbody>
@@ -437,9 +432,9 @@ function CategoryBreakdownTable({ rows }: { rows: CategoryBreakdownRow[] }) {
       <thead>
         <tr>
           <th>Category</th>
-          <th>Revenue</th>
-          <th>Expenses</th>
-          <th>Stock value (at sell price)</th>
+          <th>Sales (€)</th>
+          <th>Bought in (cost)</th>
+          <th>Stock value (at selling price)</th>
         </tr>
       </thead>
       <tbody>

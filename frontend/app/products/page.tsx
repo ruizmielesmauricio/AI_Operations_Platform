@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { TERMS } from "@/lib/terms";
 import { apiGet, apiPatch } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { formatDays } from "@/lib/format";
@@ -33,9 +34,9 @@ const _RESTOCK_FORECAST_HORIZON_DAYS = 14;
 
 function settingLabel(row: ProductThreshold): string {
   if (row.product_threshold_days !== null) {
-    return row.product_threshold_source === "orla_recommended" ? "ORLA recommended" : "Product custom";
+    return row.product_threshold_source === "orla_recommended" ? "ORLA's suggestion (accepted)" : "Set by you for this product";
   }
-  return row.category_threshold_days !== null ? "Category default" : "System default";
+  return row.category_threshold_days !== null ? "Set for the whole category" : "Standard default";
 }
 
 // Deep-link target for the weekly Stock Review notification's single
@@ -49,7 +50,7 @@ function settingLabel(row: ProductThreshold): string {
 // NotificationCategoryFilter).
 const STOCK_FILTER_LABELS: Record<string, string> = {
   out_of_stock: "Out of stock",
-  stale: "Stale",
+  stale: "Slow or not selling",
   excess: "Overstocked",
 };
 const SLOW_MOVER_MIN_COVER_DAYS = 60;
@@ -172,10 +173,10 @@ export default function ProductThresholdsPage() {
         accepted_recommendation: acceptedRecommendation,
       });
       setEditingId(null);
-      setNotice(`Saved reorder point for "${productName}".`);
+      setNotice(`Saved reorder level for "${productName}".`);
       load(businessId);
     } catch {
-      setError(`Could not save the reorder point for "${productName}". Try again.`);
+      setError(`Could not save the reorder level for "${productName}". Try again.`);
     } finally {
       setSavingId(null);
     }
@@ -186,32 +187,19 @@ export default function ProductThresholdsPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
-      <h1>Product Reorder Rules</h1>
-      <section className="threshold-guide" aria-label="How reorder rules work">
-        <div>
-          <strong>In stock</strong>
-          <span>Units available now.</span>
-        </div>
-        <div>
-          <strong>Sold last 30 days</strong>
-          <span>How quickly the product is moving.</span>
-        </div>
-        <div>
-          <strong>Stock cover</strong>
-          <span>Estimated days the current stock will last.</span>
-        </div>
-        <div>
-          <strong>Reorder point</strong>
-          <span>When ORLA should warn you.</span>
-        </div>
-        <div>
-          <strong>ORLA recommends</strong>
-          <span>A suggested reorder point from your sales and supplier lead time.</span>
-        </div>
-        <div>
-          <strong>Setting</strong>
-          <span>Whether the value is custom, category-based, or recommended.</span>
-        </div>
+      <h1>{TERMS.reorderLevels.label}</h1>
+      <p className="hint">
+        For each product, how low its stock can get before ORLA warns you to order more. ORLA measures this in{" "}
+        <strong>days of stock left</strong> — so a level of 14 means &quot;warn me when I have about two weeks left
+        at the current pace of selling&quot;.
+      </p>
+      <section className="threshold-guide" aria-label="What the columns mean">
+        {(["stockOnHand", "soldLast30", "stockCover", "reorderPoint", "orlaRecommends", "setting"] as const).map((key) => (
+          <div key={key}>
+            <strong>{TERMS[key].label}</strong>
+            <span>{TERMS[key].hint}</span>
+          </div>
+        ))}
       </section>
 
       <label htmlFor="business-select">Shop</label>
@@ -232,24 +220,24 @@ export default function ProductThresholdsPage() {
         <ul className="threshold-insights">
           {insights.belowReorderPoint > 0 && (
             <li>
-              {insights.belowReorderPoint} product{insights.belowReorderPoint === 1 ? " is" : "s are"} below{" "}
-              {insights.belowReorderPoint === 1 ? "its" : "their"} reorder point.
+              {insights.belowReorderPoint} product{insights.belowReorderPoint === 1 ? " is" : "s are"} running low — at or below{" "}
+              {insights.belowReorderPoint === 1 ? "its" : "their"} reorder level.
             </li>
           )}
           {insights.orlaRecommendsRaising > 0 && (
-            <li>ORLA recommends raising reorder points for {insights.orlaRecommendsRaising} fast-moving products.</li>
+            <li>ORLA suggests a higher reorder level for {insights.orlaRecommendsRaising} fast-selling products, so you don&apos;t run out.</li>
           )}
           {insights.needsMoreHistory > 0 && (
-            <li>{insights.needsMoreHistory} products need more sales history before ORLA can recommend a rule.</li>
+            <li>{insights.needsMoreHistory} products haven&apos;t sold enough yet for ORLA to suggest a level.</li>
           )}
         </ul>
       )}
 
       {!loading && businessId && rows.length > 0 && (
         <section className="threshold-restock">
-          <h2>Recommended Restock</h2>
+          <h2>Time to reorder</h2>
           {restockRows.length === 0 ? (
-            <p>No products are below their reorder point.</p>
+            <p>Nothing needs reordering right now.</p>
           ) : (
             <ul>
               {restockRows.map((row) => {
@@ -261,8 +249,8 @@ export default function ProductThresholdsPage() {
                     {quantity !== undefined && quantity > 0
                       ? `Order ${quantity} more unit${quantity === 1 ? "" : "s"} of ${row.name}. `
                       : `${row.name} needs restocking. `}
-                    Current stock is {row.stock_on_hand} and the reorder point is {thresholdDays}d ({coverDays}d of
-                    cover left, selling {row.units_sold_in_period} in the last 30 days).
+                    You have {row.stock_on_hand} in stock — about {coverDays} days&apos; worth. You asked to be warned at{" "}
+                    {thresholdDays} days. You sold {row.units_sold_in_period} in the last 30 days.
                   </li>
                 );
               })}
@@ -314,12 +302,12 @@ export default function ProductThresholdsPage() {
             <thead>
               <tr>
                 <th>Product</th>
-                <th title="How many units are there now?">In stock</th>
-                <th title="How quickly is it selling?">Sold last 30 days</th>
-                <th title="Roughly how many days will current stock last?">Stock cover</th>
-                <th title="When should ORLA warn me? (days of cover)">Reorder point</th>
-                <th title="What does ORLA think the reorder point should be?">ORLA recommends</th>
-                <th title="Where did the current value come from?">Setting</th>
+                <th>{TERMS.stockOnHand.label}</th>
+                <th>{TERMS.soldLast30.label}</th>
+                <th>{TERMS.stockCover.label}</th>
+                <th>{TERMS.reorderPoint.label}</th>
+                <th>{TERMS.orlaRecommends.label}</th>
+                <th>{TERMS.setting.label}</th>
                 {canWrite && <th>Actions</th>}
               </tr>
             </thead>
@@ -336,7 +324,7 @@ export default function ProductThresholdsPage() {
                     </td>
                     <td>{row.stock_on_hand}</td>
                     <td>
-                      {row.insufficient_data ? "not enough sales history yet" : `${row.units_sold_in_period} units`}
+                      {row.insufficient_data ? "not enough sales yet" : `${row.units_sold_in_period} units`}
                     </td>
                     <td>{row.cover_days !== null ? `~${formatDays(row.cover_days)}d` : "—"}</td>
                     <td>
@@ -345,7 +333,7 @@ export default function ProductThresholdsPage() {
                           value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
                           style={{ width: "5em" }}
-                          aria-label={`Reorder point for ${row.name} (days)`}
+                          aria-label={`Reorder level for ${row.name} (days of stock left)`}
                         />
                       ) : (
                         `${formatDays(row.effective_threshold_days)}d`
@@ -354,14 +342,14 @@ export default function ProductThresholdsPage() {
                     <td
                       title={
                         row.recommendation.basis === "supplier_lead_time"
-                          ? `Based on a ${formatDays(row.recommendation.lead_time_days ?? "0")}-day supplier lead time + ${formatDays(row.recommendation.safety_buffer_days)}-day safety buffer.`
-                          : "No supplier lead time recorded yet for this product — showing the general default. Add one on the Suppliers page to get a product-specific recommendation."
+                          ? `Your supplier takes about ${formatDays(row.recommendation.lead_time_days ?? "0")} days to deliver, plus ${formatDays(row.recommendation.safety_buffer_days)} extra days as a safety cushion.`
+                          : "ORLA doesn't know how long this product takes to arrive from your supplier, so it's using a general default. Add the delivery time on the Suppliers page for a better suggestion."
                       }
                     >
                       {recommendedDays}d
                       <span className="hint">
                         {" "}
-                        ({row.recommendation.basis === "supplier_lead_time" ? "from supplier lead time" : "default"})
+                        ({row.recommendation.basis === "supplier_lead_time" ? "from supplier delivery time" : "general default"})
                       </span>
                     </td>
                     <td>{settingLabel(row)}</td>
@@ -375,7 +363,7 @@ export default function ProductThresholdsPage() {
                               disabled={savingId === row.product_id}
                               onClick={() => handleSave(row.product_id, row.name, editValue, false)}
                             >
-                              Save reorder point
+                              Save
                             </button>{" "}
                             <button type="button" onClick={() => setEditingId(null)}>
                               Cancel
@@ -407,7 +395,7 @@ export default function ProductThresholdsPage() {
                                   )
                                 }
                               >
-                                {`Use ORLA's ${recommendedDays}d recommendation`}
+                                {`Use ORLA's suggestion (${recommendedDays} days)`}
                               </button>
                             )}
                           </>

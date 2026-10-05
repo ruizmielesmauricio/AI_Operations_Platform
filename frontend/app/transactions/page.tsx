@@ -78,7 +78,8 @@ export default function TransactionsPage() {
   return (
     <main>
       <AppNav businessId={businessId} />
-      <h1>Transactions</h1>
+      <h1>Activity</h1>
+      <p className="hint">Every sale, delivery from a supplier and repair job loaded into ORLA, newest first.</p>
 
       <label htmlFor="business-select">Shop</label>
       <br />
@@ -95,7 +96,7 @@ export default function TransactionsPage() {
           Sales
         </button>{" "}
         <button type="button" onClick={() => switchType("purchases")} disabled={txType === "purchases"}>
-          Purchases
+          Deliveries from suppliers
         </button>{" "}
         <button type="button" onClick={() => switchType("repairs")} disabled={txType === "repairs"}>
           Repairs
@@ -138,10 +139,10 @@ export default function TransactionsPage() {
             <tr>
               <th>Date</th>
               <th>Product</th>
-              <th>Qty</th>
+              <th>Quantity</th>
               <th>Unit price</th>
               <th>Total</th>
-              <th>Order ref</th>
+              <th>Receipt / order no.</th>
             </tr>
           </thead>
           <tbody>
@@ -168,10 +169,10 @@ export default function TransactionsPage() {
             <tr>
               <th>Date</th>
               <th>Product</th>
-              <th>Qty</th>
+              <th>Quantity</th>
               <th>Unit cost</th>
               <th>Supplier</th>
-              <th>PO/reference</th>
+              <th>Order / invoice no.</th>
             </tr>
           </thead>
           <tbody>
@@ -200,7 +201,7 @@ export default function TransactionsPage() {
               <th>Description</th>
               <th>Price charged</th>
               <th>Labour cost</th>
-              <th>Job/reference</th>
+              <th>Job no.</th>
             </tr>
           </thead>
           <tbody>

@@ -7,6 +7,7 @@ import { API_URL, apiGet } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { useCurrentMember } from "@/lib/hooks/useCurrentMember";
 import { onNotificationsChanged } from "@/lib/notificationsBus";
+import { TERMS } from "@/lib/terms";
 import { supabase } from "@/lib/supabase/client";
 import type { Business, SubscriptionStatus, SystemStatus } from "@/types";
 
@@ -196,12 +197,12 @@ export function AppNav({ businessId }: { businessId?: string }) {
           Profile with no active businesses), nothing real to link to. */}
       {businessId ? (
         canUpload ? (
-          <a href={`/uploads${suffix}`}>Upload data</a>
+          <a href={`/uploads${suffix}`}>{TERMS.uploadData.label}</a>
         ) : (
-          <span className="app-nav__disabled" title="This shop's subscription isn't active yet">Upload data (subscribe first)</span>
+          <span className="app-nav__disabled" title="Your plan isn't active yet, so uploads are switched off">Upload data (plan not active)</span>
         )
       ) : (
-        <a href="/uploads">Upload data</a>
+        <a href="/uploads">{TERMS.uploadData.label}</a>
       )}
       <a href={`/reports${suffix}`}>Reports</a>
       <a href={`/chat${suffix}`}>Ask ORLA</a>
@@ -214,9 +215,9 @@ export function AppNav({ businessId }: { businessId?: string }) {
           belongs in this one top nav, never repeated per business row. */}
       {businessId && (
         <>
-          <a href={`/products${suffix}`}>Thresholds</a>
+          <a href={`/products${suffix}`}>{TERMS.reorderLevels.label}</a>
           <a href={`/suppliers${suffix}`}>Suppliers</a>
-          <a href={`/transactions${suffix}`}>Transactions</a>
+          <a href={`/transactions${suffix}`}>{TERMS.transactions.label}</a>
         </>
       )}
       {businessId && (
@@ -238,7 +239,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
           clearer label for what it's grown into: also where each
           business's full descriptive profile lives now (per-business
           "View profile" from the list, PATCH /businesses/{id}). */}
-      <a href="/onboarding">Company Profile</a>
+      <a href="/onboarding">{TERMS.companyProfile.label}</a>
       {/* Account-level, not business-scoped — same reasoning as Company
           Profile above having no businessId suffix. Login email lives on
           the Supabase Auth identity itself, not any one business. */}
@@ -268,7 +269,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
             </>
           )}
           <div>
-            <span className="app-business-header__eyebrow">Current business</span>
+            <span className="app-business-header__eyebrow">Current shop</span>
             <strong>{logoInfo.companyName}</strong>
             <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
           </div>

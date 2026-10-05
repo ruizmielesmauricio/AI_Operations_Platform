@@ -29,7 +29,7 @@ Principle: **use free tiers until a limit actually forces a paid plan** (see "Fr
 | A1 | Undoing an import reverts the values it overwrote (prices, categories) | Done — v1.90 |
 | A2 | Invoice screen warns about cost-price changes before confirming | Done — v1.90 |
 | A3 | Complimentary pilot accounts (no Stripe), incl. staff and branches | Done — v1.91 |
-| A4 | Plain-English audit of every screen/menu; central term list; "What's this?" hints | In progress — see `22_Plain_Language_Audit.md`; testers will add their own confusing terms |
+| A4 | Plain-English audit of every screen/menu; central term list; "What's this?" hints | First pass done (v1.92) — see `22_Plain_Language_Audit.md`; a second pass follows the testers' own list of confusing terms |
 | A5 | Ask ORLA question bank (~200 questions) + automated scorer; tune until consistently good; log unanswered questions during the pilot | Not started (needs the $10 OpenRouter credit to run at volume) |
 | A6 | Invoice review: stacked layout for small screens; manual "add a line" for table-less invoices | Not started |
 | A7 | First-run guidance and empty states (what a brand-new shop sees) | Not started — to be scoped in the audit |

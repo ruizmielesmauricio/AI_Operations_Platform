@@ -34,20 +34,20 @@ def build_executive_narrative(
     sentences: list[str] = []
 
     if revenue.change_pct is None:
-        sentences.append(f"Revenue this period was {revenue.current}, with no prior period to compare against yet.")
+        sentences.append(f"Sales this period were {revenue.current}. There's no earlier period to compare with yet.")
     elif revenue.change_pct >= _MATERIAL_CHANGE_THRESHOLD_PCT:
-        sentences.append(f"Revenue increased by {revenue.change_pct}% compared with the previous period.")
+        sentences.append(f"Sales were up {revenue.change_pct}% compared with the previous period.")
     elif revenue.change_pct <= -_MATERIAL_CHANGE_THRESHOLD_PCT:
-        sentences.append(f"Revenue decreased by {abs(revenue.change_pct)}% compared with the previous period.")
+        sentences.append(f"Sales were down {abs(revenue.change_pct)}% compared with the previous period.")
     else:
-        sentences.append(f"Revenue was broadly stable compared with the previous period ({revenue.change_pct}%).")
+        sentences.append(f"Sales were about the same as the previous period ({revenue.change_pct}%).")
 
     if dead_stock_count > 0:
-        sentences.append(f"{dead_stock_count} product(s) had stock on hand but no sales this period.")
+        sentences.append(f"{dead_stock_count} product(s) are in stock but didn't sell at all this period.")
     if low_stock_count > 0:
-        sentences.append(f"{low_stock_count} product(s) are currently low on stock.")
+        sentences.append(f"{low_stock_count} product(s) are running low.")
     if low_stock_count == 0 and dead_stock_count == 0:
-        sentences.append("No low-stock or dead-stock issues were flagged this period.")
+        sentences.append("No products are running low, and nothing is sitting unsold.")
 
     if top_recommendation_title:
         sentences.append(f"The highest-priority recommendation this period: {top_recommendation_title}.")

@@ -74,28 +74,27 @@ class RecommendationTemplate:
 RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
     "revenue_decline": RecommendationTemplate(
         title="Investigate the revenue drop",
-        description="Revenue fell compared to the previous period of equal length. Check for stock-outs, "
-        "a slow week, or a change in footfall/marketing before assuming it's a trend.",
+        description="Sales fell compared with the period just before (same length). Check for stock that ran out, "
+        "a quiet week, or fewer customers coming in before assuming it's a trend.",
     ),
     "low_gross_margin": RecommendationTemplate(
         title="Review pricing or supplier costs",
-        description="Overall gross margin is thin for the period. Consider whether prices need adjusting "
-        "or supplier costs have crept up.",
+        description="Your profit margin (what's left after paying for the stock you sold) is thin for the period. "
+        "Consider whether prices need adjusting or supplier prices have crept up.",
     ),
     "incomplete_cost_data": RecommendationTemplate(
         title="Add cost prices to more products",
-        description="Margin figures are based on a minority of this period's revenue because most sale "
-        "line items have no recorded cost price. Add cost prices to get an accurate margin picture.",
+        description="Your profit figures only cover part of what you sold, because ORLA doesn't know what most "
+        "items cost you. Add cost prices to your products to see your real profit.",
     ),
     "product_selling_at_loss": RecommendationTemplate(
         title="Review pricing for this product",
-        description="This product sold at a net loss over the period — its sale price is below its "
-        "recorded cost.",
+        description="This product sold at a loss over the period — it sold for less than it cost you.",
     ),
     "high_revenue_thin_margin": RecommendationTemplate(
         title="Review pricing on this top seller",
-        description="This product sells well but its margin is well below your overall average — strong "
-        "revenue alone doesn't mean it's healthy for profitability. Consider a price or supplier-cost review.",
+        description="This product sells well but earns much less profit per sale than your average — strong "
+        "sales alone don't mean it's paying its way. Consider reviewing its price or what the supplier charges you.",
     ),
     "low_stock": RecommendationTemplate(
         title="Reorder soon",
@@ -103,13 +102,13 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
     ),
     "dead_stock": RecommendationTemplate(
         title="Consider a markdown or return to supplier",
-        description="This product has stock on hand but hasn't sold at all in the period — cash is tied "
-        "up in stock that isn't moving.",
+        description="This product is sitting on your shelves and hasn't sold at all in the period — your money "
+        "is tied up in stock that isn't moving. Consider a discount or returning it to the supplier.",
     ),
     "high_return_rate": RecommendationTemplate(
         title="Investigate why customers are returning items",
-        description="A larger-than-usual share of this period's gross revenue was refunded. Check for a "
-        "product quality issue, a sizing/description mismatch, or a specific batch/supplier.",
+        description="A larger-than-usual share of this period's sales was refunded. Check for a product "
+        "quality problem, a size or description mismatch, or one particular supplier or batch.",
     ),
     # Not from evaluate_all's own C9/C10-fed pipeline — built separately by
     # app/application/weather_insights.py (deterministic weather-pattern
@@ -151,7 +150,7 @@ def evaluate_revenue_decline(revenue: RevenueTrend) -> list[Finding]:
         Finding(
             type="revenue_decline",
             severity="warning",
-            message=f"Revenue was {revenue.current} this period, down {abs(change_pct)}% "
+            message=f"Sales were {revenue.current} this period, down {abs(change_pct)}% "
             f"from {revenue.previous} the period before.",
             evidence={
                 "current": revenue.current,
@@ -171,7 +170,7 @@ def evaluate_low_gross_margin(gross_margin: GrossMarginResult) -> list[Finding]:
         Finding(
             type="low_gross_margin",
             severity="warning",
-            message=f"Gross margin was {margin_pct}% this period, below the {_LOW_MARGIN_THRESHOLD_PCT}% watch line.",
+            message=f"Profit margin was {margin_pct}% this period, below the {_LOW_MARGIN_THRESHOLD_PCT}% level ORLA watches for.",
             evidence={
                 "gross_margin_pct": margin_pct,
                 "gross_profit": gross_margin.gross_profit,
@@ -190,8 +189,8 @@ def evaluate_incomplete_cost_data(gross_margin: GrossMarginResult) -> list[Findi
         Finding(
             type="incomplete_cost_data",
             severity="info",
-            message=f"Only {coverage_pct}% of this period's revenue has a recorded cost price — margin "
-            f"figures are based on a minority of sales.",
+            message=f"ORLA only knows the cost for {coverage_pct}% of this period's sales, so your profit "
+            f"figures cover just part of what you sold.",
             evidence={
                 "cost_data_coverage_pct": coverage_pct,
                 "revenue_with_known_cost": gross_margin.revenue_with_known_cost,
@@ -210,8 +209,8 @@ def evaluate_high_return_rate(returns: ReturnsSummary) -> list[Finding]:
         Finding(
             type="high_return_rate",
             severity="warning",
-            message=f"{rate_pct}% of gross revenue was refunded this period "
-            f"({returns.return_count} return(s) totaling {returns.returns_amount}).",
+            message=f"{rate_pct}% of your sales was refunded this period "
+            f"({returns.return_count} return(s) worth {returns.returns_amount}).",
             evidence={
                 "return_rate_pct": rate_pct,
                 "returns_amount": returns.returns_amount,
@@ -243,7 +242,7 @@ def evaluate_products_at_loss(margin_products: list[ProductMarginRow]) -> list[F
             Finding(
                 type="product_selling_at_loss",
                 severity="warning",
-                message=f"{row.name} sold at a net loss of {abs(row.gross_profit)} this period.",
+                message=f"{row.name} sold at a loss of {abs(row.gross_profit)} this period.",
                 evidence={
                     "product_id": str(row.product_id),
                     "name": row.name,
@@ -295,9 +294,9 @@ def evaluate_thin_margin_high_revenue(
             Finding(
                 type="high_revenue_thin_margin",
                 severity="warning",
-                message=f"{row.name} is one of your top sellers by revenue ({row.revenue}) but its "
-                f"{row.gross_margin_pct}% margin is well below your {business_gross_margin_pct}% overall "
-                f"average — it may be dragging down profitability despite strong sales.",
+                message=f"{row.name} is one of your best sellers by sales ({row.revenue}) but its "
+                f"{row.gross_margin_pct}% profit margin is well below your {business_gross_margin_pct}% overall "
+                f"average — it may be pulling your profit down despite strong sales.",
                 evidence={
                     "product_id": str(row.product_id),
                     "name": row.name,
@@ -381,7 +380,7 @@ def evaluate_dead_stock(dead_stock: list[DeadStockEntry]) -> list[Finding]:
             Finding(
                 type="dead_stock",
                 severity="info",
-                message=f"{entry.name} has {entry.stock_on_hand} units on hand with no sales this period.",
+                message=f"{entry.name} has {entry.stock_on_hand} units in stock and none sold this period.",
                 evidence={
                     "product_id": str(entry.product_id),
                     "name": entry.name,

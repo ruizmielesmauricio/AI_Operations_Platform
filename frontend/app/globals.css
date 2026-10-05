@@ -1037,3 +1037,50 @@ button.notification-card__control:hover:not(:disabled) {
   section { break-inside: avoid-page; }
   table, tr { break-inside: avoid; }
 }
+
+/* "?" explainers (components/HelpHint.tsx) */
+.help-hint {
+  position: relative;
+  display: inline-block;
+  margin-left: 0.3rem;
+  font-weight: normal;
+}
+
+.help-hint__button,
+.help-hint__button:hover:not(:disabled) {
+  box-sizing: border-box;
+  width: 1.25rem;
+  height: 1.25rem;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 50%;
+  background: var(--app-panel-soft);
+  color: var(--app-muted);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: help;
+}
+
+.help-hint__button:hover:not(:disabled),
+.help-hint__button[aria-expanded="true"] {
+  background: var(--app-green);
+  color: #fff;
+}
+
+.help-hint__text {
+  position: absolute;
+  z-index: 20;
+  top: 1.5rem;
+  left: 0;
+  width: min(18rem, 70vw);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+  color: var(--app-text);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}

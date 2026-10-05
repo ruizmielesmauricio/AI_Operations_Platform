@@ -32,11 +32,36 @@ const STALE_AFTER_DAYS = 7;
 // actual gate on which extensions are allowed (PR-2.1, app/imports/service.py).
 const ACCEPTED_EXTENSIONS = ".csv,.xls,.xlsx";
 
+// Plain-English names for the internal status codes (never show the raw
+// code to an owner).
+const UPLOAD_STATUS_PLAIN: Record<string, string> = {
+  pending: "Waiting for the file",
+  uploaded: "Uploaded — match the columns next",
+  mapped: "Columns matched — ready to add",
+  importing: "Adding to ORLA…",
+  imported: "Added to ORLA",
+  failed: "Didn't work",
+};
+const INVOICE_STATUS_PLAIN: Record<string, string> = {
+  processing: "Reading the invoice…",
+  needs_review: "Needs your check",
+  confirmed: "Added to ORLA",
+  failed: "Couldn't be read",
+  reversed: "Undone",
+};
+const INVOICE_FAILURE_PLAIN: Record<string, string> = {
+  encrypted: "password-protected",
+  corrupt: "damaged file",
+  oversized: "too many pages",
+  unsupported_file_type: "not a real PDF",
+  no_extractable_text: "a scan or photo — ORLA can only read typed text",
+};
+
 const ENTITY_TYPES = [
-  { value: "sales", label: "Sales transactions" },
-  { value: "inventory", label: "Inventory / stock count" },
-  { value: "purchases", label: "Purchases / restocking" },
-  { value: "repairs", label: "Repairs" },
+  { value: "sales", label: "Sales (what customers bought)" },
+  { value: "inventory", label: "Stock count (what you have on the shelves)" },
+  { value: "purchases", label: "Deliveries from suppliers (stock you bought)" },
+  { value: "repairs", label: "Repairs and servicing jobs" },
 ];
 
 // Keyed by entity_type — order matters within each: it's the order fields
@@ -83,7 +108,7 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
   sales: {
     sale_date: "Which column is the sale date?",
     product_name: "Which column is the product name?",
-    sku: "Which column is the SKU or product code? (optional)",
+    sku: "Which column is the product code (SKU)? (optional)",
     quantity: "Which column is the quantity sold?",
     unit_price: "Which column is the price per unit? (optional)",
     total_amount: "Which column is the final total for this line? (optional if unit price is set)",
@@ -94,8 +119,8 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
     location: "Which column is the store, branch, or location? (optional)",
   },
   inventory: {
-    product_name: "Which column is the product name? (optional if SKU is set)",
-    sku: "Which column is the SKU or product code? (optional if product name is set)",
+    product_name: "Which column is the product name? (optional if product code is set)",
+    sku: "Which column is the product code (SKU)? (optional if product name is set)",
     quantity_on_hand: "Which column is the current quantity in stock?",
     unit_cost: "Which column is the unit cost? (optional — sets or updates this product's recorded cost)",
     category: "Which column is the product category or department? (optional)",
@@ -104,8 +129,8 @@ const FIELD_LABELS: Record<string, Record<string, string>> = {
   },
   purchases: {
     purchase_date: "Which column is the date the stock was received?",
-    product_name: "Which column is the product name? (optional if SKU is set)",
-    sku: "Which column is the SKU or product code? (optional if product name is set)",
+    product_name: "Which column is the product name? (optional if product code is set)",
+    sku: "Which column is the product code (SKU)? (optional if product name is set)",
     quantity_received: "Which column is the quantity received?",
     unit_cost: "Which column is the unit cost? (optional — updates this product's recorded cost)",
     purchase_reference: "Which column is the PO or invoice number? (optional)",
@@ -347,7 +372,7 @@ export default function UploadsPage() {
         body
       );
       if (result.status === "reused") {
-        setNotice("Recognized this file from a previous upload — mapping applied automatically.");
+        setNotice("Recognized this file from a previous upload — we matched the columns for you automatically.");
         setMappingUploadId(null);
         setDetection(null);
         setPreviewRows(null);
@@ -407,7 +432,7 @@ export default function UploadsPage() {
         return;
       }
       setLocationWarning(null);
-      setNotice("Mapping saved.");
+      setNotice("Column matching saved. Click \"Add to ORLA\" to load the data.");
       setMappingUploadId(null);
       setDetection(null);
       setPreviewRows(null);
@@ -605,8 +630,8 @@ export default function UploadsPage() {
         <AppNav businessId={businessId} />
         <h1>Upload data</h1>
         <p>
-          None of your shops has an active subscription yet, so there&apos;s nothing to upload into —{" "}
-          <a href="/onboarding">subscribe from Onboarding</a> to start uploading.
+          None of your shops has an active plan yet, so there&apos;s nowhere to upload to —{" "}
+          <a href="/onboarding">set up your plan on the Company profile page</a> to start uploading.
         </p>
       </main>
     );
@@ -617,9 +642,9 @@ export default function UploadsPage() {
       <AppNav businessId={businessId} />
       <ConfirmDialog
         open={confirmingUndoRecordId !== null}
-        title="Undo this import?"
+        title="Undo this upload?"
         description="This reverses the records and stock changes created by this upload, and puts back any product prices or categories it had changed. It cannot be restored automatically; re-import the file if you need it again."
-        confirmLabel="Undo import"
+        confirmLabel="Undo upload"
         tone="danger"
         busy={confirmingUndoRecordId !== null && undoingRecordId === confirmingUndoRecordId}
         onCancel={() => setConfirmingUndoRecordId(null)}
@@ -631,8 +656,7 @@ export default function UploadsPage() {
         <div>
           <h2>First time here?</h2>
           <p>
-            For more accurate results, start with a full year of demand data, then add current stock and recent
-            replenishment history.
+            The more history ORLA has, the better its advice. Start with a full year of sales, then add your current stock and recent deliveries from suppliers.
           </p>
         </div>
         <dl>
@@ -641,15 +665,15 @@ export default function UploadsPage() {
             <dd>Last 12 months</dd>
           </div>
           <div>
-            <dt>Service / workshop activity</dt>
-            <dd>Last 12 months, if the business has service, repair, or workshop revenue</dd>
+            <dt>Repairs and servicing</dt>
+            <dd>Last 12 months, if you do repairs or servicing</dd>
           </div>
           <div>
-            <dt>Current stock / inventory</dt>
-            <dd>Latest stock-on-hand file</dd>
+            <dt>Current stock</dt>
+            <dd>A recent count of what you have on the shelves</dd>
           </div>
           <div>
-            <dt>Purchases / orders / restocks</dt>
+            <dt>Deliveries from suppliers</dt>
             <dd>Ideally the last 3-12 months</dd>
           </div>
         </dl>
@@ -657,7 +681,7 @@ export default function UploadsPage() {
 
       {subscriptionRequired && (
         <p className="status-error">
-          This shop&apos;s subscription isn&apos;t active, so uploads and imports are paused.{" "}
+          This shop&apos;s plan isn&apos;t active, so uploads are paused.{" "}
           <button type="button" disabled={subscribing} onClick={handleSubscribeClick}>
             {subscribing ? "Starting…" : "Subscribe"}
           </button>
@@ -679,7 +703,7 @@ export default function UploadsPage() {
 
       {subscribedBusinesses.length > 1 && (
         <div>
-          <label htmlFor="business">Business</label>
+          <label htmlFor="business">Shop</label>
           <br />
           {/* Only subscribed shops are offered here — a shop pending
               payment (unsubscribed, or a branch that never finished
@@ -710,7 +734,7 @@ export default function UploadsPage() {
             </select>
           </div>
           <div>
-            <label htmlFor="file">Export file (CSV, XLS, or XLSX — any format your system produces)</label>
+            <label htmlFor="file">Your file (CSV or Excel — whatever your till or stock system exports)</label>
             <br />
             <input
               id="file"
@@ -732,7 +756,7 @@ export default function UploadsPage() {
         <div>
           <h2>Which row is the header?</h2>
           <p>
-            We couldn't tell automatically — click the row that has the column names in it
+            ORLA couldn&apos;t tell which row holds the column titles. Click the row that has them
             (e.g. "Date", "Item", "Price").
           </p>
           <table>
@@ -757,7 +781,7 @@ export default function UploadsPage() {
 
       {mappingUploadId && detection && (
         <form onSubmit={handleConfirmMapping}>
-          <h2>Confirm what each column means</h2>
+          <h2>Check what each column means</h2>
           <p>We matched most columns automatically — check them, and fix anything that's wrong.</p>
           {(mappingEntityType === "sales" || mappingEntityType === "repairs") && (
             <p className="status-warn">
@@ -827,11 +851,10 @@ export default function UploadsPage() {
       )}
 
       <section aria-label="Invoice PDF upload">
-        <h2>Invoice PDF</h2>
+        <h2>Supplier invoice (PDF)</h2>
         <p>
-          Don&apos;t have a CSV/XLSX purchase export? Upload a supplier invoice PDF instead — we&apos;ll read it,
-          you review and correct anything before it&apos;s imported. Nothing is added to your stock or purchase
-          records until you confirm.
+          No spreadsheet of what you bought? Upload your supplier&apos;s invoice as a PDF instead. ORLA reads it and
+          you check and correct it. Nothing is added to your stock until you confirm.
         </p>
         <form onSubmit={handleInvoiceUpload}>
           <label htmlFor="invoice-file">Supplier invoice (PDF)</label>
@@ -860,8 +883,8 @@ export default function UploadsPage() {
                       draft.status === "confirmed" ? "status-ok" : draft.status === "failed" ? "status-error" : ""
                     }
                   >
-                    {draft.status === "needs_review" ? "needs review" : draft.status}
-                    {draft.status === "failed" && draft.failure_reason ? ` (${draft.failure_reason})` : ""}
+                    {INVOICE_STATUS_PLAIN[draft.status] ?? draft.status}
+                    {draft.status === "failed" && draft.failure_reason ? ` — ${INVOICE_FAILURE_PLAIN[draft.failure_reason] ?? "couldn't be read"}` : ""}
                   </span>{" "}
                   ({new Date(draft.created_at).toLocaleString()})
                 </div>
@@ -882,7 +905,7 @@ export default function UploadsPage() {
         )}
       </section>
 
-      <h2>Past uploads</h2>
+      <h2>Your uploads</h2>
       {uploads.length === 0 ? (
         <p>No uploads yet.</p>
       ) : (
@@ -896,22 +919,22 @@ export default function UploadsPage() {
               <li className="upload-record" key={u.id}>
                 <div className="upload-record__details">
                   {u.original_filename} —{" "}
-                  <span className={u.status === "imported" ? "status-ok" : ""}>{u.status}</span>{" "}
+                  <span className={u.status === "imported" ? "status-ok" : ""}>{UPLOAD_STATUS_PLAIN[u.status] ?? u.status}</span>{" "}
                   ({new Date(u.created_at).toLocaleString()})
                 </div>
                 <div className="upload-record__actions">
                 {u.status === "uploaded" && !mappingUploadId && (
                   <button type="button" onClick={() => startMapping(u.id, u.entity_type)}>
-                    Map columns
+                    Match columns
                   </button>
                 )}
                 {u.status === "mapped" && !mappingUploadId && (
                   <>
                     <button type="button" disabled={isRunning} onClick={() => handleRunImport(u.id)}>
-                      {isRunning ? "Running…" : "Run import"}
+                      {isRunning ? "Adding…" : "Add to ORLA"}
                     </button>
                     <button type="button" disabled={isRunning} onClick={() => startMapping(u.id, u.entity_type)}>
-                      Remap
+                      Change matching
                     </button>
                   </>
                 )}
@@ -919,7 +942,7 @@ export default function UploadsPage() {
                 {record && record.status === "completed" && (
                   <div className="upload-record__result">
                     <span className="status-ok">
-                      {record.rows_imported} of {record.rows_total} rows imported
+                      {record.rows_imported} of {record.rows_total} rows added
                     </span>
                     {record.rows_rejected > 0 && (
                       <span className="status-warn"> — {record.rows_rejected} skipped</span>
@@ -927,7 +950,7 @@ export default function UploadsPage() {
                     {renderRejectionSummary(record.rejection_summary)}
                     <div className="upload-record__actions">
                       <button type="button" disabled={isUndoing} onClick={() => setConfirmingUndoRecordId(record.id)}>
-                        {isUndoing ? "Undoing…" : "Undo import"}
+                        {isUndoing ? "Undoing…" : "Undo upload"}
                       </button>
                     </div>
                   </div>
