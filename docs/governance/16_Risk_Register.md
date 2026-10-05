@@ -95,7 +95,7 @@ Risks stay recorded in their **source document** as well — this register does 
 | R-033 | Delaying naming too long means writing marketing material with a placeholder, which wastes effort. | Not yet specified. | `13_Branding_Strategy.md` | Open |
 | R-034 | Registering domains before trademark clearance risks spending on a name that must later be abandoned. | Naming process sequences formal clearance before domain/handle registration. | `13_Branding_Strategy.md` | Mitigating |
 | R-035 | All four shortlisted candidate names (Tara, Nora, Orla, Vera) are real given names, raising the chance of existing registrations in some class. | Formal clearance (CRO, IPOI, EUIPO) is treated as non-optional before any spend. | `13_Branding_Strategy.md` | Mitigating |
-| R-036 | `prescription_details` (ADR-023) stores prescription data, a GDPR Article 9 special category; minimal fields alone do not make it compliant, since it's still linkable to a customer via `sale_items -> sales -> customers`. | Table deliberately excludes patient identity/clinical fields. Full legal basis, DPIA, and retention/deletion policy remain open — see Q-053 — blocked on legal advice, not an engineering decision. | `06_Database_Design.md` | Open |
+| R-036 | `prescription_details` (ADR-023) stores prescription data, a GDPR Article 9 special category; minimal fields alone do not make it compliant, since it's still linkable to a customer via `sale_items -> sales -> customers`. | Table deliberately excludes patient identity/clinical fields. Full legal basis, DPIA, and retention/deletion policy remain open — see Q-053 — blocked on legal advice, not an engineering decision. **05/10/2026 (PD-011): mitigated by decision — no prescription features will be built near-term, the table stays unused, and PSI permission is required first.** | `06_Database_Design.md` | Open |
 
 ---
 
@@ -114,3 +114,4 @@ Risks stay recorded in their **source document** as well — this register does 
 |---------|------|---------|
 | 0.1 | 30/07/2026 | Initial register. Consolidated all 35 risks currently listed across `docs/governance/` (01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13) into one tracked table with source attribution and status. |
 | 0.2 | 04/08/2026 | Retired R-013 and R-014 (Production Events over-engineering/documentation risks) now that ADR-016 is accepted and the relevant docs are updated. Added R-036: GDPR special-category compliance for the new `prescription_details` table (ADR-023) — open, blocked on legal advice. |
+| 0.3 | 05/10/2026 | R-036 updated: prescription features on hold pending PSI permission (PD-011). |

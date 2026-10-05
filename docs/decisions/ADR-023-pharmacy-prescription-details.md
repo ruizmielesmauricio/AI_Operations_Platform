@@ -1,8 +1,21 @@
 # ADR-023: Add a pharmacy prescription_details business-template extension
 
-**Status:** Accepted
+**Status:** Accepted — **on hold (05/10/2026, PD-011)**
 **Date:** 2026-08-04
 **Related:** `docs/governance/06_Database_Design.md`, `docs/governance/12_Decision_Register.md` (PD-010), `docs/governance/17_Open_Questions.md` (Q-053)
+
+## Update 05/10/2026 — on hold, PSI permission required (PD-011)
+
+ORLA will **not** build prescription or dispensing features for pharmacies in the near future. Before anything that captures, stores, or processes prescription data is built, ORLA needs proper permission/engagement with the **Pharmaceutical Society of Ireland (PSI)**, in addition to the GDPR legal-basis/DPIA/retention work already blocking this under Q-053.
+
+Practical consequences:
+
+- `prescription_details` stays exactly as it is — a schema-only model that **no repository, service, route, import, or UI reads or writes** (confirmed in code on this date: it is referenced only by `app/models/`). It must stay that way until PD-011 is lifted.
+- No import entity type, field alias, dashboard section, report content, or Ask ORLA intent may be added for prescription data, controlled-substance schedules, or prescribers.
+- Pharmacies remain a supported *retail* vertical (sales, stock, purchasing, forecasting, reports). This hold is only the prescription-level layer.
+- Whether to keep or drop the unused table is deliberately left open; dropping it is an additive-safe migration if the team prefers not to carry an unused special-category-shaped schema.
+
+This ADR's original decision text below is preserved as the design to revisit once permission exists.
 
 ## Decision
 

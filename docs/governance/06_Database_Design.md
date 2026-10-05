@@ -210,7 +210,7 @@ Being able to support a new vertical primarily through configuration rather than
 # Questions Still Open
 
 * Should ingredient/parts costing feed directly into the Profitability domain (`02_Operational_Domains.md`) the same way for both business types, or does recipe costing need its own treatment (e.g., waste, shelf-life, batch yield variance)? Still open — deferred to Stage C9 calculation work.
-* GDPR special-category compliance for `prescription_details` (legal basis, DPIA, retention/deletion policy) — see `17_Open_Questions.md` Q-053, blocked on legal advice.
+* GDPR special-category compliance for `prescription_details` (legal basis, DPIA, retention/deletion policy) — see `17_Open_Questions.md` Q-053, blocked on legal advice. **On hold 05/10/2026 (PD-011): no prescription features until PSI permission exists; `prescription_details` stays unused.**
 * FEFO (first-expiry-first-out) consumption logic for `inventory_lots` is unbuilt — when Stage C9 designs it, does `inventory_movements.inventory_lot_id` need to become mandatory for lot-tracked products, or stay optional indefinitely?
 
 ---
