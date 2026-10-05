@@ -227,6 +227,36 @@ def test_report_ready_and_orla_insights_notifications(db_session, business_id):
     assert "3 opportunities" in insight_row.title
 
 
+def test_report_ready_notification_states_how_long_it_stays_available_for_both_report_types(db_session, business_id):
+    # Weekly and monthly reports both expire seven days after generation
+    # (ADR-019) — the notification says so up front, the report page shows
+    # the live countdown.
+    for report_type, start, end in (
+        ("weekly", date(2026, 8, 3), date(2026, 8, 9)),
+        ("monthly", date(2026, 7, 1), date(2026, 7, 31)),
+    ):
+        notify_report_ready(
+            db_session, business_id=business_id, report_id=uuid.uuid4(), report_type=report_type,
+            period_start=start, period_end=end, expires_at=datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc),
+        )
+    db_session.commit()
+
+    rows = NotificationRepository(db_session).list_items_for_business(business_id, role="owner", category="reports")
+    assert len(rows) == 2
+    assert all("It stays available until 2026-08-17." in r.body for r in rows)
+
+
+def test_report_ready_notification_without_an_expiry_keeps_the_original_wording(db_session, business_id):
+    notify_report_ready(
+        db_session, business_id=business_id, report_id=uuid.uuid4(), report_type="weekly",
+        period_start=date(2026, 8, 3), period_end=date(2026, 8, 9),
+    )
+    db_session.commit()
+
+    row = NotificationRepository(db_session).list_items_for_business(business_id, role="owner", category="reports")[0]
+    assert row.body.endswith("is ready to view.")
+
+
 def test_orla_insights_skips_when_no_recommendations(db_session, business_id):
     notify_orla_insights(db_session, business_id=business_id, report_id=uuid.uuid4(), recommendation_count=0)
     db_session.commit()

@@ -3,7 +3,7 @@ no DB, no FastAPI — so the date-boundary logic is unit-testable on its own
 (ED-007) independent of any query that later uses it.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -14,20 +14,45 @@ DEFAULT_WINDOW_DAYS = 30
 @dataclass(frozen=True)
 class MetricPeriod:
     """A half-open UTC range: [start, end). `end` exclusive so a period's
-    `previous()` tiles exactly against it with no gap or overlap."""
+    `previous()` tiles exactly against it with no gap or overlap.
+
+    `timezone_name` is the business timezone the period's calendar-day
+    boundaries were drawn in (set by resolve_period). It exists because a
+    "day" is not always 24 hours: across a daylight-saving changeover a
+    local calendar week is 167 or 169 hours, not 168 — so `days` and
+    `previous()` must count/step in *local calendar days*, not raw UTC
+    time. compare=False: two periods covering the same instants are equal
+    regardless of which timezone label produced them.
+    """
 
     start: datetime
     end: datetime
+    timezone_name: str | None = field(default=None, compare=False)
 
     @property
     def days(self) -> int:
-        # Whole days only — callers build periods from whole calendar days
-        # (see resolve_period), so this is always an exact division.
-        return (self.end - self.start).days
+        # Whole local calendar days. Real bug this replaced: (end -
+        # start).days on UTC datetimes floored a spring-forward week
+        # (167h) to 6, inflating every per-day figure derived from it
+        # (stock-cover average daily demand) by ~17% for that week, and a
+        # March month (30d 23h) to 30 instead of 31.
+        if self.timezone_name is not None:
+            tz = ZoneInfo(self.timezone_name)
+            return (self.end.astimezone(tz).date() - self.start.astimezone(tz).date()).days
+        return round((self.end - self.start) / timedelta(days=1))
 
     def previous(self) -> "MetricPeriod":
         """The immediately preceding period of equal length, for trend
-        comparison (e.g. this week vs last week)."""
+        comparison (e.g. this week vs last week). Steps back by the same
+        number of local calendar days, landing on local midnight — never
+        by a fixed UTC duration, which would drift an hour off the real
+        day boundary whenever a DST changeover sits inside either period.
+        """
+        if self.timezone_name is not None:
+            tz = ZoneInfo(self.timezone_name)
+            previous_start_date = self.start.astimezone(tz).date() - timedelta(days=self.days)
+            previous_start = datetime.combine(previous_start_date, time.min, tzinfo=tz).astimezone(timezone.utc)
+            return MetricPeriod(start=previous_start, end=self.start, timezone_name=self.timezone_name)
         span = self.end - self.start
         return MetricPeriod(start=self.start - span, end=self.start)
 
@@ -71,7 +96,11 @@ def resolve_period(
     start_local = datetime.combine(resolved_start_date, time.min, tzinfo=tz)
     end_local = datetime.combine(resolved_end_date + timedelta(days=1), time.min, tzinfo=tz)
 
-    return MetricPeriod(start=start_local.astimezone(timezone.utc), end=end_local.astimezone(timezone.utc))
+    return MetricPeriod(
+        start=start_local.astimezone(timezone.utc),
+        end=end_local.astimezone(timezone.utc),
+        timezone_name=business_timezone,
+    )
 
 
 def group_amounts_by_local_date(

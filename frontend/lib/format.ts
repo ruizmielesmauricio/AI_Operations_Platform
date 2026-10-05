@@ -83,3 +83,20 @@ export function workshopMarginDisplay(margin: WorkshopMargin): { value: string; 
         : "no labour cost recorded yet",
   };
 }
+
+// The report availability countdown ("6 days 23h left"). Whole units only,
+// rounded down — a report is never shown as having *more* time than it
+// does. Takes the server's seconds_until_expiry (one clock for everyone),
+// never a client-side date subtraction.
+export function formatExpiryCountdown(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds <= 0) return "Expired";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days >= 3) return `${days} days left`;
+  if (days >= 1) return `${days} day${days === 1 ? "" : "s"} ${hours}h left`;
+  if (hours >= 1) return `${hours}h ${minutes}m left`;
+  if (minutes >= 1) return `${minutes} min left`;
+  return "Less than a minute left";
+}

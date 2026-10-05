@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { apiGet, apiGetBlob } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
+import { ReportExpiryCountdown } from "@/components/ReportExpiryCountdown";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
 import { formatMoney, formatPct, formatRate, grossMarginDisplay, workshopMarginDisplay } from "@/lib/format";
@@ -124,6 +125,9 @@ function ReportView({
         {formatDate(payload.period_start)} – {formatDate(payload.period_end)} · generated {formatDate(payload.generated_at)} ·
         available until {report.expires_at ? formatDate(report.expires_at) : "—"}
       </p>
+      <div className="no-print">
+        <ReportExpiryCountdown secondsUntilExpiry={report.seconds_until_expiry} variant="banner" />
+      </div>
       <p className="hint">
         Not AI — every figure below comes from the same deterministic calculations behind the live dashboard.
       </p>

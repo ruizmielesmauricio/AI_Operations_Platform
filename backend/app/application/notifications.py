@@ -597,9 +597,20 @@ def notify_weekly_business_performance(
 
 
 def notify_report_ready(
-    db: Session, *, business_id: uuid.UUID, report_id: uuid.UUID, report_type: str, period_start: date, period_end: date
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    report_id: uuid.UUID,
+    report_type: str,
+    period_start: date,
+    period_end: date,
+    expires_at: datetime | None = None,
 ) -> None:
     label = "weekly" if report_type == "weekly" else "monthly"
+    # Weekly and monthly reports both expire seven days after generation
+    # (ADR-019) — say so up front, so the user knows to download a copy
+    # (the report page itself shows a live countdown).
+    availability = f" It stays available until {expires_at.date().isoformat()}." if expires_at is not None else ""
     notify(
         db,
         business_id=business_id,
@@ -607,7 +618,10 @@ def notify_report_ready(
         type_key="report_ready",
         severity=SEVERITY_SUCCESS,
         title=f"Your {label} report is ready",
-        body=f"Your {label} report for {period_start.isoformat()} to {period_end.isoformat()} is ready to view.",
+        body=(
+            f"Your {label} report for {period_start.isoformat()} to {period_end.isoformat()} is ready to view."
+            f"{availability}"
+        ),
         action_label="View Report",
         action_url=f"/reports/{report_id}",
         related_entity_type="report",

@@ -170,7 +170,7 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
                     try:
                         notify_report_ready(
                             db, business_id=business.id, report_id=report.id, report_type=report_type,
-                            period_start=start_date, period_end=end_date,
+                            period_start=start_date, period_end=end_date, expires_at=report.expires_at,
                         )
                         # Supersedes any open "delayed" notice for this
                         # same period — report_ready above already tells

@@ -539,6 +539,11 @@ export interface ReportSummary {
   status: string;
   created_at: string;
   expires_at: string | null;
+  // Server-computed countdown (backend/app/analytics/report_expiry.py) —
+  // same for weekly and monthly reports (both expire 7 days after
+  // generation). null only when the report has no expiry set.
+  seconds_until_expiry: number | null;
+  expiring_soon: boolean;
 }
 
 export interface ReportExecutiveSummary {

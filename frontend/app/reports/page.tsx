@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { AppNav } from "@/components/AppNav";
+import { ReportExpiryCountdown } from "@/components/ReportExpiryCountdown";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { ReportSummary } from "@/types";
@@ -65,7 +66,8 @@ export default function ReportsPage() {
       <p className="hint">
         Automatically generated every Monday (weekly) and on the 1st of the month (monthly), covering the previous
         completed period. No AI — every number here traces to the same deterministic calculations behind the
-        dashboard. Reports stay available for 7 days after generation.
+        dashboard. Weekly and monthly reports both stay available for 7 days after generation — the Time left column
+        counts down, so download a PDF or Word copy before one expires.
       </p>
 
       {businesses.length > 1 && (
@@ -95,6 +97,7 @@ export default function ReportsPage() {
               <th>Period</th>
               <th>Generated</th>
               <th>Available until</th>
+              <th>Time left</th>
               <th></th>
             </tr>
           </thead>
@@ -107,6 +110,9 @@ export default function ReportsPage() {
                 </td>
                 <td>{formatDate(r.created_at)}</td>
                 <td>{r.expires_at ? formatDate(r.expires_at) : "—"}</td>
+                <td>
+                  <ReportExpiryCountdown secondsUntilExpiry={r.seconds_until_expiry} />
+                </td>
                 <td>
                   <a href={`/reports/${r.id}?business=${businessId}`}>View</a>
                 </td>
