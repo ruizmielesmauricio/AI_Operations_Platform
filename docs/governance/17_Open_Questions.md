@@ -1,10 +1,10 @@
 # 17_Open_Questions.md
 
-**Version:** 0.3 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 04/08/2026
+**Last Updated:** 12/11/2026
 
 ---
 
@@ -82,17 +82,14 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-026 | What CAC and monthly churn are observed during the first paying cohort? | `08_Cost_Analysis.md` | Depends on Phase 1/4 pilot data. |
 | Q-027 | What are actual AI, ingestion, reporting and support costs per tenant? | `08_Cost_Analysis.md` | |
 | Q-028 | What Irish tax, VAT, founder-payroll and insurance costs must be added? | `08_Cost_Analysis.md` | Requires professional advice, not an AI answer (per `14_Skills_Tools_Vendor_Stack_Checklist.md`). |
-| Q-029 | Should pilot customers receive a temporary discount while the public price remains €80? | `08_Cost_Analysis.md` | Duplicate topic of Q-032. |
 | Q-030 | What customer or usage thresholds actually trigger each infrastructure step? | `08_Cost_Analysis.md` | |
 | Q-031 | What monthly cash reserve should be maintained before the company funds founder compensation? | `08_Cost_Analysis.md` | |
-| Q-032 | Should pilot customers be charged at all, and if so, at what rate relative to €80/month? | `09_Business_Model.md` | Duplicate topic of Q-029 and Q-039. |
 | Q-033 | What conversion rate from pilot to paying customer is realistic? (Document assumes 25–60% across scenarios, itself unvalidated.) | `09_Business_Model.md` | |
 | Q-034 | At what point should the founder consider paid customer acquisition, given zero paid marketing spend assumed in the first 12 months? | `09_Business_Model.md` | |
 | Q-035 | What is the acceptable manual-confirmation rate before the no-template ingestion approach is judged to have failed? | `10_Product_Requirements.md` | Review trigger already defined as <~80% auto-detection success. |
 | Q-036 | Should an optional import template still be offered for customers who prefer structure? | `10_Product_Requirements.md` | |
 | Q-037 | Which POS export formats should be reverse-engineered first? | `10_Product_Requirements.md` | Answer comes from `15_Customer_Discovery.md` Section 8 — same dependency as Q-048. |
 | Q-038 | How many customer interviews are genuinely enough before Gate A — 15, or fewer if patterns emerge clearly? | `11_Development_Roadmap.md` | |
-| Q-039 | Should pilot customers be charged during Phase 4? | `11_Development_Roadmap.md` | Duplicate topic of Q-029/Q-032. |
 | Q-041 | Company name and product name: separate, or the same? | `13_Branding_Strategy.md` | |
 | Q-042 | Which two naming candidates go forward to formal clearance? | `13_Branding_Strategy.md` | Same underlying question as Q-001. |
 | Q-043 | Should the `.ie` domain be prioritised over `.com` for an Ireland-first launch? | `13_Branding_Strategy.md` | |
@@ -117,6 +114,7 @@ Questions stay recorded in their **source document** as well — this register d
 | Q-022 | At what point should Production Events become a formal ADR rather than a proposed pattern? | Formerly `06_Database_Design.md` | Once a second and third vertical (cafe, pharmacy) began active scoping, per `06_Database_Design.md`'s own stated gate. ADR-016 moved Proposed → Accepted 04/08/2026. | 04/08/2026 |
 | Q-040 | Should the second business template be chosen during Phase 4, to inform ADR-016 before Phase 7? | Formerly `11_Development_Roadmap.md` | Overtaken by events — cafe and pharmacy were both scoped during Phase 2/3 (schema-prep, `11_Development_Roadmap.md` C8b) rather than waiting for Phase 4, since a real pharmacy prospect surfaced the lot/expiry need directly. ADR-016/022/023 accepted as a result. | 04/08/2026 |
 | Q-051 | ADR-016 (Production Events): what third-business-type validation and which document updates move this from Proposed to Accepted? | Formerly `12_Decision_Register.md` (Decisions Requiring Action) | Pharmacy served as the third-vertical validation (and, notably, confirmed it does *not* need Production Events — only `inventory_lots`/`prescription_details`, evidence the pattern isn't over-fit). `06_Database_Design.md` and `12_Decision_Register.md` updated; `10_Product_Requirements.md` reviewed and needs no change (no repairs-specific content exists there). | 04/08/2026 |
+| Q-029 / Q-032 / Q-039 | Should pilot customers be charged during Phase 4, and if so at what rate relative to €80/month? | Formerly `08_Cost_Analysis.md`, `09_Business_Model.md`, `11_Development_Roadmap.md` | No — pilot testers do not pay (BD-008). Implemented as operator-granted free pilot access covering branches and staff seats (ADR-025). The public price stays €80/month (BD-005). | 12/11/2026 |
 
 ---
 
@@ -127,3 +125,4 @@ Questions stay recorded in their **source document** as well — this register d
 | 0.1 | 30/07/2026 | Initial register. Consolidated all 49 questions currently listed across `docs/governance/` (00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13, 15), plus the 2 pending-decision items in `12_Decision_Register.md`'s "Decisions Requiring Action" table, into one tracked list with source attribution and cross-references between duplicate topics. Seeded the Resolved Questions section with one already-answered question (first commercial market = Ireland) as the worked example. |
 | 0.2 | 30/07/2026 | Added Q-052 (Stripe Tax registration timing), raised during initial Stripe account setup and blocked on LTD incorporation and accountant advice. |
 | 0.3 | 04/08/2026 | Resolved Q-020, Q-022, Q-040, Q-051 — ADR-016 (Production Events) accepted, validated against pharmacy as the third vertical. Added Q-053: GDPR special-category compliance for the new `prescription_details` table (ADR-023), blocked on legal advice. |
+| 0.4 | 12/11/2026 | Resolved Q-029, Q-032 and Q-039 (pilot pricing): pilots do not pay — BD-008, ADR-025. |
