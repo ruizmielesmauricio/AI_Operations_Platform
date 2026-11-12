@@ -132,10 +132,15 @@ def compute_baseline_forecast(
     for offset in range(horizon_days):
         forecast_date = today + timedelta(days=offset)
         values = by_weekday[forecast_date.weekday()] if use_seasonal else all_values
-        point = sum(values) / len(values)
+        # Net demand can dip below zero when returns outnumber sales in the
+        # history (found live: a returns-only product forecast -0.3 units,
+        # outside its own 0.0-0.2 range). Demand is never negative.
+        point = max(Decimal("0"), sum(values) / len(values))
         variance = _sample_variance(values) if len(values) >= 2 else Decimal("0")
         std = variance.sqrt()
-        daily.append(DailyForecast(forecast_date=forecast_date, point=point, low=max(Decimal("0"), point - std), high=point + std))
+        daily.append(
+            DailyForecast(forecast_date=forecast_date, point=point, low=max(Decimal("0"), point - std), high=point + std)
+        )
         total_point += point
         total_variance += variance
 

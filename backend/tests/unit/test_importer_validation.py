@@ -114,6 +114,36 @@ def test_known_tax_amount_explains_a_total_that_would_otherwise_mismatch():
     assert result.unit_price == Decimal("12.29")  # 36.86 / 3 — total still wins for revenue
 
 
+def test_vat_inclusive_unit_price_with_tax_column_does_not_flag_a_mismatch():
+    # Normal Irish/EU retail export: the unit price already includes VAT, so
+    # total == price x qty and the VAT column is only the tax component.
+    # Found live: every row of such a file used to be flagged.
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3, "tax_amount": 4}
+    result = validate_and_parse_row(
+        1, extract_mapped_values(["2026-01-03", "999.00", "1", "999.00", "186.80"], columns)
+    )
+    assert isinstance(result, ParsedSaleRow)
+    assert result.total_amount_mismatch is False
+
+
+def test_vat_inclusive_return_row_does_not_flag_a_mismatch():
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3, "tax_amount": 4}
+    result = validate_and_parse_row(
+        1, extract_mapped_values(["2026-01-03", "49.99", "-1", "-49.99", "-9.35"], columns)
+    )
+    assert isinstance(result, ParsedSaleRow)
+    assert result.total_amount_mismatch is False
+
+
+def test_total_matching_neither_convention_is_still_flagged_with_tax_column():
+    columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3, "tax_amount": 4}
+    result = validate_and_parse_row(
+        1, extract_mapped_values(["2026-01-03", "9.99", "3", "50.00", "6.89"], columns)
+    )
+    assert isinstance(result, ParsedSaleRow)
+    assert result.total_amount_mismatch is True
+
+
 def test_zero_quantity_is_rejected():
     columns = {"sale_date": 0, "unit_price": 1, "quantity": 2, "total_amount": 3}
     result = validate_and_parse_row(1, extract_mapped_values(["2026-01-03", "9.99", "0", "50.00"], columns))

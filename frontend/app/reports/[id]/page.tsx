@@ -6,7 +6,7 @@ import { apiGet, apiGetBlob } from "@/lib/api/client";
 import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
-import { formatMoney, formatPct, formatRate, grossMarginDisplay, workshopMarginDisplay } from "@/lib/format";
+import { formatDate, formatMoney, formatPct, formatRate, grossMarginDisplay, workshopMarginDisplay } from "@/lib/format";
 import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
 import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
@@ -473,9 +473,6 @@ function dedupeByProduct(rows: ProductMarginRow[]): ProductMarginRow[] {
   return Array.from(byId.values());
 }
 
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString();
-}
 
 type DownloadFormat = "pdf" | "docx";
 

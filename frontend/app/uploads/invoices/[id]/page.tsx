@@ -41,8 +41,25 @@ const ISSUE_LABELS: Record<string, string> = {
   not_found: "Not found in the document",
 };
 
+// Header field names double as issue codes ("tax_total" = that field
+// couldn't be read) — previously shown raw, e.g. a bare "tax_total" warning.
+const HEADER_FIELD_LABELS: Record<string, string> = {
+  supplier_name: "Supplier",
+  invoice_reference: "Invoice reference",
+  invoice_date: "Invoice date",
+  due_date: "Due date",
+  currency: "Currency",
+  subtotal: "Subtotal",
+  tax_total: "Tax (VAT) total",
+  discount_total: "Discount total",
+  shipping_total: "Shipping total",
+  grand_total: "Grand total",
+};
+
 function issueText(code: string): string {
-  return ISSUE_LABELS[code] ?? code;
+  if (ISSUE_LABELS[code]) return ISSUE_LABELS[code];
+  if (HEADER_FIELD_LABELS[code]) return `Couldn't read the ${HEADER_FIELD_LABELS[code].toLowerCase()} — please check it`;
+  return "Something in this invoice needs checking";
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -571,7 +588,7 @@ export default function InvoiceReviewPage() {
             </div>
             {(["subtotal", "tax_total", "discount_total", "shipping_total", "grand_total"] as const).map((field) => (
               <div key={field}>
-                <label htmlFor={field}>{field.replace("_", " ")}</label>
+                <label htmlFor={field}>{HEADER_FIELD_LABELS[field]}</label>
                 <br />
                 <input
                   id={field}

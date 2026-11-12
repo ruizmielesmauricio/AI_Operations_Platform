@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.billing import service
+from app.billing.access import business_access
+from app.models.business import Business
 from app.billing.exceptions import InvalidWebhookSignature
 from app.models.membership import Membership
 from app.repositories.subscription import SubscriptionRepository
@@ -61,9 +63,12 @@ def get_subscription_status(
     db: Session = Depends(get_db),
 ) -> SubscriptionStatusResponse:
     subscription = SubscriptionRepository(db).get_by_business_id(membership.business_id)
+    business = db.get(Business, membership.business_id)
     return SubscriptionStatusResponse(
         status=subscription.status if subscription else None,
         current_period_end=subscription.current_period_end if subscription else None,
+        access=business_access(db, membership.business_id),
+        pilot_access_until=business.pilot_access_until if business else None,
     )
 
 

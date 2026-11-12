@@ -118,7 +118,16 @@ _LABEL_PATTERNS: dict[str, list[re.Pattern]] = {
         re.compile(r"(?:shipping|freight|delivery)\s*[:\-]?\s*(.+)", re.I),
     ],
     "tax_total": [
-        re.compile(r"\b(?:vat|tax|gst)\b\s*(?:\([^)]*\))?\s*(?:total|amount)?\s*[:\-]?\s*(?!no\b)(.+)", re.I),
+        # The "not a registration number" check sits right after the
+        # keyword so whitespace backtracking can't skip past it — found
+        # live: "VAT No: IE0000000TEST" claimed tax_total, and the real
+        # "VAT 23%: EUR 151.43" line was then ignored. An optional rate
+        # ("23%") is allowed before the colon.
+        re.compile(
+            r"\b(?:vat|tax|gst)\b(?!\s*(?:no\.?|number|reg(?:istration)?|id)\b)\s*(?:\d+(?:\.\d+)?\s*%)?\s*"
+            r"(?:\([^)]*\))?\s*(?:total|amount)?\s*[:\-]?\s*(.+)",
+            re.I,
+        ),
     ],
     "grand_total": [
         re.compile(r"(?:grand\s*total|total\s*due|amount\s*due)\s*[:\-]?\s*(.+)", re.I),

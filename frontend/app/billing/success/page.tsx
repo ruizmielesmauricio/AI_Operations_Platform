@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "Subscription confirmed — AI Operations Platform",
+  title: "Subscription confirmed — ORLA",
 };
 
 export default async function BillingSuccessPage({
@@ -22,7 +22,11 @@ export default async function BillingSuccessPage({
           Reference: <code>{sessionId}</code>
         </p>
       )}
-      <p>A receipt has been sent to your email.</p>
+      <p>Stripe emails your receipt to the address used at checkout.</p>
+      <p>
+        <a href="/onboarding">Back to Company Profile</a> · <a href="/uploads">Upload your data</a> ·{" "}
+        <a href="/dashboard">Go to Dashboard</a>
+      </p>
     </main>
   );
 }

@@ -59,6 +59,10 @@ class EmployeeSeatOut(BaseModel):
     # payment. The frontend uses this to explain what's actually still
     # pending when status is "pending_payment": payment, signup, or both.
     account_linked: bool
+    # The sign-up link for an employee who hasn't registered yet (owner-only
+    # endpoints), so the owner can copy and share it even when invite email
+    # isn't configured. None once registered or removed.
+    invite_url: str | None = None
     address_line1: str | None
     city: str | None
     postal_code: str | None
@@ -68,8 +72,9 @@ class EmployeeSeatOut(BaseModel):
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_seat(cls, seat) -> "EmployeeSeatOut":
+    def from_seat(cls, seat, *, invite_url: str | None = None) -> "EmployeeSeatOut":
         return cls(
+            invite_url=invite_url,
             id=seat.id,
             first_name=seat.first_name,
             surname=seat.surname,
@@ -89,4 +94,14 @@ class EmployeeSeatCreateResponse(BaseModel):
     employee_seat: EmployeeSeatOut
     # Where the frontend sends the owner next — Stripe Checkout, exactly
     # like Add a branch's own redirectToCheckout pattern.
-    checkout_url: str
+    # None when no payment is needed (free pilot seat, already active).
+    checkout_url: str | None = None
+    # Whether the invite email actually went out (False when email delivery
+    # isn't configured, or the person already has an account).
+    invite_email_sent: bool = False
+
+
+class InviteResult(BaseModel):
+    email_sent: bool
+    invite_url: str
+    message: str

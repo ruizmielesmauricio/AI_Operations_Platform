@@ -1,19 +1,60 @@
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.templates import DEFAULT_TEMPLATE_KEY, TEMPLATE_KEYS
+
+
+def _check_timezone(value: str) -> str:
+    # Every period calculation does ZoneInfo(business.timezone): a typo
+    # stored here (the field is free text) would make every dashboard,
+    # report and forecast for this business fail. Reject it at the door.
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("Unknown timezone. Use an IANA name such as Europe/Dublin.") from exc
+    return value
 
 
 class BusinessCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    template: str = Field(default="bicycle_shop", max_length=64)
+    template: str = Field(default=DEFAULT_TEMPLATE_KEY, max_length=64)
     timezone: str = Field(default="Europe/Dublin", max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str) -> str:
+        return _check_timezone(value)
+
+    @field_validator("template")
+    @classmethod
+    def _known_template(cls, value: str) -> str:
+        # Previously any string was accepted and stored, silently creating a
+        # business type nothing in the app knew how to serve.
+        if value not in TEMPLATE_KEYS:
+            raise ValueError(f"Unknown business type. Choose one of: {', '.join(sorted(TEMPLATE_KEYS))}")
+        return value
+
+
+class BusinessTemplateOut(BaseModel):
+    key: str
+    label: str
+    description: str
+    group: str
+    supports_repairs: bool
 
 
 class BusinessOut(BaseModel):
     id: uuid.UUID
     name: str
     template: str
+    template_label: str = ""
+    # Whether this business's type tracks repairs/service jobs — the
+    # frontend hides the repairs upload type, Workshop Performance and the
+    # repairs transactions tab when False.
+    supports_repairs: bool = False
     timezone: str
     role: str
     # None = a standalone/primary shop; set = this is a branch of that
@@ -40,6 +81,8 @@ class BusinessOut(BaseModel):
     # GET /businesses/{id}/logo <img> at all, rather than guaranteeing a
     # 404 request for every logo-less business.
     has_logo: bool = False
+    # Free pilot window end (app/billing/access.py); None = not a pilot.
+    pilot_access_until: datetime | None = None
     # Frontend cache-buster for the logo <img> src (?v=updated_at) — a
     # re-upload overwrites the same R2 key/URL, so without this the
     # browser would keep showing the old cached image. Reused rather than
@@ -87,3 +130,8 @@ class BusinessProfileUpdate(BaseModel):
     postal_code: str | None = Field(default=None, max_length=32)
     country: str | None = Field(default=None, max_length=128)
     timezone: str | None = Field(default=None, max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str | None) -> str | None:
+        return _check_timezone(value) if value is not None else None

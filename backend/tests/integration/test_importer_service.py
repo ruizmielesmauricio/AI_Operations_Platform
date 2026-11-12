@@ -251,3 +251,25 @@ def test_run_import_raises_when_a_mapped_column_is_no_longer_in_the_file(db_sess
     upload, record = _make_mapped_upload(db_session, business_id, field_mapping=bad_mapping)
     with pytest.raises(MappedColumnMissing):
         run_import(db_session, upload, record)
+
+
+def test_sales_without_cost_column_snapshot_the_products_known_cost(db_session, business_id, _fake_r2):
+    # Found live: a POS sales export with no cost column left every sale
+    # line's cost NULL even though the product's cost was already known
+    # from a stock-count/purchases import, so margin showed 0% coverage.
+    from app.repositories.product import ProductRepository
+
+    ProductRepository(db_session).create(
+        business_id=business_id, sku="CL-100", name="Chain Lube", cost_price=Decimal("4.10"), sell_price=None
+    )
+    upload, record = _make_mapped_upload(db_session, business_id)
+    run_import(db_session, upload, record)
+
+    items = db_session.scalars(select(SaleItem).where(SaleItem.business_id == business_id)).all()
+    product_by_id = {p.id: p for p in db_session.scalars(select(Product).where(Product.business_id == business_id))}
+    by_sku = {}
+    for item in items:
+        by_sku.setdefault(product_by_id[item.product_id].sku, []).append(item.cost_price_at_sale)
+    assert by_sku["CL-100"] == [Decimal("4.10")]
+    # A product first seen in this file has no known cost — stays unknown.
+    assert by_sku["BT-200"] == [None]
