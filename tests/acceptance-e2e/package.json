@@ -1,0 +1,12 @@
+{
+  "name": "orla-acceptance-e2e",
+  "private": true,
+  "description": "ORLA browser acceptance tests (acceptance/criteria.md). Protected: the autobuild loop may not edit this directory.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
+    "@playwright/test": "1.63.0"
+  }
+}
