@@ -214,8 +214,9 @@ def test_report_content_matches_fixture(orla):
     """AC-042: every PR-8.3 section is present and its figures match an
     independent hand calculation.
 
-    Contract (payload keys): top_selling_products / bottom_selling_products
-    (3 each, ranked by units sold); profit_and_expenses {revenue, expenses,
+    Contract (payload keys): top_selling_products / bottom_selling_products,
+    each {"by_units": [3], "by_revenue": [3]} so the owner can switch between
+    the two rankings (decided 12/11/2026); profit_and_expenses {revenue, expenses,
     profit} where expenses = cost of goods sold for the period; plus the
     existing financial_performance (with previous-period comparison),
     executive_summary.narrative, forecast, findings.recommendations,
@@ -245,8 +246,13 @@ def test_report_content_matches_fixture(orla):
     pe = p["profit_and_expenses"]
     assert (Decimal(pe["revenue"]), Decimal(pe["expenses"]), Decimal(pe["profit"])) == (
         Decimal("195.00"), Decimal("91.00"), Decimal("104.00"))
-    assert [x["name"] for x in p["top_selling_products"]] == ["Alpha", "Bravo", "Charlie"]
-    assert [x["name"] for x in p["bottom_selling_products"]] == ["Echo", "Delta", "Charlie"]
+    # units: Alpha 10, Bravo 8, Charlie 6, Delta 2, Echo 1
+    # revenue: Bravo 80, Alpha 50, Delta 40, Charlie 18, Echo 7
+    names = lambda key, order: [x["name"] for x in p[key][order]]
+    assert names("top_selling_products", "by_units") == ["Alpha", "Bravo", "Charlie"]
+    assert names("bottom_selling_products", "by_units") == ["Echo", "Delta", "Charlie"]
+    assert names("top_selling_products", "by_revenue") == ["Bravo", "Alpha", "Delta"]
+    assert names("bottom_selling_products", "by_revenue") == ["Echo", "Charlie", "Delta"]
 
     assert isinstance(p["executive_summary"]["narrative"], str) and p["executive_summary"]["narrative"].strip()
     assert "forecast" in p and "recommendations" in p["findings"]

@@ -134,20 +134,27 @@ def test_drilldown_paginated_and_capped(orla):
 
 def test_findings_and_recommendations_traceable(orla):
     """AC-065: findings carry rule id/version; every recommendation maps to a
-    finding with evidence; ranked by impact; reproducible."""
+    finding with evidence; ranked by impact; reproducible. Impact reflects
+    need from historical sales (decided 12/11/2026): two products both have
+    about 5 days of stock left, one sells 1/day, the other 1 every 5 days —
+    the faster seller's recommendation ranks higher."""
     biz = orla.create_business("find-user")
     today = date.today()
     orla.import_file("find-user", biz["id"], "stock.csv", csv_bytes([
         ["Date", "Product", "SKU", "Qty Received", "Unit Cost"],
         [(today - timedelta(days=120)).isoformat(), "Dusty Item", "DI", "40", "10.00"],
-        [(today - timedelta(days=120)).isoformat(), "Hot Item", "HI", "12", "3.00"],
+        [(today - timedelta(days=60)).isoformat(), "Fast Seller", "FS", "35", "3.00"],
+        [(today - timedelta(days=60)).isoformat(), "Slow Seller", "SS", "7", "3.00"],
     ]), entity_type="purchases")
-    orla.import_file("find-user", biz["id"], "s.csv", csv_bytes([SALES_HEADER] + [
-        [(today - timedelta(days=d)).isoformat(), "Hot Item", "HI", "1", "9.00", "3.00"] for d in range(1, 11)
-    ]))
+    rows = [SALES_HEADER]
+    for d in range(1, 31):
+        rows.append([(today - timedelta(days=d)).isoformat(), "Fast Seller", "FS", "1", "9.00", "3.00"])
+        if d % 5 == 0:
+            rows.append([(today - timedelta(days=d)).isoformat(), "Slow Seller", "SS", "1", "9.00", "3.00"])
+    orla.import_file("find-user", biz["id"], "s.csv", csv_bytes(rows))
     f1 = _get(orla, "find-user", biz["id"], "findings")
     assert f1 == _get(orla, "find-user", biz["id"], "findings")
-    assert f1["findings"], "fixture with dead and fast-depleting stock produced no findings"
+    assert f1["findings"], "fixture with dead and low stock produced no findings"
     types = {f["type"] for f in f1["findings"]}
     for f in f1["findings"]:
         assert f["rule_id"] and isinstance(f["rule_version"], int) and f["rule_version"] >= 1
@@ -156,7 +163,15 @@ def test_findings_and_recommendations_traceable(orla):
     for r in recs:
         assert r["finding_type"] in types and r["evidence"]
     scores = [Decimal(str(r["impact_score"])) for r in recs]
-    assert scores == sorted(scores, reverse=True)
+    assert scores == sorted(scores, reverse=True), "recommendations are not ranked by impact"
+
+    def rank(name):
+        for i, r in enumerate(recs):
+            if name in json.dumps(r["evidence"]) or name in r["title"] or name in r["description"]:
+                return i
+        raise AssertionError(f"no recommendation for low-stock product {name!r}")
+
+    assert rank("Fast Seller") < rank("Slow Seller"), "the faster-selling low-stock product must rank higher"
 
 
 def test_forecast_rules(orla):
