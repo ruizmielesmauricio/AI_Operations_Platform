@@ -83,8 +83,11 @@ def _session_from_url(stripe, url: str):
 def _assert_price(session, amount: int):
     assert session.livemode is False
     assert session.mode == "subscription"
-    assert list(session.payment_method_types) == ["card", "sepa_debit"], (
-        f"checkout must offer card first and SEPA second, got {session.payment_method_types}")
+    # Decided 12/11/2026: card first (includes Apple Pay / Google Pay), SEPA
+    # Direct Debit second, then Revolut Pay — the methods commonly used in
+    # Ireland. Nothing else (no Klarna, Amazon Pay, Satispay, Link).
+    assert list(session.payment_method_types) == ["card", "sepa_debit", "revolut_pay"], (
+        f"checkout must offer card, SEPA, Revolut Pay (in that order), got {session.payment_method_types}")
     assert session.automatic_tax.enabled is True
     price = session.line_items.data[0].price
     assert (price.unit_amount, price.currency) == (amount, "eur")
@@ -93,7 +96,7 @@ def _assert_price(session, amount: int):
 
 
 def test_checkout_80_eur_card_and_sepa(orla, monkeypatch):
-    """AC-044: €80/month (excl. VAT), card then SEPA, Stripe Tax on, test mode."""
+    """AC-044: €80/month (excl. VAT), card then SEPA then Revolut Pay, Stripe Tax on, test mode."""
     stripe = _stripe_test_env(monkeypatch, "ORLA_STRIPE_PRICE_ID")
     biz = orla.create_business("pay-owner", subscribe=False)
     resp = orla.client.post(f"/businesses/{biz['id']}/billing/checkout-session", headers=auth("pay-owner"))

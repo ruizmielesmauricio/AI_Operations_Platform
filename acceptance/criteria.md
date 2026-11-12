@@ -79,7 +79,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 
 | ID | Criterion | Source | Pri | Test |
 |---|---|---|---|---|
-| AC-044 | Checkout creates a subscription-mode session against a Stripe **test-mode** price that is €80.00 EUR, monthly recurring; the session explicitly offers card first and SEPA Direct Debit second; automatic tax enabled. Verified against the Stripe test API. | PR-7.1; BD-005; ADR-011 | P0 | `tests/acceptance/test_billing.py::test_checkout_80_eur_card_and_sepa` |
+| AC-044 | Checkout creates a subscription-mode session against a Stripe **test-mode** price that is €80.00 EUR, monthly recurring; the session explicitly offers card first (incl. Apple Pay / Google Pay), SEPA Direct Debit second, Revolut Pay third, and nothing else; automatic tax enabled. Verified against the Stripe test API. | PR-7.1; BD-005; ADR-011 | P0 | `tests/acceptance/test_billing.py::test_checkout_80_eur_card_and_sepa` |
 | AC-045 | Paid access is granted only by a signature-verified webhook; the success redirect alone grants nothing; a bad signature is rejected 400. | PR-7.2 | P0 | `tests/acceptance/test_billing.py::test_access_only_from_verified_webhook` |
 | AC-046 | Replaying the same webhook event is processed once. | ADR-011; CLAUDE.md idempotency | P0 | `tests/acceptance/test_billing.py::test_webhook_idempotent` |
 | AC-047 | Owner can open the Stripe Customer Portal; non-owners are refused. | PR-7.3; PR-6.3 | P1 | `tests/acceptance/test_billing.py::test_customer_portal_owner_only` |
@@ -150,7 +150,7 @@ Where a criterion needs behaviour that has no API yet, the test fixes the shape:
 | AC-027 | junk rows (subtotal/total/notes/repeated header) counted in `rejection_summary` (`reasons` or `excluded`), separately from "no date" |
 | AC-040 | persistent report failure → audit event `report_generation_failed` (target `report`, metadata report_type, period_start, attempts, last_error) |
 | AC-042 | report payload adds `top_selling_products`, `bottom_selling_products`, each `{by_units: [3], by_revenue: [3]}`; `profit_and_expenses {revenue, expenses (= what the business paid for the goods it sold), profit}`; `data_freshness`; `warnings` |
-| AC-044/048 | Checkout session `payment_method_types == ["card","sepa_debit"]`, VAT-exclusive prices |
+| AC-044/048 | Checkout session `payment_method_types == ["card","sepa_debit","revolut_pay"]`, VAT-exclusive prices |
 | AC-049 | a `sk_live_` key outside `ENVIRONMENT=production` → no Stripe call, error response |
 | AC-062 | analytics module responses carry `module_summary {status, trend, drivers[], risks[], recommended_action}` |
 | AC-068 | classifier intent `low_stock_alerts`; AI context = active low-stock alerts only |
@@ -168,7 +168,9 @@ NFR-3 availability (99%) · NFR-4 EU data residency (vendor region config) · NF
 - Business type is chosen at signup; no default type (AC-016, AC-052).
 - AI usage limit: 300 questions per business per month, adjustable later (AC-012).
 - Ambiguous dates: infer order from other dates in the file, else day-first (AC-025).
-- Checkout lists card first and SEPA Direct Debit second, set explicitly in code (AC-044).
+- Checkout offers card (incl. Apple Pay / Google Pay), then SEPA Direct Debit, then Revolut Pay — common in Ireland — set explicitly in code; no Klarna/Amazon Pay/Satispay/Link (AC-044).
+- Stripe product wording made industry-neutral; branch product renamed "Additional Location (Branch)".
+- Mauricio's computer runs Windows: the loop runs inside WSL2 (Ubuntu), which Docker Desktop already uses.
 - Tailwind / shadcn/ui: out of scope for now — reassess later. No criterion.
 - Redis: not needed by any current task — reassess later. No criterion.
 - Test environment: Stripe "ORLA sandbox" (test mode only); Supabase project "ORLA" with four dedicated test logins (orla-test-owner/staff/reset/onboard@example.com).
