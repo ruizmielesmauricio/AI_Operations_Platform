@@ -27,7 +27,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 | AC-009 | When the model returns a numeric claim not present in the structured context, the guardrail blocks or flags it before it reaches the user. (Provider stubbed at the HTTP boundary; the guardrail is the thing under test and runs for real.) | PR-5.3; 05 | P0 | `tests/acceptance/test_ai_boundary.py::test_unsupported_number_is_blocked` |
 | AC-010 | Every ORLA answer records which approved query function or help-KB entry it came from; a question with no approved source gets a plain "can't answer that" with no figures. | PR-5.6; ADR-020; PD-008 | P0 | `tests/acceptance/test_ai_boundary.py::test_every_answer_traces_to_approved_source` |
 | AC-011 | With the AI provider down, dashboard/analytics endpoints still return full metrics and chat returns a clear plain-language "unavailable" message (no 500). | PR-5.4 | P0 | `tests/acceptance/test_ai_boundary.py::test_ai_outage_degrades_gracefully` |
-| AC-012 | A per-tenant AI usage limit is enforced server-side (machine-readable error code when exceeded), and every AI call is logged with provider, model, tokens, cost, feature, business, user, success. | PR-5.5; 05 | P1 | `tests/acceptance/test_ai_boundary.py::test_per_tenant_ai_limit_and_logging` |
+| AC-012 | A per-tenant AI usage limit of **300 questions per business per calendar month** (configurable setting) is enforced server-side (machine-readable error code when exceeded), and every AI call is logged with provider, model, tokens, cost, feature, business, user, success. | PR-5.5; 05 | P1 | `tests/acceptance/test_ai_boundary.py::test_per_tenant_ai_limit_and_logging` |
 | AC-013 | Scheduled report generation makes zero AI gateway calls (gateway patched to raise; report still generates). | PR-8.7; ADR-019 | P0 | `tests/acceptance/test_ai_boundary.py::test_report_generation_never_calls_ai` |
 | AC-014 | AI column-mapping suggestion is used once per source; the confirmed mapping is stored and the second upload from the same source triggers no AI call and no user mapping input. | ED-009; PR-2.5 | P1 | `tests/acceptance/test_ai_boundary.py::test_mapping_suggestion_used_once` |
 
@@ -36,7 +36,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 | ID | Criterion | Source | Pri | Test |
 |---|---|---|---|---|
 | AC-015 | No bicycle-specific literals (`bike`, `bicycle`, `mechanic`, …) or hard-coded `template == "<vertical>"` branches in core code: `backend/app/**` outside `templates/`, and `frontend/**` outside template config. Behaviour differences come from template config. | CLAUDE.md; BD-002; PD-001 | P0 | `tests/acceptance/test_industry_agnostic.py::test_no_vertical_specific_logic_in_core` |
-| AC-016 | No core table or column is named for a single industry (e.g. `repairs`, `bike_*`, `prescription*` outside a template-extension table); core model has no vertical as its default template. | 06 Governance Rule; ADR-016 | P0 | `tests/acceptance/test_industry_agnostic.py::test_core_schema_is_industry_neutral` |
+| AC-016 | No core table or column is named for a single industry (e.g. `repairs`, `bike_*`, `prescription*` outside a template-extension table); core model has no default template — the business type is required at signup (decision 12/11/2026). | 06 Governance Rule; ADR-016 | P0 | `tests/acceptance/test_industry_agnostic.py::test_core_schema_is_industry_neutral` |
 | AC-017 | A non-bike business (e.g. `coffee_shop`) can go end-to-end — create, upload sales, view dashboard, get weekly report — with no bicycle terminology in any API response. | BD-002; 06 Worked Example | P0 | `tests/acceptance/test_industry_agnostic.py::test_non_bike_business_end_to_end` |
 | AC-018 | Template-specific sections (e.g. workshop/production) are omitted — not filled with placeholders — for templates that don't enable them, driven by template config. | PR-8.3; 06 | P1 | `tests/acceptance/test_industry_agnostic.py::test_inapplicable_sections_omitted` |
 | AC-019 | UI terminology adapts to the template: a coffee-shop user sees no "repair", "mechanic" or "bike" text on dashboard, uploads, reports or nav. | PR-1.2; 06 Customer Perspective | P1 | `tests/acceptance-e2e/industry.spec.ts › terminology adapts to template` |
@@ -50,7 +50,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 | AC-022 | Known aliases ("Item", "Product", "Description", "Product Name", "SKU Description", …) map to canonical fields with no user input. | PR-2.3 | P0 | `tests/acceptance/test_ingestion.py::test_known_aliases_auto_map` |
 | AC-023 | An unmatched required column produces a plain-language question ("Which column is the sale date?") with three sample values from the file. | PR-2.4 | P1 | `tests/acceptance/test_ingestion.py::test_unmatched_column_plain_language_prompt` |
 | AC-024 | Second upload from the same source needs zero mapping input. | PR-2.5 | P0 | `tests/acceptance/test_ingestion.py::test_saved_mapping_reused` |
-| AC-025 | Dates (DD/MM/YY, MM-DD-YYYY, ISO), currency symbols, thousand separators, decimal commas, whitespace and mixed case normalise to correct `Decimal`/`date` values without asking. | PR-2.6 | P0 | `tests/acceptance/test_ingestion.py::test_format_normalisation` |
+| AC-025 | Dates (DD/MM/YY, MM-DD-YYYY, ISO), currency symbols, thousand separators, decimal commas, whitespace and mixed case normalise to correct `Decimal`/`date` values without asking. Ambiguous dates (e.g. `03/04/25`) take their day/month order from unambiguous dates in the same file; if none exist, day-first; the chosen order is shown in the import summary. | PR-2.6 | P0 | `tests/acceptance/test_ingestion.py::test_format_normalisation` |
 | AC-026 | Blank rows, merged cells, subtotal rows, footer rows, duplicate mid-file headers and trailing notes are excluded. | PR-2.7 | P0 | `tests/acceptance/test_ingestion.py::test_messy_rows_excluded` |
 | AC-027 | Every excluded row is counted and categorised with a plain-language reason; rows in = imported + skipped (nothing silently dropped, no stack traces). | PR-2.8; PR-2.9 | P0 | `tests/acceptance/test_ingestion.py::test_every_row_accounted_for` |
 | AC-028 | Uploaded file is deleted from object storage after a successful import. | PR-2.10; ADR-008; NFR-5 | P1 | `tests/acceptance/test_ingestion.py::test_file_deleted_after_import` |
@@ -79,7 +79,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 
 | ID | Criterion | Source | Pri | Test |
 |---|---|---|---|---|
-| AC-044 | Checkout creates a subscription-mode session against a Stripe **test-mode** price that is €80.00 EUR, monthly recurring; card and SEPA Direct Debit are both offered; automatic tax enabled. Verified against the Stripe test API. | PR-7.1; BD-005; ADR-011 | P0 | `tests/acceptance/test_billing.py::test_checkout_80_eur_card_and_sepa` |
+| AC-044 | Checkout creates a subscription-mode session against a Stripe **test-mode** price that is €80.00 EUR, monthly recurring; the session explicitly offers card first and SEPA Direct Debit second; automatic tax enabled. Verified against the Stripe test API. | PR-7.1; BD-005; ADR-011 | P0 | `tests/acceptance/test_billing.py::test_checkout_80_eur_card_and_sepa` |
 | AC-045 | Paid access is granted only by a signature-verified webhook; the success redirect alone grants nothing; a bad signature is rejected 400. | PR-7.2 | P0 | `tests/acceptance/test_billing.py::test_access_only_from_verified_webhook` |
 | AC-046 | Replaying the same webhook event is processed once. | ADR-011; CLAUDE.md idempotency | P0 | `tests/acceptance/test_billing.py::test_webhook_idempotent` |
 | AC-047 | Owner can open the Stripe Customer Portal; non-owners are refused. | PR-7.3; PR-6.3 | P1 | `tests/acceptance/test_billing.py::test_customer_portal_owner_only` |
@@ -92,7 +92,7 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 | ID | Criterion | Source | Pri | Test |
 |---|---|---|---|---|
 | AC-051 | Backend verifies Supabase JWTs (signature, expiry, audience); forged, expired or wrong-audience tokens → 401. | ADR-013; ADR-024 | P0 | `tests/acceptance/test_auth.py::test_jwt_verification` |
-| AC-052 | Signup + business creation yields user, business and an `owner` membership. | PR-1.1 | P0 | `tests/acceptance/test_auth.py::test_signup_creates_owner_membership` |
+| AC-052 | Signup requires choosing a business type and yields user, business (with that type) and an `owner` membership; signup without a type is rejected. | PR-1.1 | P0 | `tests/acceptance/test_auth.py::test_signup_creates_owner_membership` |
 | AC-053 | Role permissions are enforced server-side: staff calling owner/manager endpoints directly (business edit, billing, employees, thresholds, suppliers) get 403. | PR-6.3 | P0 | `tests/acceptance/test_auth.py::test_role_permissions_server_side` |
 | AC-054 | Supabase is used for identity only: backend has no Supabase DB/storage client and `DATABASE_URL` is never a Supabase host. | ADR-013 | P0 | `tests/acceptance/test_auth.py::test_supabase_auth_only` |
 | AC-055 | Owner invites a user with a role; invite email goes through the email boundary (Resend); invitee gets exactly that role. | PR-1.5 | P1 | `tests/acceptance/test_auth.py::test_invite_with_role` |
@@ -140,7 +140,24 @@ Backend tests: `tests/acceptance/` (pytest). Frontend tests: `tests/acceptance-e
 
 NFR-3 availability (99%) · NFR-4 EU data residency (vendor region config) · NFR-6 AI cost < €3/customer/month (needs real usage) · PR-1.4 "first upload within 5 minutes" (only the ≤6-question proxy is testable) · ADR-015 OpenRouter quality threshold (undefined).
 
-## Doc inconsistencies and open questions (not guessed — need a decision)
+## Decisions recorded (12/11/2026)
+
+- Business type is chosen at signup; no default type (AC-016, AC-052).
+- AI usage limit: 300 questions per business per month, adjustable later (AC-012).
+- Ambiguous dates: infer order from other dates in the file, else day-first (AC-025).
+- Checkout lists card first and SEPA Direct Debit second, set explicitly in code (AC-044).
+- Tailwind / shadcn/ui: out of scope for now — reassess later. No criterion.
+- Redis: not needed by any current task — reassess later. No criterion.
+- Test environment: Stripe "ORLA sandbox" (test mode only); Supabase project "ORLA".
+
+## Still open
+
+- **"Typical business" size for AC-074** (the 2-second dashboard test) — awaiting confirmation of the proposed test data size.
+- **Test users in Supabase "ORLA"** — awaiting OK to create two dedicated test logins.
+- **VAT on prices:** in the Stripe sandbox the €80 price is set VAT-inclusive, but the €30 branch and €5 seat prices have no VAT setting. Should all prices include VAT?
+- Employee seat (€5/month, max 2) has no Decision Register entry; PRD lists multi-location as deferred although branches (BD-007) are built. → Needs Mauricio, not blocking.
+
+## Earlier notes on doc inconsistencies
 
 1. **Tailwind and shadcn/ui are not decided anywhere.** No ADR covers them; only `14_Skills_Tools_Vendor_Stack_Checklist.md` recommends them. The frontend uses plain CSS variables (`frontend/app/globals.css`) and neither is installed. ECharts is in ADR-010/checklist and installed. → No criterion added. Should the loop migrate the UI to Tailwind + shadcn/ui?
 2. **Redis is optional and undecided.** `07_Deployment_Guide.md` marks it "(opt.)"; `17_Open_Questions.md` Q-025 is still open; the scheduler polls Postgres with no queue. → No criterion added. Should Redis be required?
