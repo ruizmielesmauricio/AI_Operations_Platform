@@ -66,6 +66,20 @@ def _load_env_test_local() -> None:
 
 _load_env_test_local()
 
+
+def _trust_system_ca_for_stripe() -> None:
+    """The stripe SDK ships its own CA list. Behind a TLS-inspecting proxy
+    (e.g. a cloud dev environment) honour the system bundle instead, when one
+    is configured. No effect on a normal machine."""
+    bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("SSL_CERT_FILE")
+    if bundle and Path(bundle).exists():
+        import stripe
+
+        stripe.ca_bundle_path = bundle
+
+
+_trust_system_ca_for_stripe()
+
 # ---------------------------------------------------------------- JWT ----
 _PRIVATE_KEY = ec.generate_private_key(ec.SECP256R1())
 _PUBLIC_KEY = _PRIVATE_KEY.public_key()
