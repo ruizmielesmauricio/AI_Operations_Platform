@@ -40,7 +40,7 @@ class _FakeProvider:
 
     def __call__(self, *, messages, response_format=None, max_tokens=500, temperature=0.2):
         self.calls.append(messages)
-        system = messages[0]["content"]
+        system = client.message_text(messages[0])
         if "intent classifier" in system:
             return self.classify
         if self.explain_error:
@@ -74,7 +74,7 @@ def test_how_to_question_is_routed_to_the_support_lane_and_grounded(db_session, 
     assert result.handoff_available is True
     # Cost bound: exactly classify + explain.
     assert len(provider.calls) == 2
-    explain_system = provider.calls[1][0]["content"]
+    explain_system = client.message_text(provider.calls[1][0])
     assert "ORLA Support Constitution" in explain_system
     assert "HELP PASSAGES:" in explain_system and _STOCK_PASSAGE in explain_system
     # No business data ever reaches the support prompt.
@@ -87,7 +87,7 @@ def test_business_data_question_keeps_the_deterministic_business_lane(db_session
     def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
         if response_format is not None:
             return _classify("financial_performance")
-        assert "ORLA Support Constitution" not in messages[0]["content"]
+        assert "ORLA Support Constitution" not in client.message_text(messages[0])
         return _canned("Your gross margin coverage is 0% right now — no cost data has been recorded yet.")
 
     monkeypatch.setattr(client, "chat_completion", _fake)
@@ -239,7 +239,7 @@ def test_short_follow_up_reuses_the_previous_help_question_for_retrieval(db_sess
         previous_question="How do I import my purchases file?", previous_answer="...", previous_intent="product_help",
     )
 
-    explain_system = provider.calls[1][0]["content"]
+    explain_system = client.message_text(provider.calls[1][0])
     assert "undo-and-reimport#" in explain_system
 
 

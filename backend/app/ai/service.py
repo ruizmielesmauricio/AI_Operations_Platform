@@ -156,6 +156,20 @@ _SAFE_FALLBACK = (
 )
 _UNAVAILABLE_MESSAGE = "ORLA is temporarily unavailable — your dashboard and reports are unaffected. Try again shortly."
 _USAGE_LIMIT_MESSAGE = "This business has reached its question limit with ORLA for today. Try again tomorrow."
+_MONTHLY_LIMIT_MESSAGE = (
+    "This business has used its Ask ORLA allowance for this month. Your dashboard and reports are unaffected — "
+    "Ask ORLA is available again from {resumes}."
+)
+
+
+def _calendar_month(business_timezone: str, now: datetime) -> tuple[datetime, date]:
+    """(UTC start of the current calendar month in the business's timezone,
+    first day of next month as a local date)."""
+    tz = ZoneInfo(business_timezone)
+    local_today = now.astimezone(tz).date()
+    first = local_today.replace(day=1)
+    next_first = (first + timedelta(days=32)).replace(day=1)
+    return datetime.combine(first, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc), next_first
 _UNGROUNDED_FALLBACK = "I couldn't confidently answer that from your actual data — try rephrasing, or check the dashboard directly."
 
 
@@ -327,6 +341,19 @@ def answer_question(
     if business is None:
         return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
+    # Monthly AI cost cap (ORLA-91): a hard ceiling on what one shop's
+    # questions can cost per calendar month in its own timezone, from the
+    # real per-call cost already logged in ai_requests. Only Ask ORLA pauses
+    # — dashboards, reports and the free definition answers above don't go
+    # through here.
+    month_start, next_month = _calendar_month(business.timezone, resolved_now)
+    spent = request_repo.sum_cost_since(business_id, since=month_start)
+    if spent >= Decimal(str(settings.ai_monthly_cost_cap_eur)):
+        return AnswerResult(
+            answer=_MONTHLY_LIMIT_MESSAGE.format(resumes=f"{next_month.day} {next_month:%B}"),
+            intent="usage_limit_reached", grounded=True,
+        )
+
     # A question naming one of the account's own branches by name always
     # wins, even under all_branches — see _detect_named_business's own
     # docstring. Only ever matches a business the caller is actually a
@@ -441,6 +468,7 @@ def answer_question(
         )
         for item in classify_list
     ]
+    parts = [replace(p, context=_without_internal_fields(p.context)) if p.context is not None else p for p in parts]
     all_intents = tuple(p.intent for p in parts)
     ai_parts = [(i, p) for i, p in enumerate(parts) if p.resolved_answer is None]
 
@@ -2164,6 +2192,14 @@ def _trim_findings(findings: dict) -> dict:
     # arbitrary slice.
     _cap_rows(trimmed, "findings")
     _cap_rows(trimmed, "recommendations")
+    # Cost cut (ORLA-91): each finding's evidence is repeated in full by its
+    # recommendation. Findings keep their type, severity and plain-language
+    # message (which states the key figure); recommendations keep the
+    # evidence the answer cites.
+    trimmed["findings"] = [
+        {k: v for k, v in f.items() if k in ("type", "severity", "message")} if isinstance(f, dict) else f
+        for f in trimmed["findings"]
+    ]
     return trimmed
 
 
@@ -2201,10 +2237,55 @@ def _plain_category_names(context: dict) -> dict:
     return renamed
 
 
+_UUID_VALUE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Internal bookkeeping the model never needs to explain anything.
+_INTERNAL_KEYS = frozenset({"rule_id", "rule_version"})
+
+
+def _without_internal_fields(value: Any) -> Any:
+    """Cost cut (ORLA-91): every id (product_id, category_id, business_id,
+    purchase_id, ...) and rule bookkeeping is removed from what the explain
+    call is sent. A UUID costs ~20-25 tokens and the model never states one —
+    the latest-report prompt carried 99 of them, purchase history 90."""
+    if isinstance(value, dict):
+        return {
+            k: _without_internal_fields(v)
+            for k, v in value.items()
+            if k not in _INTERNAL_KEYS
+            and not ((k == "id" or k.endswith("_id")) and (v is None or (isinstance(v, str) and _UUID_VALUE.match(v))))
+        }
+    if isinstance(value, list):
+        return [_without_internal_fields(v) for v in value]
+    return value
+
+
+# The stored report's sub-lists are capped harder than a direct question's
+# (_MAX_CONTEXT_ROWS): a report question is a summary, and the report payload
+# carried ~8,800 tokens (ORLA-91) — the single most expensive prompt.
+_REPORT_MAX_ROWS = 5
+
+
+def _cap_report_lists(value: Any) -> Any:
+    if isinstance(value, dict):
+        capped: dict = {}
+        for key, item in value.items():
+            if isinstance(item, list) and len(item) > _REPORT_MAX_ROWS and all(isinstance(i, dict) for i in item):
+                capped[f"{key}_shown_of_total"] = f"{_REPORT_MAX_ROWS} of {len(item)}"
+                capped[key] = [_cap_report_lists(i) for i in item[:_REPORT_MAX_ROWS]]
+            elif key not in capped:
+                capped[key] = _cap_report_lists(item)
+        return capped
+    if isinstance(value, list):
+        return [_cap_report_lists(v) for v in value]
+    return value
+
+
 def _trim_report_payload(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
         return payload
-    trimmed = dict(payload)
+    # Capped first, against the stored lists' real lengths, so each
+    # "_shown_of_total" note states the true total.
+    trimmed = _cap_report_lists(payload)
     if isinstance(trimmed.get("forecast"), dict):
         trimmed["forecast"] = _trim_forecast(trimmed["forecast"])
     if isinstance(trimmed.get("retail_operations"), dict):
@@ -2225,10 +2306,7 @@ def _trim_report_payload(payload: dict | None) -> dict | None:
 # real year without being told what "today" actually is.
 _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "You are an intent classifier for a small business's operations assistant. "
-    "Today's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
-    'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
-    "on or before today, unless a year is stated; \"last Tuesday\"/\"yesterday\" resolve the same way). "
-    "The previous seven days were: {recent_days}.\n"
+    "Today's date and the previous seven days are given at the end of these instructions.\n"
     "Read the user's question and respond with ONLY a JSON object (no prose, no markdown fences) of the exact "
     'shape {{"intents": [ ... ]}} — a list of 1 to 3 objects, one per distinct question actually being asked. '
     "Almost every question is a single ask — return a one-element list unless the question genuinely contains "
@@ -2338,6 +2416,16 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "Only ignore the previous exchange, and classify on the new "
     "question's own merits, when it clearly stands alone or changes topic."
 )
+# Everything above is identical on every call; the date part below changes
+# daily. Static first, changing last, so providers can cache the long
+# static prefix (ORLA-91 cost work) — see app/ai/client.py::system_message.
+_CLASSIFY_SYSTEM_PROMPT_STATIC = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format()
+_CLASSIFY_DATE_TEMPLATE = (
+    "\n\nToday's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
+    'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
+    'on or before today, unless a year is stated; "last Tuesday"/"yesterday" resolve the same way). '
+    "The previous seven days were: {recent_days}."
+)
 
 
 _CLASSIFY_JSON_REMINDER = (
@@ -2370,10 +2458,10 @@ def _classify_intent(
     _parse_intent_json for how the classify call's "intents" array gets
     validated into this."""
     today = _today_in_timezone(business_timezone, now)
-    system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(
+    date_text = _CLASSIFY_DATE_TEMPLATE.format(
         today=today.isoformat(), weekday=today.strftime("%A"), recent_days=_recent_days_text(today)
     )
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [client.system_message(_CLASSIFY_SYSTEM_PROMPT_STATIC, date_text)]
     if previous_question and previous_answer:
         # Last-exchange-only memory, given as real prior turns rather than
         # spliced into the system prompt as text — the standard shape for
@@ -2425,7 +2513,7 @@ def _classify_intent(
         # one call (OpenRouter's reasoning-effort control is ignored by
         # this model — tested live).
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=get_settings().ai_classify_max_tokens,
+            messages=messages, response_format={"type": "json_object"}, max_tokens=client.ai_setting("classify_max_tokens"),
             temperature=0.0,
         )
     except AIProviderError as exc:
@@ -2723,8 +2811,11 @@ def _generate_answer(
         "otherwise do not claim to have a further per-branch/location breakdown.)\n"
     )
     multi_part_note = _MULTI_PART_INSTRUCTION if multi_part else ""
-    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + scope_note + multi_part_note + json.dumps(context, default=str)
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        client.system_message(
+            _EXPLAIN_SYSTEM_PROMPT_PREFIX, scope_note + multi_part_note + json.dumps(context, default=str)
+        )
+    ]
     if previous_question and previous_answer:
         # Same last-exchange-only shape as _classify_intent above, given
         # as real prior turns — full previous_answer here, not truncated,
@@ -2754,10 +2845,9 @@ def _generate_answer(
         # mid-word. Now settings (ORLA-91): 800 left ERNIE 5.5 Flash no room
         # after its reasoning — empty or cut-off answers on 12 of 107
         # eval questions.
-        settings = get_settings()
         response = client.chat_completion(
             messages=messages,
-            max_tokens=settings.ai_multi_part_explain_max_tokens if multi_part else settings.ai_explain_max_tokens,
+            max_tokens=client.ai_setting("multi_part_explain_max_tokens" if multi_part else "explain_max_tokens"),
             temperature=0.2,
         )
     except AIProviderError as exc:

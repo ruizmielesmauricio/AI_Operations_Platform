@@ -83,7 +83,7 @@ def _install_hooks(*, pace_seconds: float, log_usage: bool) -> None:
         wait = _LAST_CALL_AT[0] + pace_seconds - time.monotonic()
         if wait > 0:
             time.sleep(wait)
-        system = (kwargs.get("messages") or [{}])[0].get("content", "")
+        system = client.message_text((kwargs.get("messages") or [{}])[0])
         kind = "classify" if system.startswith("You are an intent classifier") else (
             "support" if "HELP PASSAGES" in system else "explain"
         )
@@ -103,6 +103,8 @@ def _install_hooks(*, pace_seconds: float, log_usage: bool) -> None:
         REC.calls.append({
             "kind": kind, "model": response.get("model"), "content": content,
             "tokens_in": usage.get("prompt_tokens"), "tokens_out": usage.get("completion_tokens"),
+            "tokens_cached": (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+            "tokens_reasoning": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
             "cost": usage.get("cost"), "seconds": round(time.monotonic() - started, 1),
         })
         return response
@@ -142,6 +144,7 @@ def _install_hooks(*, pace_seconds: float, log_usage: bool) -> None:
     if not log_usage:
         AIRequestRepository.create = lambda self, **kwargs: None  # type: ignore[method-assign]
         AIRequestRepository.count_today_for_business = lambda self, *a, **k: 0  # type: ignore[method-assign]
+        AIRequestRepository.sum_cost_since = lambda self, *a, **k: Decimal("0")  # type: ignore[method-assign]
 
 
 def _grounding_universe(intents: tuple[str, ...]) -> dict:

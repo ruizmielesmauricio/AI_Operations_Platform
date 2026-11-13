@@ -218,7 +218,7 @@ def answer_from_help(
         {"id": p.passage_id, "article": p.article_title, "section": p.heading, "text": passages_by_id[p.passage_id]}
         for p in passages
     ]
-    messages = [{"role": "system", "content": f"{_SYSTEM_PROMPT}\n\nHELP PASSAGES:\n{json.dumps(payload)}"}]
+    messages = [client.system_message(_SYSTEM_PROMPT, f"\n\nHELP PASSAGES:\n{json.dumps(payload)}")]
     if previous_intent == INTENT and previous_question and previous_answer:
         messages.append({"role": "user", "content": previous_question})
         messages.append({"role": "assistant", "content": previous_answer})
@@ -232,7 +232,7 @@ def answer_from_help(
         # used ~480 reasoning + ~70 visible tokens; 1400 leaves room for a
         # longer answer without silently truncating to no content.
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=get_settings().ai_support_max_tokens,
+            messages=messages, response_format={"type": "json_object"}, max_tokens=client.ai_setting("support_max_tokens"),
             temperature=0.0,
         )
     except AIProviderError as exc:

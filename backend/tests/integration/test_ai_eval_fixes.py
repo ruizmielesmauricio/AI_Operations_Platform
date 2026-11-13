@@ -41,7 +41,7 @@ def _capture_explain_context(monkeypatch, classify: dict, answer: str) -> list[d
     def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
         if response_format is not None:
             return _canned(json.dumps({"intents": [classify]}))
-        contexts.append(json.loads(messages[0]["content"].split("DATA:\n", 1)[1].split("\n", 1)[1]))
+        contexts.append(json.loads(client.message_text(messages[0]).split("DATA:\n", 1)[1].split("\n", 1)[1]))
         return _canned(answer)
 
     monkeypatch.setattr(client, "chat_completion", _fake)
@@ -218,7 +218,7 @@ def test_prose_classify_reply_to_a_month_follow_up_recovers_last_month(db_sessio
     def _fake(*, messages, response_format=None, max_tokens=500, temperature=0.2):
         if response_format is not None:
             return _canned("Your revenue for the month before was 32,854.17.")  # prose, not JSON
-        contexts.append(json.loads(messages[0]["content"].split("DATA:\n", 1)[1].split("\n", 1)[1]))
+        contexts.append(json.loads(client.message_text(messages[0]).split("DATA:\n", 1)[1].split("\n", 1)[1]))
         return _canned("The comparison period had 0.00.")
 
     monkeypatch.setattr(client, "chat_completion", _fake)
@@ -333,3 +333,45 @@ def test_a_reference_found_nowhere_keeps_the_classified_lookup(db_session, busin
 
     assert result.intent == "repair_lookup"
     assert "couldn't find anything" in result.answer
+
+
+def test_monthly_cost_cap_pauses_ask_orla(db_session, business_id, monkeypatch):
+    from app.repositories.ai_request import AIRequestRepository
+    from app.settings.config import get_settings
+
+    cap = Decimal(str(get_settings().ai_monthly_cost_cap_eur))
+    repo = AIRequestRepository(db_session)
+    repo.create(business_id=business_id, user_id="user-1", lane="business_qa", provider="openrouter", model="m", cost_eur=cap)
+
+    def _fail(**kwargs):
+        raise AssertionError("no AI call once the monthly cap is reached")
+
+    monkeypatch.setattr(client, "chat_completion", _fail)
+    now = datetime.now(timezone.utc)
+    result = answer_question(db_session, business_id=business_id, user_id="user-1", question="How's my revenue?", now=now)
+
+    assert result.intent == "usage_limit_reached"
+    assert "allowance for this month" in result.answer and "dashboard and reports are unaffected" in result.answer
+    # The free definition answers don't spend anything, so they keep working.
+    free = answer_question(db_session, business_id=business_id, user_id="user-1", question="What does gross margin mean?", now=now)
+    assert free.intent == "metric_definition"
+
+
+def test_spend_below_the_cap_or_from_last_month_does_not_pause(db_session, business_id, monkeypatch):
+    from app.models.ai_request import AIRequest
+    from app.settings.config import get_settings
+
+    cap = Decimal(str(get_settings().ai_monthly_cost_cap_eur))
+    now = datetime(2026, 11, 13, 12, tzinfo=timezone.utc)
+    db_session.add_all([
+        AIRequest(business_id=business_id, user_id="u", lane="business_qa", provider="openrouter", model="m",
+                  cost_eur=cap, created_at=datetime(2026, 10, 31, 12, tzinfo=timezone.utc)),
+        AIRequest(business_id=business_id, user_id="u", lane="business_qa", provider="openrouter", model="m",
+                  cost_eur=cap - Decimal("0.01"), created_at=datetime(2026, 11, 2, tzinfo=timezone.utc)),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(client, "chat_completion", lambda **kwargs: _canned(json.dumps({"intents": [{"intent": "out_of_scope"}]})))
+
+    result = answer_question(db_session, business_id=business_id, user_id="user-1", question="How's my revenue?", now=now)
+
+    assert result.intent != "usage_limit_reached"
