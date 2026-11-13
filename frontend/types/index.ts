@@ -635,6 +635,47 @@ export interface ChatResponse {
   // for a compound one. Echo this back as the next request's
   // previous_intents so a follow-up can recover against any part of it.
   intents: string[];
+  // Support lane (PR-5.7): help articles the answer is based on — slug/
+  // title come from the backend's approved knowledge base, never model
+  // text — and whether to offer the "Contact support" handoff.
+  help_articles: HelpArticleLink[];
+  handoff_available: boolean;
+  // True when `answer` came from the help content; false for a refusal
+  // that only suggests related articles and the handoff.
+  help_answered: boolean;
+}
+
+// --- Help centre and support handoff (PR-5.7, E26/E27) ----------------------
+
+export interface HelpArticleLink {
+  slug: string;
+  title: string;
+}
+
+export interface HelpArticleSummary extends HelpArticleLink {
+  category: string;
+  order: number;
+  summary: string;
+  updated: string;
+  // Only present on search results.
+  score?: number;
+}
+
+export interface HelpArticle extends HelpArticleSummary {
+  version: number;
+  body: string;
+  sections: { heading: string; anchor: string }[];
+}
+
+export interface SupportRequest {
+  id: string;
+  question: string;
+  source: "chat" | "help_page";
+  status: "open" | "resolved";
+  requester_email: string;
+  article_slugs: string[] | null;
+  created_at: string;
+  resolved_at: string | null;
 }
 
 // --- Supplier tracking (Gap 4) -------------------------------------------
@@ -764,7 +805,8 @@ export type NotificationCategory =
   | "team"
   | "billing"
   | "branches"
-  | "security_account";
+  | "security_account"
+  | "support";
 
 export type NotificationSeverity = "info" | "success" | "warning" | "critical";
 

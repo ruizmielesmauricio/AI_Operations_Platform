@@ -1,10 +1,10 @@
 # 12_Decision_Register.md
 
-**Version:** 1.11
+**Version:** 1.12
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 12/11/2026
+**Last Updated:** 13/11/2026
 
 ---
 
@@ -143,6 +143,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-025 | Free pilot access is an operator-granted time window on the business (`Business.pilot_access_until`), checked alongside the Stripe subscription; granted only via `scripts/pilot_access.py`, never through an HTTP route; covers branches and staff seats — see `docs/decisions/ADR-025-free-pilot-access.md` | Accepted | new |
 | ADR-026 | Business types live in one backend registry (`backend/app/templates/`) with capability flags (e.g. `supports_repairs`); core code checks capabilities, never industry keys; the frontend loads the list from `GET /business-templates` — see `docs/decisions/ADR-026-business-type-registry.md` | Accepted | new |
 | ADR-027 | Calculation integrity rules: sale-line cost falls back to the product's known cost; VAT-inclusive and VAT-exclusive prices both valid; negative derived stock counts as zero on hand for reorders and raises a `negative_stock` finding; forecast demand never negative; returns-only products are not "missing cost" — see `docs/decisions/ADR-027-calculation-integrity-rules.md` | Accepted | new |
+| ADR-028 | The conversational agent's support lane (PR-5.7) answers only from versioned help articles in `backend/app/support/content/`, retrieved by a deterministic lexical ranker (no embeddings), explained in one JSON explain call and verified afterwards (real citations, numbers and quoted UI labels present in the cited passages, ≥ 75% word support) — otherwise it refuses and offers "Contact support", which records a tenant-scoped `support_requests` row, an audit event and an owner-only notification; operator email is optional and added later via `SUPPORT_INBOX_EMAIL` — see `docs/decisions/ADR-028-support-lane-and-help-content.md` | Accepted | new |
 
 ---
 
@@ -227,3 +228,4 @@ What evidence would cause this decision to be revisited?
 | 1.9 | 08/08/2026 | Added BD-007: the additional-branch/location add-on subscription price, €30/month per branch, billed as its own fully separate Stripe subscription (not a quantity line item on the primary €80/month subscription) — implemented and live in Stripe test mode (`11_Development_Roadmap.md` v1.37). Added a BD-007 Consistency Status note mirroring BD-005's, stating the two prices are additive, not a combined tier. |
 | 1.10 | 13/08/2026 | Added ADR-024 (Accepted): close the password-reset session-revocation gap via Supabase's native `auth.signOut({scope: "others"})` client SDK call instead of a backend Admin API/service-role-key fallback — see `11_Development_Roadmap.md` and `docs/decisions/ADR-024-supabase-session-security.md` for the full reasoning. |
 | 1.11 | 12/11/2026 | Recorded the decisions from the 12/11/2026 local end-to-end walkthrough: BD-008 (pilot testers do not pay; legal/provider work deferred until ORLA works end to end locally), PD-011 (19 business types across retail and food & drink), PD-012 (on-demand "Generate reports now"), ADR-025 (operator-granted free pilot access), ADR-026 (business-type registry with capability flags), ADR-027 (calculation integrity rules), ED-010 (independent recomputation check for calculation changes). Execution tracking is the Jira project ORLA (not COP). |
+| 1.12 | 13/11/2026 | Added ADR-028 (Accepted, implemented): the support lane and help knowledge base for PR-5.7 (roadmap E26/E27, Jira ORLA-67) — versioned help articles, deterministic retrieval, post-generation grounding checks, and a recorded "Contact support" handoff. |

@@ -33,6 +33,7 @@ CATEGORY_TEAM = "team"
 CATEGORY_BILLING = "billing"
 CATEGORY_BRANCHES = "branches"
 CATEGORY_SECURITY_ACCOUNT = "security_account"
+CATEGORY_SUPPORT = "support"
 
 SEVERITY_INFO = "info"
 SEVERITY_SUCCESS = "success"
@@ -779,6 +780,35 @@ def notify_orla_insights(
 # CATEGORY_BRANCHES below. Stock/data_uploads/reports/orla_insights stay
 # unrestricted (None) — those are the operational notifications staff
 # need for daily work.
+
+
+_SUPPORT_QUESTION_PREVIEW_CHARS = 200
+
+
+def notify_support_request_created(
+    db: Session, *, business_id: uuid.UUID, request_id: uuid.UUID, requester_label: str, question: str
+) -> None:
+    """Owner-only (PR-5.7): the shop owner sees every question their team
+    sent to ORLA support. One row per request — never grouped, each is a
+    distinct question. The question preview is the customer's own text,
+    shown as plain text, never as markup."""
+    preview = question if len(question) <= _SUPPORT_QUESTION_PREVIEW_CHARS else (
+        question[: _SUPPORT_QUESTION_PREVIEW_CHARS - 1].rstrip() + "…"
+    )
+    notify(
+        db,
+        business_id=business_id,
+        category=CATEGORY_SUPPORT,
+        type_key="support_request_created",
+        severity=SEVERITY_INFO,
+        title="Question sent to ORLA support",
+        body=f"{requester_label} asked the ORLA team: “{preview}” The team will follow up by email.",
+        action_label="View support requests",
+        action_url=f"/help?business={business_id}#support-requests",
+        related_entity_type="support_request",
+        related_entity_id=request_id,
+        visible_to_role="owner",
+    )
 
 
 def notify_employee_added(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, full_name: str) -> None:

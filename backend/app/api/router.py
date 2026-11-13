@@ -11,6 +11,7 @@ from app.api import (
     businesses,
     employee_seats,
     health,
+    help,
     imports,
     invoices,
     notifications,
@@ -18,6 +19,7 @@ from app.api import (
     products,
     reports,
     search,
+    support,
     suppliers,
     transactions,
     uploads,
@@ -45,3 +47,5 @@ api_router.include_router(products.router)
 api_router.include_router(suppliers.router)
 api_router.include_router(transactions.router)
 api_router.include_router(search.router)
+api_router.include_router(help.router)
+api_router.include_router(support.router)

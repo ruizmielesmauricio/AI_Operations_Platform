@@ -36,6 +36,7 @@ const CATEGORY_LABELS: Record<NotificationCategory, string> = {
   billing: "Billing",
   branches: "Branches",
   security_account: "Security & Account",
+  support: "Support",
 };
 
 const SEVERITY_LABELS: Record<string, string> = {
@@ -51,7 +52,7 @@ const SEVERITY_LABELS: Record<string, string> = {
 // backend already blocks these rows for staff; this is purely UI
 // polish so staff never sees a filter option that could only ever
 // return nothing for them.
-const OWNER_ONLY_CATEGORIES: NotificationCategory[] = ["team", "billing", "branches", "security_account"];
+const OWNER_ONLY_CATEGORIES: NotificationCategory[] = ["team", "billing", "branches", "security_account", "support"];
 
 function timeAgo(value: string): string {
   return formatDateTime(value);

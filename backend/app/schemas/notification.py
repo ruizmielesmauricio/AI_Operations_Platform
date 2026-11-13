@@ -12,7 +12,8 @@ from pydantic import BaseModel
 # query param before the route body ever runs) instead of silently
 # matching zero rows.
 NotificationCategoryFilter = Literal[
-    "stock", "data_uploads", "reports", "orla_insights", "team", "billing", "branches", "security_account"
+    "stock", "data_uploads", "reports", "orla_insights", "team", "billing", "branches", "security_account",
+    "support",
 ]
 NotificationSeverityFilter = Literal["info", "success", "warning", "critical"]
 NotificationStatusFilter = Literal["unread", "read", "dismissed"]
