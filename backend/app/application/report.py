@@ -39,6 +39,7 @@ from app.schemas.analytics import (
     StockCoverOut,
     WorkshopPerformanceOut,
 )
+from app.templates import template_supports_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ _CENTS = Decimal("0.01")
 
 
 def generate_report(
-    db: Session, *, business_id: uuid.UUID, report_type: str, now: datetime | None = None
+    db: Session, *, business_id: uuid.UUID, report_type: str, now: datetime | None = None, refresh: bool = False
 ) -> Report:
     """Idempotent (PR-8.8): if a completed report already exists for this
     (business, report_type, period), returns it unchanged rather than
@@ -72,7 +73,11 @@ def generate_report(
 
     report_repo = ReportRepository(db)
     report = report_repo.get_by_period(business_id, report_type, period.start)
-    if report is not None and report.status == "completed":
+    # refresh=True (on-demand "Generate report now" only — the scheduler
+    # never passes it) rebuilds a completed report in place: same row, so
+    # still exactly one report per period, with today's data and a fresh
+    # 7-day availability window.
+    if report is not None and report.status == "completed" and not refresh:
         return report
     if report is None:
         report = report_repo.create_pending(
@@ -114,7 +119,7 @@ def _assemble_payload(
     # Pharmacy near-expiry needs an inventory_lots writer that doesn't
     # exist yet (ADR-022) — deliberately not attempted here.
     workshop = None
-    if business.template == "bicycle_shop":
+    if template_supports_repairs(business.template):
         workshop = get_workshop_performance(db, business_id=business.id, start_date=start_date, end_date=end_date)
 
     sale_rows = SaleRepository(db).list_amounts_in_range(business.id, financial.period.start, financial.period.end)
@@ -180,3 +185,40 @@ def _assemble_payload(
             WorkshopPerformanceOut.model_validate(workshop).model_dump(mode="json") if workshop is not None else None
         ),
     }
+
+
+ON_DEMAND_REPORT_TYPES = ("weekly", "monthly")
+
+
+def generate_latest_reports_now(
+    db: Session, *, business_id: uuid.UUID, now: datetime | None = None
+) -> list[Report]:
+    """On-demand "Generate report now" (found live: a new business saw an
+    empty Reports page until the scheduler's next 15-minute tick). Builds
+    the latest completed weekly and monthly reports from current data —
+    the same generator the scheduler uses, with refresh=True so data
+    uploaded since (or an expired report) is picked up, never a duplicate.
+    Sends the same "report ready" notifications the scheduler sends."""
+    from app.application.notifications import notify_orla_insights, notify_report_ready
+
+    business = db.get(Business, business_id)
+    if business is None:
+        raise ValueError(f"Business {business_id} not found")
+    resolved_now = now or datetime.now(timezone.utc)
+    reports: list[Report] = []
+    for report_type in ON_DEMAND_REPORT_TYPES:
+        report = generate_report(db, business_id=business_id, report_type=report_type, now=resolved_now, refresh=True)
+        reports.append(report)
+        if report.status != "completed":
+            continue
+        start_date, end_date = compute_report_period(business.timezone, report_type, now=resolved_now)
+        notify_report_ready(
+            db, business_id=business_id, report_id=report.id, report_type=report_type,
+            period_start=start_date, period_end=end_date,
+        )
+        notify_orla_insights(
+            db, business_id=business_id, report_id=report.id, report_type=report_type,
+            recommendation_count=len((report.payload or {}).get("findings", {}).get("recommendations", [])),
+        )
+        db.commit()
+    return reports

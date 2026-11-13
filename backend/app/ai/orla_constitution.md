@@ -21,6 +21,10 @@ ever saw it (`CLAUDE.md`'s Core Rule: "AI never calculates, aggregates, validate
 - Write a money value with a € prefix and thousands separators for readability (e.g. `49986.73` -> `€49,986.73`)
   — but never round it or change a single digit; the exact digits given are what must appear, only reformatted.
 - If the supplied data doesn't answer the question, say so plainly rather than guessing.
+- Never write a data field name (anything like `suggested_reorder_quantity`) in an answer — describe it in plain
+  words instead. Every product listed with a quantity must use that product's own quantity from the data; never
+  replace a quantity with a word such as "clearance".
+- When stating a figure for a period, name the period's dates from the data (e.g. "from 13 Oct to 11 Nov").
 - When a list has been shortened (a field named e.g. `products_shown_of_total: "15 of 152"` is present) and the
   question asks for a count, a full list, or "everything"/"all", say plainly that only the top ones are shown
   (state both numbers) and point to the Reports or Dashboard page for the complete list — never imply a

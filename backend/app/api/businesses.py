@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.application.employee_seats import EmployeeSeatNotFound, get_own_employee_seat, update_own_employee_profile
 from app.application.members import list_business_members
+from app.billing.pilot import pilot_access_active
 from app.billing.service import cancel_subscription
 from app.geocoding.service import suggest_addresses
 from app.imports import r2_client
@@ -32,6 +33,7 @@ from app.schemas.employee_seat import EmployeeSeatOut, SelfProfileUpdate
 from app.schemas.member import MemberOut
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
+from app.templates import template_label, template_supports_repairs
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
@@ -60,6 +62,8 @@ def _to_business_out(business: Business, *, role: str) -> BusinessOut:
         id=business.id,
         name=business.name,
         template=business.template,
+        template_label=template_label(business.template),
+        supports_repairs=template_supports_repairs(business.template),
         timezone=business.timezone,
         role=role,
         parent_business_id=business.parent_business_id,
@@ -73,6 +77,7 @@ def _to_business_out(business: Business, *, role: str) -> BusinessOut:
         postal_code=business.postal_code,
         country=business.country,
         has_logo=business.logo_content_type is not None,
+        pilot_access_until=business.pilot_access_until,
         updated_at=business.updated_at,
         deleted_at=business.deleted_at,
     )
@@ -368,6 +373,22 @@ def create_branch(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can add a branch"
         ) from exc
+    # A branch added during a free pilot is free for the same window — the
+    # frontend sees pilot_access_until on the response and skips checkout.
+    parent = db.get(Business, business_id)
+    if pilot_access_active(parent):
+        branch.pilot_access_until = parent.pilot_access_until
+        record_audit_event(
+            db,
+            business_id=branch.id,
+            user_id=membership.user_id,
+            action="pilot_access_inherited",
+            target_type="business",
+            target_id=str(branch.id),
+            metadata={"parent_business_id": str(business_id)},
+        )
+        db.commit()
+        db.refresh(branch)
     return _to_business_out(branch, role="owner")
 
 

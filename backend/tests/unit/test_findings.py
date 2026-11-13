@@ -326,3 +326,25 @@ def test_resolve_low_stock_threshold_falls_back_to_category():
 
 def test_resolve_low_stock_threshold_falls_back_to_default_when_both_unset():
     assert resolve_low_stock_threshold(None, None) == DEFAULT_LOW_STOCK_THRESHOLD_DAYS
+
+
+def test_negative_stock_raises_one_data_quality_finding():
+    from app.analytics.findings import evaluate_negative_stock
+
+    rows = [
+        _stock_cover_row(uuid.uuid4(), name="Inner Tube", stock_on_hand=-499, cover_days=Decimal("0")),
+        _stock_cover_row(uuid.uuid4(), name="Bike Wash", stock_on_hand=-10, cover_days=Decimal("0")),
+        _stock_cover_row(uuid.uuid4(), name="Helmet", stock_on_hand=5, cover_days=Decimal("3")),
+    ]
+    findings = evaluate_negative_stock(rows)
+
+    assert len(findings) == 1
+    assert findings[0].type == "negative_stock"
+    assert findings[0].evidence["product_count"] == 2
+    assert "Inner Tube" in findings[0].message and "Helmet" not in findings[0].message
+
+
+def test_no_negative_stock_means_no_finding():
+    from app.analytics.findings import evaluate_negative_stock
+
+    assert evaluate_negative_stock([_stock_cover_row(stock_on_hand=0, cover_days=Decimal("0"))]) == []

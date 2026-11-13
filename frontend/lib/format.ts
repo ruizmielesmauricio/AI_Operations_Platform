@@ -8,7 +8,31 @@ import type { GrossMargin, WorkshopMargin } from "@/types";
 
 export function formatMoney(value: string): string {
   const n = Number(value);
-  return `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `€${n.toLocaleString("en-IE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Irish/EU-style dates ("2 Nov 2026") everywhere — the browser default was
+// US month/day order (11/2/2026), easy to misread for an Irish business.
+const DATE_LOCALE = "en-IE";
+
+export function formatDate(value: string | Date): string {
+  return new Date(value).toLocaleDateString(DATE_LOCALE, { day: "numeric", month: "short", year: "numeric" });
+}
+
+export function formatDateTime(value: string | Date): string {
+  return new Date(value).toLocaleString(DATE_LOCALE, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// A report/period end is stored exclusive (the first instant AFTER the
+// period); shown to people it must be the last day inside it.
+export function formatPeriodEnd(exclusiveEnd: string): string {
+  return formatDate(new Date(new Date(exclusiveEnd).getTime() - 1));
 }
 
 export function formatPct(value: string | null): string {
@@ -52,6 +76,14 @@ export function grossMarginDisplay(gm: GrossMargin, revenueCurrent: string): { v
     return {
       value: formatPct(gm.net_gross_margin_pct),
       note: `${formatMoney(gm.net_gross_profit)} kept as gross profit (net of tax) after the cost of goods sold, out of ${formatMoney(revenueCurrent)} total revenue — based on ${formatPct(gm.tax_data_coverage_pct)} of cost-known revenue with confirmed tax figures`,
+    };
+  }
+  if (gm.gross_margin_pct === null) {
+    // Previously rendered "— — €0.00 kept as gross profit … based on 0.0%":
+    // a dash, then a dash separator, then a zero that reads like a result.
+    return {
+      value: "Not available",
+      note: "no cost prices recorded for this period's sales — upload a stock count or purchases file with unit costs",
     };
   }
   return {

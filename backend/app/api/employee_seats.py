@@ -13,6 +13,9 @@ from app.application.employee_seats import (
     MAX_EMPLOYEE_SEATS_PER_BUSINESS,
     add_employee,
     delete_employee,
+    invite_email_was_sent,
+    invite_url_for_email,
+    invite_url_for_seat,
     update_employee_profile,
     resend_employee_invite,
 )
@@ -24,6 +27,7 @@ from app.schemas.employee_seat import (
     EmployeeSeatCreateResponse,
     EmployeeSeatOut,
     EmployeeSeatUpdate,
+    InviteResult,
 )
 from app.security.auth import AuthenticatedUser, get_current_user_synced
 from app.security.tenant import get_current_membership
@@ -44,7 +48,7 @@ def list_employee_seats(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can view employee seats"
         )
     rows = EmployeeSeatRepository(db).list_for_business(membership.business_id)
-    return [EmployeeSeatOut.from_seat(r) for r in rows]
+    return [EmployeeSeatOut.from_seat(r, invite_url=invite_url_for_seat(r)) for r in rows]
 
 
 @router.post("", response_model=EmployeeSeatCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -90,16 +94,23 @@ def create_employee_seat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Employee seats aren't available yet — billing isn't fully configured.",
         ) from exc
-    return EmployeeSeatCreateResponse(employee_seat=EmployeeSeatOut.from_seat(seat), checkout_url=checkout_url)
+    return EmployeeSeatCreateResponse(
+        employee_seat=EmployeeSeatOut.from_seat(seat, invite_url=invite_url_for_seat(seat)),
+        checkout_url=checkout_url,
+        invite_email_sent=invite_email_was_sent(db, seat),
+    )
 
 
-@router.post("/{seat_id}/resend-invite", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{seat_id}/resend-invite", response_model=InviteResult)
 def resend_invite(
     seat_id: uuid.UUID,
     membership: Membership = Depends(get_current_membership),
     current_user: AuthenticatedUser = Depends(get_current_user_synced),
     db: Session = Depends(get_db),
-) -> None:
+) -> InviteResult:
+    # Always returns the sign-up link, whether or not the email went out —
+    # found live: with email not configured this used to answer 503 and the
+    # page showed nothing, leaving the owner no way to invite anyone.
     if membership.role != "owner":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only the shop's owner can send an employee invitation"
@@ -118,11 +129,18 @@ def resend_invite(
             status_code=status.HTTP_409_CONFLICT,
             detail="This employee has already registered or has been removed, so no invitation can be sent.",
         ) from exc
-    if not sent:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The invitation could not be sent right now. Check email delivery is configured and try again.",
-        )
+    seat = EmployeeSeatRepository(db).get_for_business(seat_id, membership.business_id)
+    invite_url = invite_url_for_email(seat.email)
+    if sent:
+        return InviteResult(email_sent=True, invite_url=invite_url, message=f"Invitation emailed to {seat.email}.")
+    return InviteResult(
+        email_sent=False,
+        invite_url=invite_url,
+        message=(
+            "The invitation email couldn't be sent (email delivery isn't set up yet). "
+            f"Copy the sign-up link and send it to {seat.email} yourself."
+        ),
+    )
 
 
 @router.patch("/{seat_id}", response_model=EmployeeSeatOut)

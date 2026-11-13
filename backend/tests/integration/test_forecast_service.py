@@ -112,9 +112,10 @@ def test_forecast_with_negative_derived_stock_reports_zero_cover_not_a_negative_
     product_forecast = summary.products[0]
     assert product_forecast.current_stock == -10
     assert product_forecast.days_of_cover_at_forecast_rate == Decimal("0")
-    # A negative starting stock only increases how much is needed to
-    # actually cover both the deficit and forecast demand.
-    assert product_forecast.suggested_reorder_quantity == 14 + 10  # ceil(14.0 total_high) - (-10)
+    # Negative derived stock is a stale stock count, not a real deficit to
+    # buy back (found live: -499 turned into a 533-unit order). It counts
+    # as zero on hand; the negative_stock finding asks for a fresh count.
+    assert product_forecast.suggested_reorder_quantity == 14  # ceil(14.0 total_high) - max(-10, 0)
 
 
 def test_forecast_below_minimum_history_reports_insufficient_data_for_everything(db_session, business_id):

@@ -463,7 +463,8 @@ def get_forecast_for_group(
         result = quantize_forecast_result(result, quantize_forecast_units)
 
         current_stock = stock_by_product.get(product_id, 0)
-        suggested_reorder_quantity = max(0, math.ceil(result.total_high) - current_stock)
+        # Same negative-stock rule as app/application/forecast.py.
+        suggested_reorder_quantity = max(0, math.ceil(result.total_high) - max(current_stock, 0))
         daily_rate = result.total_point / horizon_days
         if current_stock <= 0:
             days_of_cover = Decimal("0")

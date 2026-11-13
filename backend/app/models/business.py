@@ -75,3 +75,11 @@ class Business(Base, PKMixin, TimestampMixin):
     # coordinates up without re-geocoding on every scheduler tick.
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
+
+    # Free pilot access: while set and in the future, this business has the
+    # same access a paid subscription gives (uploads, imports, reports,
+    # ORLA) plus free branches and employee seats — pilot testers don't pay
+    # (decision 2026-11-12). Granted/revoked only by a platform operator via
+    # scripts/pilot_access.py (app/application/pilot_access.py), never by
+    # the business itself; NULL = not a pilot.
+    pilot_access_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

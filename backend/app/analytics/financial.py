@@ -194,7 +194,14 @@ def rank_products_by_margin(
     excluded_count = 0
     for aggregate in aggregates:
         if aggregate.revenue_with_known_cost <= 0:
-            excluded_count += 1
+            # Only a product that actually sold without a known cost counts
+            # as "excluded — no recorded cost price". A product whose only
+            # activity in the period was a refund (zero/negative revenue)
+            # has nothing to rank either, but isn't missing cost data —
+            # found live: a returns-only product was reported as having no
+            # cost even though its cost was known.
+            if aggregate.revenue > 0:
+                excluded_count += 1
             continue
         gross_profit = aggregate.revenue_with_known_cost - aggregate.cogs
         margin_pct = _quantize_pct(gross_profit / aggregate.revenue_with_known_cost * 100)

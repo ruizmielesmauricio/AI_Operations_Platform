@@ -1,32 +1,13 @@
-import { getDatabaseHealth, getHealth } from "@/lib/api/health";
+import { redirect } from "next/navigation";
 
-export default async function HomePage() {
-  const [api, db] = await Promise.allSettled([getHealth(), getDatabaseHealth()]);
-
-  return (
-    <main>
-      <h1>AI Operations Platform</h1>
-      <p>Prototype skeleton — free-tier stack, same structure as production.</p>
-
-      <h2>Connectivity check</h2>
-      <ul>
-        <li>
-          API:{" "}
-          {api.status === "fulfilled" ? (
-            <span className="status-ok">reachable ({api.value.status})</span>
-          ) : (
-            <span className="status-error">unreachable — is the backend running?</span>
-          )}
-        </li>
-        <li>
-          Database (via API):{" "}
-          {db.status === "fulfilled" ? (
-            <span className="status-ok">reachable ({db.value.database})</span>
-          ) : (
-            <span className="status-error">unreachable — is Postgres running?</span>
-          )}
-        </li>
-      </ul>
-    </main>
-  );
+// The root URL used to be the prototype skeleton's server-side
+// connectivity check. Under docker-compose that check ran inside the
+// frontend container, where NEXT_PUBLIC_API_URL's localhost:8000 is the
+// container itself, so it always reported the API/DB as unreachable even
+// when both were healthy. The real entry point is /welcome, which already
+// bounces signed-out visitors to /login and brand-new accounts to
+// /onboarding. Backend health stays available at GET /health and
+// /health/db.
+export default function HomePage() {
+  redirect("/welcome");
 }

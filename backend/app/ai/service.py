@@ -64,6 +64,7 @@ from app.schemas.analytics import (
     WorkshopPerformanceOut,
 )
 from app.settings.config import get_settings
+from app.templates import template_label, template_supports_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,10 @@ def answer_question(
     scope_label = (
         "Combined across: " + ", ".join(b.name for b in combined_businesses)
         if combined_businesses is not None
-        else business.name
+        # The business type tells the model whether it's talking to e.g. a
+        # bike shop or a cafe, so its wording fits — it never changes which
+        # numbers are fetched.
+        else f"{business.name} ({template_label(business.template)})"
     )
 
     classify_list = _classify_intent(
@@ -461,7 +465,7 @@ def answer_question(
         # stripped either way so a stray one is never shown to the user.
         cleaned = _PART_MARKER_PATTERN.sub("", answer_text).strip()
         result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
-        ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
+        ai_text = _clean_ai_text(cleaned, merged_context) if result.grounded else _UNGROUNDED_FALLBACK
         if not result.grounded:
             logger.warning(
                 "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
@@ -758,6 +762,66 @@ def _split_multi_part_answer(answer_text: str, *, expected_parts: int) -> dict[i
     return result
 
 
+_LOW_COST_COVERAGE_PCT = 50
+
+
+def _with_margin_coverage_note(context: dict) -> dict:
+    """Found live: with no cost prices on sales, the margin product lists
+    are empty and ORLA told the user "no products are hurting your margin"
+    — stating an absence of data as a fact. When most revenue has no known
+    cost, the context now says so plainly, so the answer can too."""
+    coverage = (context.get("gross_margin") or {}).get("cost_data_coverage_pct")
+    try:
+        low = coverage is None or Decimal(str(coverage)) < _LOW_COST_COVERAGE_PCT
+    except (ArithmeticError, ValueError):
+        low = True
+    if low:
+        context["margin_data_warning"] = (
+            "Most sales in this period have no cost price recorded, so product margins cannot be ranked and "
+            "it is unknown which products hurt margin. Say this instead of saying no products hurt margin. "
+            "Costs come from a stock-count or purchases upload with a unit cost column."
+        )
+    return context
+
+
+_SNAKE_CASE_TOKEN = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+# A sentence (10-300 chars) immediately followed by itself, e.g.
+# "You have 5 in stock.You have 5 in stock." — bounded so the backtracking
+# stays cheap on a short chat answer.
+_REPEATED_SENTENCE = re.compile(r"(\S.{9,299}?[.!?])\s*\1")
+
+
+def _context_field_names(obj: Any, out: set[str]) -> set[str]:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(key, str) and "_" in key:
+                out.add(key)
+            _context_field_names(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _context_field_names(value, out)
+    return out
+
+
+def _clean_ai_text(text: str, context: dict | None) -> str:
+    """Deterministic clean-up of an already guardrail-checked AI answer.
+    The guardrail only verifies numbers, so two live failure shapes got
+    through: lines leaking raw data-field names ("- suggested_reorder_
+    quantity: 49 units") and a sentence repeated back to back. Drops any
+    line naming a field from the context it was given, then collapses
+    exact repeats. Never returns empty — falls back to the original text."""
+    field_names = _context_field_names(context, set()) if context else set()
+    kept: list[str] = []
+    for line in text.split("\n"):
+        if field_names and any(token in field_names for token in _SNAKE_CASE_TOKEN.findall(line)):
+            continue
+        if line.strip() and kept and line.strip() == kept[-1].strip():
+            continue
+        kept.append(line)
+    cleaned = _REPEATED_SENTENCE.sub(r"\1", "\n".join(kept)).strip()
+    return cleaned or text
+
+
 def _assemble_final_answer(
     parts: list[_Part], ai_text_by_index: dict[int, str], *, question: str, previous_intent: str | None,
 ) -> tuple[str, tuple[str, ...]]:
@@ -780,7 +844,7 @@ def _assemble_final_answer(
         if part.resolved_answer is not None:
             texts.append(part.resolved_answer)
             continue
-        text = ai_text_by_index[i]
+        text = _clean_ai_text(ai_text_by_index[i], part.context)
         if part.intent == "forecast" and wants_reorder_list and part.all_products_for_priority_list:
             built = _build_priority_order_list(
                 part.all_products_for_priority_list, group_by_business=_looks_like_branch_split_question(question)
@@ -1397,7 +1461,7 @@ def _fetch_context(
             return context
         else:
             summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
-        return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+        return _with_margin_coverage_note(FinancialPerformanceOut.model_validate(summary).model_dump(mode="json"))
     if intent == "retail_operations":
         if combined_businesses is not None:
             summary = get_retail_operations_for_group(
@@ -1407,7 +1471,7 @@ def _fetch_context(
             summary = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_retail_operations(RetailOperationsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "workshop_performance":
-        if business.template != "bicycle_shop":
+        if not template_supports_repairs(business.template):
             return None
         if combined_businesses is not None:
             summary = get_workshop_performance_for_group(
@@ -1659,8 +1723,8 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "(gross vs net revenue, how much was refunded, return rate). Use period \"explicit_date\" for a "
     'question naming a specific day or date range (e.g. "revenue on the 24th of June", "sales last '
     'Tuesday").\n'
-    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (bike-shop businesses '
-    'only). Not for one specific repair by reference — that\'s "repair_lookup".\n'
+    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (only businesses that '
+    'run a repair or service workshop). Not for one specific repair by reference — that\'s "repair_lookup".\n'
     '- "latest_report": the most recent generated weekly/monthly report.\n'
     '- "product_lookup": detail about ONE specific product by name or SKU — its current stock, cost, or '
     'sell price (e.g. "how much stock of Chain Lube do I have"). Not for "what are my top sellers" or a '

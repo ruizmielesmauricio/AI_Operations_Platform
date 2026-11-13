@@ -8,19 +8,22 @@ import { redirectToCheckout } from "@/lib/billing";
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
+import { formatDate } from "@/lib/format";
 import type {
   AddressSuggestion,
   Business,
+  BusinessTemplate,
   EmployeeSeat,
   EmployeeSeatCreateResponse,
   Member,
+  InviteResult,
   SubscriptionStatus,
 } from "@/types";
 
-// Only bicycle_shop exists today (roadmap Phase 2) — the dropdown already
-// models this as a template choice, not a hardcoded assumption, so adding
-// cafe/garage later is a new option here, not new UI.
-const TEMPLATES = [{ value: "bicycle_shop", label: "Bicycle shop" }];
+// Business types come from GET /business-templates
+// (backend/app/templates/__init__.py) — bike shops are the first vertical,
+// not the only one, so this page never hardcodes the list. Adding a
+// vertical is a backend registry entry, not a frontend change.
 
 // The branch-creation flow's own form state — collects the full profile
 // up front, all fields required, before a branch can proceed to payment
@@ -118,11 +121,11 @@ const EMPTY_MY_PROFILE_DRAFT: MyProfileDraft = {
 // Real access needs BOTH payment (status "active") AND a linked account
 // (account_linked) — whichever is still missing is what the label says,
 // rather than a bare "Pending Payment" that would hide the other reason.
-function seatStatusLabel(seat: { status: string; account_linked: boolean }): string {
+function seatStatusLabel(seat: { status: string; account_linked: boolean }, onPilot = false): string {
   if (seat.status === "payment_failed") return "Payment failed";
   if (seat.status === "canceled") return "Removed";
   if (seat.status === "active" && seat.account_linked) return "Active";
-  if (seat.status === "active") return "Paid — waiting for them to sign in";
+  if (seat.status === "active") return onPilot ? "Free pilot seat — waiting for them to sign in" : "Paid — waiting for them to sign in";
   if (seat.account_linked) return "Pending payment";
   return "Pending payment and signup";
 }
@@ -131,11 +134,18 @@ function seatStatusLabel(seat: { status: string; account_linked: boolean }): str
 // Stripe subscription status (active/past_due/incomplete/.../null) plus
 // this app's own soft-delete flag — direct request: exactly these four
 // labels, not the raw Stripe vocabulary.
-function statusLabel(business: Business, subscriptionStatus: string | null): string {
+function statusLabel(business: Business, subscription: SubscriptionStatus | undefined): string {
   if (business.deleted_at) return "Deleted";
-  if (subscriptionStatus === "active") return "Subscribed";
-  if (subscriptionStatus === "canceled") return "Cancelled";
+  if (subscription?.access === "subscription") return "Subscribed";
+  if (subscription?.access === "pilot" && subscription.pilot_access_until)
+    return `Free pilot until ${formatDate(subscription.pilot_access_until)}`;
+  if (subscription?.status === "canceled") return "Cancelled";
+  if (business.pilot_access_until) return "Pilot ended";
   return "Pending Payment";
+}
+
+function isOnPilot(subscription: SubscriptionStatus | undefined): boolean {
+  return subscription?.access === "pilot";
 }
 
 export default function OnboardingPage() {
@@ -143,7 +153,17 @@ export default function OnboardingPage() {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [subscriptions, setSubscriptions] = useState<Record<string, SubscriptionStatus>>({});
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState(TEMPLATES[0].value);
+  const [templates, setTemplates] = useState<BusinessTemplate[]>([]);
+  const [template, setTemplate] = useState("");
+
+  useEffect(() => {
+    apiGet<BusinessTemplate[]>("/business-templates")
+      .then((rows) => {
+        setTemplates(rows);
+        setTemplate((current) => current || rows[0]?.key || "");
+      })
+      .catch(() => setError("Could not load business types. Refresh the page to try again."));
+  }, []);
   const [timezone, setTimezone] = useState("Europe/Dublin");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -201,6 +221,20 @@ export default function OnboardingPage() {
   const [employeeError, setEmployeeError] = useState<string | null>(null);
   const [resendingInviteSeatId, setResendingInviteSeatId] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
+  // A sign-up link to show (with a Copy button) when an invite couldn't be
+  // emailed — the owner shares it themselves.
+  const [inviteLink, setInviteLink] = useState<{ seatId: string; url: string } | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  async function copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    } catch {
+      setCopiedLink(false);
+    }
+  }
   const employeeAddress = useAddressAutocomplete(employeeFormOpenFor);
 
   // Staff/manager self-service profile edit — the business id the "Edit
@@ -446,6 +480,16 @@ export default function OnboardingPage() {
         country: branchDraft.country,
         timezone: branchDraft.timezone,
       });
+      // A branch added during a free pilot inherits the pilot window
+      // (backend create_branch) — no payment, just refresh the list.
+      if (isOnPilot(subscriptions[parentId])) {
+        setBusinesses(await apiGet<Business[]>("/businesses?include_deleted=true"));
+        setBranchFormOpenFor(null);
+        setBranchDraft(EMPTY_BRANCH_DRAFT);
+        setBranchId(null);
+        setInviteNotice("Branch added — it's free for the rest of your pilot.");
+        return;
+      }
       // Straight into Stripe Checkout for the branch price — no
       // intermediate "sits here unpaid" step for the user to stall on.
       // If they abandon Checkout, the branch (now with a complete
@@ -521,8 +565,11 @@ export default function OnboardingPage() {
     setInviteNotice(null);
     setResendingInviteSeatId(seatId);
     try {
-      await apiPost<void>(`/businesses/${businessId}/employee-seats/${seatId}/resend-invite`, {});
-      setInviteNotice("Invitation sent.");
+      // Always returns the sign-up link; email_sent says whether the email
+      // actually went out (it can't until email delivery is configured).
+      const result = await apiPost<InviteResult>(`/businesses/${businessId}/employee-seats/${seatId}/resend-invite`, {});
+      setInviteNotice(result.message);
+      if (!result.email_sent) setInviteLink({ seatId, url: result.invite_url });
     } catch (err) {
       setEmployeeError(err instanceof ApiError ? err.message : "Could not send the invitation.");
     } finally {
@@ -575,7 +622,7 @@ export default function OnboardingPage() {
         handleCancelEmployeeForm();
         return;
       }
-      const { employee_seat, checkout_url } = await apiPost<EmployeeSeatCreateResponse>(
+      const { employee_seat, checkout_url, invite_email_sent } = await apiPost<EmployeeSeatCreateResponse>(
         `/businesses/${businessId}/employee-seats`,
         employeeDraft
       );
@@ -586,7 +633,23 @@ export default function OnboardingPage() {
         ...prev,
         [businessId]: [...(prev[businessId] ?? []), employee_seat],
       }));
-      window.location.href = checkout_url;
+      if (checkout_url) {
+        window.location.href = checkout_url;
+        return;
+      }
+      // Free pilot seat: no payment step. Tell the owner how the employee
+      // gets in, and hand them the link when no email could be sent.
+      handleCancelEmployeeForm();
+      if (employee_seat.account_linked) {
+        setInviteNotice(`${employee_seat.first_name} already has an ORLA account and now has access.`);
+      } else if (invite_email_sent) {
+        setInviteNotice(`Invitation emailed to ${employee_seat.email}.`);
+      } else if (employee_seat.invite_url) {
+        setInviteNotice(
+          `Employee added. Email isn't set up yet, so send ${employee_seat.email} this sign-up link yourself:`
+        );
+        setInviteLink({ seatId: employee_seat.id, url: employee_seat.invite_url });
+      }
     } catch (err) {
       // The backend's own message is specific per failure (already
       // invited, seat limit reached, ...) — shown directly rather than a
@@ -730,6 +793,19 @@ export default function OnboardingPage() {
         </p>
       )}
       {billingError && <p className="status-error">{billingError}</p>}
+      {inviteNotice && (
+        <div className="status-ok" role="status">
+          <p>{inviteNotice}</p>
+          {inviteLink && (
+            <p>
+              <input readOnly value={inviteLink.url} aria-label="Sign-up link" size={48} onFocus={(e) => e.target.select()} />{" "}
+              <button type="button" onClick={() => copyLink(inviteLink.url)}>
+                {copiedLink ? "Copied" : "Copy link"}
+              </button>
+            </p>
+          )}
+        </div>
+      )}
       {deleteError && <p className="status-error">{deleteError}</p>}
       {businesses.length === 0 ? (
         <p>No business yet — create your first one below.</p>
@@ -747,7 +823,7 @@ export default function OnboardingPage() {
                 <li key={b.id} style={{ marginBottom: "1em" }}>
                   <div className="hint">
                     {parent ? <>↳ Branch of {parent.name} — </> : null}
-                    {b.name} — {b.template} ({b.role})
+                    {b.name} — {b.template_label || b.template} ({b.role})
                   </div>
                   <div className="hint">Deleted</div>
                 </li>
@@ -755,7 +831,8 @@ export default function OnboardingPage() {
             }
 
             const status = subscriptions[b.id]?.status ?? null;
-            const label = statusLabel(b, status);
+            const label = statusLabel(b, subscriptions[b.id]);
+            const onPilot = isOnPilot(subscriptions[b.id]);
             // A recoverable subscription (past_due, incomplete…) sends the
             // owner to the Customer Portal to fix it — new payment method,
             // retry, etc. A canceled subscription is a dead end there (no
@@ -778,8 +855,8 @@ export default function OnboardingPage() {
                     {parent ? <span className="hint">↳ Branch of {parent.name} — </span> : null}
                     {b.name}
                   </strong>{" "}
-                  — {b.template} ({b.role}) —{" "}
-                  <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
+                  — {b.template_label || b.template} ({b.role}) —{" "}
+                  <span className={label === "Subscribed" || label.startsWith("Free pilot") ? "status-ok" : "status-error"}>{label}</span>
                 </div>
                 {/* Company Profile rows are about the profile record
                     itself, not a second navigation menu — every
@@ -882,7 +959,10 @@ export default function OnboardingPage() {
                     on checkout-session/portal-session too — this is UX,
                     not the real boundary): a staff/manager member would
                     otherwise see a live-looking button that just 403s. */}
-                {b.role === "owner" && (
+                {b.role === "owner" && onPilot && (
+                  <p className="hint">No payment needed during the pilot — branches and staff seats are free too.</p>
+                )}
+                {b.role === "owner" && !onPilot && (
                   <div className="company-owner-action">
                     {isRecoverableInPortal ? (
                       <button type="button" disabled={busy} onClick={() => handleManageBilling(b.id)}>
@@ -913,7 +993,7 @@ export default function OnboardingPage() {
                         branchFormOpenFor === b.id ? handleRequestCancelAddBranch() : handleOpenAddBranch(b.id)
                       }
                     >
-                      {branchFormOpenFor === b.id ? "Cancel" : "+ Add a branch (€30/mo)"}
+                      {branchFormOpenFor === b.id ? "Cancel" : onPilot ? "+ Add a branch (free during pilot)" : "+ Add a branch (€30/mo)"}
                     </button>
                   </div>
                 )}
@@ -1008,7 +1088,7 @@ export default function OnboardingPage() {
                     ))}
                     {branchError && <p className="status-error">{branchError}</p>}
                     <button type="submit" disabled={branchSubmitting}>
-                      {branchSubmitting ? "Saving…" : "Save and continue to payment"}
+                      {branchSubmitting ? "Saving…" : onPilot ? "Add branch" : "Save and continue to payment"}
                     </button>{" "}
                     <button type="button" disabled={branchSubmitting} onClick={handleRequestCancelAddBranch}>
                       Cancel
@@ -1027,7 +1107,7 @@ export default function OnboardingPage() {
                         employeeFormOpenFor === b.id ? handleCancelEmployeeForm() : handleOpenAddEmployee(b.id)
                       }
                     >
-                      {employeeFormOpenFor === b.id ? "Cancel" : "+ Add employee (€5/mo)"}
+                      {employeeFormOpenFor === b.id ? "Cancel" : onPilot ? "+ Add employee (free during pilot)" : "+ Add employee (€5/mo)"}
                     </button>
                   </div>
                 )}
@@ -1171,7 +1251,9 @@ export default function OnboardingPage() {
                         ? "Saving…"
                         : editingEmployeeSeatId
                           ? "Save changes"
-                          : "Save and continue to payment"}
+                          : onPilot
+                            ? "Add employee"
+                            : "Save and continue to payment"}
                     </button>{" "}
                     <button type="button" disabled={employeeSubmitting} onClick={handleCancelEmployeeForm}>
                       Cancel
@@ -1215,7 +1297,7 @@ export default function OnboardingPage() {
                                       : "status-error"
                                   }
                                 >
-                                  {seatStatusLabel(member)}
+                                  {seatStatusLabel(member, onPilot)}
                                 </span>
                               </>
                             )}
@@ -1231,6 +1313,21 @@ export default function OnboardingPage() {
                                     >
                                       {resendingInviteSeatId === seatId ? "Sending…" : "Send invitation"}
                                     </button>
+                                    {fullSeat.invite_url && (
+                                      <>
+                                        {" "}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setInviteNotice(`Sign-up link for ${fullSeat.email}:`);
+                                            setInviteLink({ seatId, url: fullSeat.invite_url as string });
+                                            copyLink(fullSeat.invite_url as string);
+                                          }}
+                                        >
+                                          Copy invite link
+                                        </button>
+                                      </>
+                                    )}
                                   </>
                                 )}
                                 {" "}
@@ -1253,7 +1350,6 @@ export default function OnboardingPage() {
                     </ul>
                   </div>
                 )}
-                {inviteNotice && b.role === "owner" && <p className="status-ok">{inviteNotice}</p>}
                 {b.role === "owner" && (
                   <div className="company-owner-action company-owner-action--danger">
                     {confirmingDeleteId === b.id ? (
@@ -1284,7 +1380,7 @@ export default function OnboardingPage() {
       {hasStandaloneShop || activeBusinessesForNav.length > 0 ? (
         <p className="hint">
           One standalone shop per account — delete your existing shop above to create a different one, or
-          use "Add a branch" on it to add another location for €30/month.
+          use "Add a branch" on it to add another location{Object.values(subscriptions).some(isOnPilot) ? " (free during your pilot)" : " for €30/month"}.
         </p>
       ) : (
         <>
@@ -1298,13 +1394,23 @@ export default function OnboardingPage() {
             <div>
               <label htmlFor="template">Business type</label>
               <br />
-              <select id="template" value={template} onChange={(e) => setTemplate(e.target.value)}>
-                {TEMPLATES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
+              <select id="template" required value={template} onChange={(e) => setTemplate(e.target.value)}>
+                {templates.length === 0 && <option value="">Loading…</option>}
+                {Array.from(new Set(templates.map((t) => t.group))).map((group) => (
+                  <optgroup key={group} label={group}>
+                    {templates
+                      .filter((t) => t.group === group)
+                      .map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.label}
+                        </option>
+                      ))}
+                  </optgroup>
                 ))}
               </select>
+              {templates.find((t) => t.key === template)?.description && (
+                <div className="hint">{templates.find((t) => t.key === template)?.description}</div>
+              )}
             </div>
             <div>
               <label htmlFor="timezone">Timezone</label>

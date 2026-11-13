@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.application.report import generate_latest_reports_now
 from app.exports.docx import render_report_docx
 from app.exports.pdf import render_report_pdf
 from app.models.membership import Membership
@@ -67,6 +68,29 @@ def list_reports(
     # record (PR-8.12), unreachable through this customer-facing route.
     reports = ReportRepository(db).list_active_for_business(membership.business_id, now=datetime.now(timezone.utc))
     return [ReportSummaryOut.model_validate(r) for r in reports]
+
+
+@router.post("/generate-now", response_model=list[ReportSummaryOut])
+def generate_reports_now(
+    membership: Membership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> list[ReportSummaryOut]:
+    """Builds the latest completed weekly + monthly reports immediately
+    (app/application/report.py::generate_latest_reports_now) and returns
+    the refreshed list. Owner/manager only — it rewrites the shop's
+    current reports, which staff shouldn't trigger."""
+    if membership.role not in ("owner", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only an owner or manager can generate reports"
+        )
+    reports = generate_latest_reports_now(db, business_id=membership.business_id)
+    if not any(r.status == "completed" for r in reports):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The reports couldn't be generated right now. Please try again in a few minutes.",
+        )
+    active = ReportRepository(db).list_active_for_business(membership.business_id, now=datetime.now(timezone.utc))
+    return [ReportSummaryOut.model_validate(r) for r in active]
 
 
 @router.get("/{report_id}", response_model=ReportDetailOut)

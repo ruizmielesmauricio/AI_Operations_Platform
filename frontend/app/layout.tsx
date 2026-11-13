@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Operations Platform",
+  title: "ORLA",
   description: "Turning small-business ops data into decisions.",
 };
 

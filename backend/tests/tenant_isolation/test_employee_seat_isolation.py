@@ -142,7 +142,9 @@ def test_only_owner_can_resend_an_unlinked_employee_invitation(client, monkeypat
     owner_response = client.post(
         f"/businesses/{business['id']}/employee-seats/{created['id']}/resend-invite", headers=headers_owner
     )
-    assert owner_response.status_code == 204
+    assert owner_response.status_code == 200
+    assert owner_response.json()["email_sent"] is True
+    assert owner_response.json()["invite_url"].endswith("/signup?email=bea%40example.com")
     assert sent_to == ["bea@example.com"]
 
     session = client._SessionLocal()

@@ -29,6 +29,7 @@ from app.application.notifications import (
     notify_employee_role_changed,
 )
 from app.billing import client as billing_client
+from app.billing.pilot import pilot_access_active
 from app.email.service import send_employee_invite_email
 from app.models.business import Business
 from app.models.employee_seat import EmployeeSeat
@@ -75,6 +76,37 @@ class EmployeeInviteUnavailable(Exception):
     """Raised when an invite cannot sensibly be sent for this seat."""
 
 
+def invite_url_for_email(email: str) -> str:
+    """The sign-up link an invited employee uses (email prefilled). Shown to
+    the owner to copy as well as emailed — found live: with email delivery
+    not configured, "Send invitation" failed silently and the owner had no
+    way to get the link to their employee."""
+    return f"{get_settings().app_base_url}/signup?{urlencode({'email': email})}"
+
+
+def invite_url_for_seat(seat: EmployeeSeat) -> str | None:
+    """None once the person has registered or the seat was removed — there
+    is nothing left to invite them to."""
+    if seat.user_id is not None or seat.status == "canceled":
+        return None
+    return invite_url_for_email(seat.email)
+
+
+def invite_email_was_sent(db: Session, seat: EmployeeSeat) -> bool:
+    from app.models.audit_log import AuditLog
+
+    return (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.business_id == seat.business_id,
+            AuditLog.target_id == str(seat.id),
+            AuditLog.action.in_(("employee_invite_email_sent", "employee_invite_email_resent")),
+        )
+        .first()
+        is not None
+    )
+
+
 def add_employee(
     db: Session,
     *,
@@ -89,7 +121,7 @@ def add_employee(
     city: str | None = None,
     postal_code: str | None = None,
     country: str | None = None,
-) -> tuple[EmployeeSeat, str]:
+) -> tuple[EmployeeSeat, str | None]:
     """Returns the new (pending) seat and the Stripe Checkout URL to send
     the owner to next. Raises before creating anything if the request
     can't succeed — a rejected attempt leaves zero rows behind, same
@@ -155,7 +187,7 @@ def add_employee(
     if existing_user is None:
         business = db.get(Business, business_id)
         business_name = business.name if business is not None else "your team"
-        registration_url = f"{get_settings().app_base_url}/signup?{urlencode({'email': email})}"
+        registration_url = invite_url_for_email(email)
         if send_employee_invite_email(
             to_email=email, business_name=business_name, registration_url=registration_url
         ):
@@ -167,6 +199,25 @@ def add_employee(
                 target_type="employee_seat",
                 target_id=str(seat.id),
             )
+    # Free pilot: the seat is active straight away, no Stripe checkout —
+    # pilot testers don't pay (app/billing/access.py). Activation still
+    # waits for the person to sign in, exactly like a paid seat.
+    if pilot_access_active(db.get(Business, business_id)):
+        seat.status = "active"
+        db.flush()
+        try_activate_employee_seat(db, seat)
+        record_audit_event(
+            db,
+            business_id=business_id,
+            user_id=invited_by_user_id,
+            action="employee_seat_activated_pilot",
+            target_type="employee_seat",
+            target_id=str(seat.id),
+        )
+        db.commit()
+        db.refresh(seat)
+        return seat, None
+
     checkout_url = start_employee_seat_checkout(
         db=db, business_id=business_id, employee_seat_id=seat.id, business_email=business_email
     )
@@ -207,7 +258,7 @@ def resend_employee_invite(
 
     business = db.get(Business, business_id)
     business_name = business.name if business is not None else "your team"
-    registration_url = f"{get_settings().app_base_url}/signup?{urlencode({'email': seat.email})}"
+    registration_url = invite_url_for_email(seat.email)
     sent = send_employee_invite_email(
         to_email=seat.email, business_name=business_name, registration_url=registration_url
     )

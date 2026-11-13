@@ -63,7 +63,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
       return;
     }
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
-      .then((s) => setSubscriptionStatus(s.status))
+      .then((s) => setSubscriptionStatus(s.access))
       .catch(() => setSubscriptionStatus(null));
   }, [businessId]);
 
@@ -158,7 +158,8 @@ export function AppNav({ businessId }: { businessId?: string }) {
     };
   }, [businessId]);
 
-  const canUpload = subscriptionStatus === "active";
+  // Paid subscription OR free pilot window (SubscriptionStatus.access).
+  const canUpload = subscriptionStatus !== null;
 
   async function handleLogout() {
     await supabase?.auth.signOut();
@@ -214,7 +215,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
           belongs in this one top nav, never repeated per business row. */}
       {businessId && (
         <>
-          <a href={`/products${suffix}`}>Thresholds</a>
+          <a href={`/products${suffix}`}>Reorder rules</a>
           <a href={`/suppliers${suffix}`}>Suppliers</a>
           <a href={`/transactions${suffix}`}>Transactions</a>
         </>
@@ -270,7 +271,9 @@ export function AppNav({ businessId }: { businessId?: string }) {
           <div>
             <span className="app-business-header__eyebrow">Current business</span>
             <strong>{logoInfo.companyName}</strong>
-            <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+            {logoInfo.selectedBusinessName && logoInfo.selectedBusinessName !== logoInfo.companyName && (
+              <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+            )}
           </div>
         </div>
       )}

@@ -7,6 +7,7 @@ import { API_URL, ApiError, apiDelete, apiGet, apiPatch, apiPostFile } from "@/l
 import { PROFILE_FIELDS_AFTER_ADDRESS, PROFILE_FIELDS_BEFORE_ADDRESS } from "@/lib/businessProfileFields";
 import { useAddressAutocomplete } from "@/lib/hooks/useAddressAutocomplete";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
+import { formatDate } from "@/lib/format";
 import type { AddressSuggestion, Business, BusinessProfileUpdate, SubscriptionStatus } from "@/types";
 
 // Descriptive contact/location record-keeping only — not a second login
@@ -44,10 +45,13 @@ function formFromBusiness(business: Business): BusinessProfileUpdate {
 // pages' surrounding logic (deleted-row short-circuiting, subscribe
 // buttons) differs enough that sharing just this one function isn't worth
 // a new lib file yet.
-function statusLabel(business: Business, subscriptionStatus: string | null): string {
+function statusLabel(business: Business, subscription: SubscriptionStatus | null): string {
   if (business.deleted_at) return "Deleted";
-  if (subscriptionStatus === "active") return "Subscribed";
-  if (subscriptionStatus === "canceled") return "Cancelled";
+  if (subscription?.access === "subscription") return "Subscribed";
+  if (subscription?.access === "pilot" && subscription.pilot_access_until)
+    return `Free pilot until ${formatDate(subscription.pilot_access_until)}`;
+  if (subscription?.status === "canceled") return "Cancelled";
+  if (business.pilot_access_until) return "Pilot ended";
   return "Pending Payment";
 }
 
@@ -154,7 +158,7 @@ export default function BusinessProfilePage() {
   const businessId = params.id;
 
   const [business, setBusiness] = useState<Business | null>(null);
-  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<BusinessProfileUpdate>({});
   const [saving, setSaving] = useState(false);
@@ -186,7 +190,7 @@ export default function BusinessProfilePage() {
   useEffect(() => {
     if (!businessId) return;
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
-      .then((s) => setSubscriptionStatus(s.status))
+      .then((s) => setSubscriptionStatus(s))
       .catch(() => undefined);
   }, [businessId]);
 
@@ -275,8 +279,8 @@ export default function BusinessProfilePage() {
       </p>
       <h1>{business.name}</h1>
       <p>
-        {business.template} ({business.role}) —{" "}
-        <span className={label === "Subscribed" ? "status-ok" : "status-error"}>{label}</span>
+        {business.template_label || business.template} ({business.role}) —{" "}
+        <span className={label === "Subscribed" || label.startsWith("Free pilot") ? "status-ok" : "status-error"}>{label}</span>
         {business.parent_business_id && " — Branch"}
       </p>
 
