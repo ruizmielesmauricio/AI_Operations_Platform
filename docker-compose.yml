@@ -71,18 +71,27 @@ services:
     # Stripe posts straight to the real public URL, registered directly
     # in the Stripe Dashboard with its own live-mode signing secret; this
     # service and STRIPE_WEBHOOK_SECRET's current value are dev-only.
-    image: stripe/stripe-cli:latest
-    command: listen --forward-to backend:8000/billing/webhooks/stripe
-    # Reuses the host's already-authenticated `stripe login` device
-    # (confirmed live: this reproduces the exact same webhook signing
-    # secret every time, since it's tied to the linked device/account,
-    # not randomly generated per session) — no key or secret embedded in
-    # this file or committed anywhere. Not mounted read-only: the CLI
-    # chmods its own config file on every start (found live — it refuses
-    # to run at all against a read-only mount) and this file never leaves
-    # the host either way.
-    volumes:
-      - ${HOME}/.config/stripe:/root/.config/stripe
+    #
+    # Authenticates with the TEST secret key from backend/.env (never a
+    # live key) instead of a host `stripe login` folder, so it works on any
+    # machine with no extra setup (found 12/11/2026: no ~/.config/stripe on
+    # a fresh Windows machine). Pinned, because newer CLIs changed `listen`
+    # and refuse to start without an explicit event list. The events are
+    # exactly the six app/billing/service.py handles.
+    #
+    # STRIPE_WEBHOOK_SECRET in backend/.env must match this listener's
+    # signing secret; it is stable per account/key. Print it once with:
+    #   docker compose run --rm --no-deps stripe-cli 'stripe listen --api-key "$STRIPE_SECRET_KEY" --print-secret'
+    image: stripe/stripe-cli:v1.55.11
+    env_file:
+      - path: ./backend/.env
+        required: false
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        stripe listen --api-key "$$STRIPE_SECRET_KEY"
+        --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed
+        --forward-to backend:8000/billing/webhooks/stripe
     depends_on:
       - backend
     restart: unless-stopped
