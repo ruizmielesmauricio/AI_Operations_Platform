@@ -1,7 +1,20 @@
+// A business type offered at signup — served by GET /business-templates
+// (backend/app/templates/__init__.py is the single source of truth).
+export interface BusinessTemplate {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  supports_repairs: boolean;
+}
+
 export interface Business {
   id: string;
   name: string;
   template: string;
+  template_label: string;
+  // False hides repairs uploads, Workshop Performance and repair transactions.
+  supports_repairs: boolean;
   timezone: string;
   role: string;
   // null = a standalone/primary shop; set = a branch of that parent
@@ -23,6 +36,8 @@ export interface Business {
   // True once a logo has been uploaded via POST /businesses/{id}/logo —
   // tells the profile page whether to render the logo <img> at all.
   has_logo: boolean;
+  // Free pilot window end (no payment needed until then); null = not a pilot.
+  pilot_access_until: string | null;
   // Used as the ?v= cache-buster on the logo <img> src so a re-upload
   // (same URL, overwritten R2 object) actually refetches instead of
   // showing a browser-cached copy of the old logo.
@@ -49,6 +64,8 @@ export interface EmployeeSeat {
   role: string; // "manager" | "staff"
   status: string; // "pending_payment" | "active" | "payment_failed" | "canceled"
   account_linked: boolean;
+  // Sign-up link to share with an employee who hasn't registered yet.
+  invite_url: string | null;
   address_line1: string | null;
   city: string | null;
   postal_code: string | null;
@@ -58,7 +75,9 @@ export interface EmployeeSeat {
 
 export interface EmployeeSeatCreateResponse {
   employee_seat: EmployeeSeat;
-  checkout_url: string;
+  // null when no payment is needed (free pilot seat).
+  checkout_url: string | null;
+  invite_email_sent: boolean;
 }
 
 // GET /businesses/{id}/members — the owner (from the business's own
@@ -109,6 +128,16 @@ export interface BusinessProfileUpdate {
 export interface SubscriptionStatus {
   status: string | null;
   current_period_end: string | null;
+  // Why the business can use paid features: a paid subscription or a free
+  // pilot window. Gate features on this, not on `status`.
+  access: "subscription" | "pilot" | null;
+  pilot_access_until: string | null;
+}
+
+export interface InviteResult {
+  email_sent: boolean;
+  invite_url: string;
+  message: string;
 }
 
 export interface RejectionReason {
@@ -606,6 +635,47 @@ export interface ChatResponse {
   // for a compound one. Echo this back as the next request's
   // previous_intents so a follow-up can recover against any part of it.
   intents: string[];
+  // Support lane (PR-5.7): help articles the answer is based on — slug/
+  // title come from the backend's approved knowledge base, never model
+  // text — and whether to offer the "Contact support" handoff.
+  help_articles: HelpArticleLink[];
+  handoff_available: boolean;
+  // True when `answer` came from the help content; false for a refusal
+  // that only suggests related articles and the handoff.
+  help_answered: boolean;
+}
+
+// --- Help centre and support handoff (PR-5.7, E26/E27) ----------------------
+
+export interface HelpArticleLink {
+  slug: string;
+  title: string;
+}
+
+export interface HelpArticleSummary extends HelpArticleLink {
+  category: string;
+  order: number;
+  summary: string;
+  updated: string;
+  // Only present on search results.
+  score?: number;
+}
+
+export interface HelpArticle extends HelpArticleSummary {
+  version: number;
+  body: string;
+  sections: { heading: string; anchor: string }[];
+}
+
+export interface SupportRequest {
+  id: string;
+  question: string;
+  source: "chat" | "help_page";
+  status: "open" | "resolved";
+  requester_email: string;
+  article_slugs: string[] | null;
+  created_at: string;
+  resolved_at: string | null;
 }
 
 // --- Supplier tracking (Gap 4) -------------------------------------------
@@ -735,7 +805,8 @@ export type NotificationCategory =
   | "team"
   | "billing"
   | "branches"
-  | "security_account";
+  | "security_account"
+  | "support";
 
 export type NotificationSeverity = "info" | "success" | "warning" | "critical";
 

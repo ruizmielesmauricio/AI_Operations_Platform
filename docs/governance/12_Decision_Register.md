@@ -1,10 +1,10 @@
 # 12_Decision_Register.md
 
-**Version:** 1.7
+**Version:** 1.12
 **Status:** Accepted
 **Phase:** Company Governance
 **Author:** Founder & CTO
-**Last Updated:** 30/07/2026
+**Last Updated:** 13/11/2026
 
 ---
 
@@ -89,6 +89,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | BD-005 | **Set the current subscription price at €80 per month per business** | **Accepted** | supersedes tech BD-001 (€79, Proposed) |
 | BD-006 | Position the product as a complement to the customer's existing POS, not a replacement | Accepted | new |
 | BD-007 | **Set the additional-branch/location add-on subscription price at €30 per month per branch** — a branch is billed as its own separate subscription (not a quantity line item on the primary shop's), reusing the exact same Stripe Checkout/webhook/cancel path as the primary €80/month subscription (BD-005) | Accepted | new |
+| BD-008 | **Pilot testers do not pay** during Phase 4 — free access for the whole pilot, including branches and staff seats (implemented by ADR-025). Legal, company and provider work (Phase 5) is deferred until ORLA works correctly end to end locally. Resolves Q-029, Q-032 and Q-039 | Accepted | new |
 
 ---
 
@@ -106,6 +107,8 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | PD-008 | Extend the in-app AI agent to handle three categories of natural-language question through one chat interface — tenant business-data Q&A, scheduled-report explanation, and product/support help — with AI restricted in every case to classifying intent and phrasing an answer, never calculating or inventing one | Accepted | new |
 | PD-009 | Add low-stock alerting as a standalone, real-time in-app notification capability, generated deterministically whenever inventory data changes, independent of the weekly/monthly report cycle | Accepted | new |
 | PD-010 | Support pharmacies as a third business vertical; minimise personal/health data captured in the schema per Company Constitution Principle 7 ("Customer Data Is Sacred"). Full GDPR special-category compliance (legal basis, DPIA, retention/deletion policy) remains open — see Q-053 | Accepted | new |
+| PD-011 | Offer 19 business types at sign-up, grouped Retail (13, five with repairs/servicing) and Food & drink (6: café, restaurant, bakery, bar/pub, takeaway, deli). All share the core analytics; food & drink get recipe/waste/expiry modules later (Jira ORLA-83). Pharmacy is not offered until Q-053 is resolved (see PD-010) | Accepted | new |
+| PD-012 | Owners and managers can generate the latest completed weekly and monthly reports on demand ("Generate reports now"); this rebuilds the same report row for that period from current data — never a duplicate — while the scheduler stays strictly idempotent (complements PD-007) | Accepted | new |
 
 ---
 
@@ -137,6 +140,10 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ADR-022 | Add a canonical `inventory_lots` (lot/batch + expiry-date) extension to the inventory layer, with a nullable `inventory_lot_id` FK on `inventory_movements` — not pharmacy-specific, since perishables/consumables recur across verticals | Accepted | new |
 | ADR-023 | Add a pharmacy `prescription_details` business-template extension table hanging off `sale_items` (prescription number, prescribing doctor, controlled-substance schedule) — deliberately excludes patient identity/clinical fields | Accepted | new |
 | ADR-024 | Close the password-reset session-revocation gap using Supabase's native, user-scoped `auth.signOut({scope: "others"})` client SDK call, not a backend Admin API / `SUPABASE_SERVICE_ROLE_KEY` fallback — no new secret, no new backend route | Accepted | new |
+| ADR-025 | Free pilot access is an operator-granted time window on the business (`Business.pilot_access_until`), checked alongside the Stripe subscription; granted only via `scripts/pilot_access.py`, never through an HTTP route; covers branches and staff seats — see `docs/decisions/ADR-025-free-pilot-access.md` | Accepted | new |
+| ADR-026 | Business types live in one backend registry (`backend/app/templates/`) with capability flags (e.g. `supports_repairs`); core code checks capabilities, never industry keys; the frontend loads the list from `GET /business-templates` — see `docs/decisions/ADR-026-business-type-registry.md` | Accepted | new |
+| ADR-027 | Calculation integrity rules: sale-line cost falls back to the product's known cost; VAT-inclusive and VAT-exclusive prices both valid; negative derived stock counts as zero on hand for reorders and raises a `negative_stock` finding; forecast demand never negative; returns-only products are not "missing cost" — see `docs/decisions/ADR-027-calculation-integrity-rules.md` | Accepted | new |
+| ADR-028 | The conversational agent's support lane (PR-5.7) answers only from versioned help articles in `backend/app/support/content/`, retrieved by a deterministic lexical ranker (no embeddings), explained in one JSON explain call and verified afterwards (real citations, numbers and quoted UI labels present in the cited passages, ≥ 75% word support) — otherwise it refuses and offers "Contact support", which records a tenant-scoped `support_requests` row, an audit event and an owner-only notification; operator email is optional and added later via `SUPPORT_INBOX_EMAIL` — see `docs/decisions/ADR-028-support-lane-and-help-content.md` | Accepted | new |
 
 ---
 
@@ -153,6 +160,7 @@ The former governance register has been renamed to this canonical `12_Decision_R
 | ED-007 | Every business formula requires unit tests before the feature is considered complete | Accepted | from `06_Development_Rules.md` |
 | ED-008 | Tenant isolation must be covered by dedicated integration tests | Accepted | from `06_Development_Rules.md` |
 | ED-009 | AI may suggest column mappings but must not clean, validate, transform, or deduplicate customer data | Accepted | from `10_Product_Requirements.md` |
+| ED-010 | Any change that touches a calculation is re-verified against an independent recomputation from the raw test dataset (not only unit tests) before it ships — first run 12/11/2026: 80/80 dashboard, report and forecast figures matched | Accepted | new |
 
 ---
 
@@ -219,3 +227,5 @@ What evidence would cause this decision to be revisited?
 | 1.8 | 04/08/2026 | Accepted ADR-016 (Production Events, implemented as `production_events`/`production_event_inputs`/`production_event_outputs`, replacing the bicycle-specific `repairs`/`repair_parts_used` tables) — the gate was met once a second and third vertical (cafe, pharmacy) began active scoping. Added ADR-022 (`inventory_lots` canonical lot/batch + expiry-date tracking) and ADR-023 (pharmacy `prescription_details` extension, deliberately excluding patient identity/clinical fields). Added PD-010 (supporting pharmacy as a third vertical; data-minimisation decision, not a full GDPR compliance sign-off — see Q-053). Removed the ADR-016 row from "Decisions Requiring Action" now that it's Accepted. |
 | 1.9 | 08/08/2026 | Added BD-007: the additional-branch/location add-on subscription price, €30/month per branch, billed as its own fully separate Stripe subscription (not a quantity line item on the primary €80/month subscription) — implemented and live in Stripe test mode (`11_Development_Roadmap.md` v1.37). Added a BD-007 Consistency Status note mirroring BD-005's, stating the two prices are additive, not a combined tier. |
 | 1.10 | 13/08/2026 | Added ADR-024 (Accepted): close the password-reset session-revocation gap via Supabase's native `auth.signOut({scope: "others"})` client SDK call instead of a backend Admin API/service-role-key fallback — see `11_Development_Roadmap.md` and `docs/decisions/ADR-024-supabase-session-security.md` for the full reasoning. |
+| 1.11 | 12/11/2026 | Recorded the decisions from the 12/11/2026 local end-to-end walkthrough: BD-008 (pilot testers do not pay; legal/provider work deferred until ORLA works end to end locally), PD-011 (19 business types across retail and food & drink), PD-012 (on-demand "Generate reports now"), ADR-025 (operator-granted free pilot access), ADR-026 (business-type registry with capability flags), ADR-027 (calculation integrity rules), ED-010 (independent recomputation check for calculation changes). Execution tracking is the Jira project ORLA (not COP). |
+| 1.12 | 13/11/2026 | Added ADR-028 (Accepted, implemented): the support lane and help knowledge base for PR-5.7 (roadmap E26/E27, Jira ORLA-67) — versioned help articles, deterministic retrieval, post-generation grounding checks, and a recorded "Contact support" handoff. |

@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.ai import client
+from app.ai import client, support_lane
 from app.ai.exceptions import AIProviderError
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
@@ -64,6 +64,7 @@ from app.schemas.analytics import (
     WorkshopPerformanceOut,
 )
 from app.settings.config import get_settings
+from app.templates import template_label, template_supports_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,10 @@ ALLOWED_INTENTS = (
     "weather_pattern_lookup",
     "weather_sales_analysis",
     "weather_outlook",
+    # PR-5.7 support lane (ADR-028): how to use the ORLA app itself —
+    # answered only from the approved help knowledge base
+    # (app/ai/support_lane.py), never from business data.
+    "product_help",
     "out_of_scope",
 )
 # explicit_date added alongside the lookup intents — a question naming a
@@ -142,7 +147,8 @@ _PROVIDER = "openrouter"
 
 _SAFE_FALLBACK = (
     "I can help with questions about your revenue, retail and workshop performance, forecast, "
-    "weather-linked sales, recommendations, or your latest weekly/monthly report — try asking about one of those."
+    "weather-linked sales, recommendations, or your latest weekly/monthly report, and with how to use ORLA "
+    "itself — try asking about one of those."
 )
 _UNAVAILABLE_MESSAGE = "ORLA is temporarily unavailable — your dashboard and reports are unaffected. Try again shortly."
 _USAGE_LIMIT_MESSAGE = "This business has reached its question limit with ORLA for today. Try again tomorrow."
@@ -171,6 +177,17 @@ class AnswerResult:
     # answer can still recover via _CONTINUABLE_INTENTS against any part
     # of it, not just the first.
     intents: tuple[str, ...] = ()
+    # Support lane (PR-5.7): (slug, title) of help articles the answer
+    # draws on, built by code from the knowledge base — never from model
+    # text. The frontend links each to /help/{slug}.
+    help_articles: tuple[tuple[str, str], ...] = ()
+    # True when the frontend should offer the "Contact support" handoff —
+    # every product_help answer, most importantly when the help content
+    # could not answer the question.
+    handoff_available: bool = False
+    # True when the answer itself came from the help content (False for a
+    # refusal that only offers related articles and the handoff).
+    help_answered: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,6 +244,10 @@ class _Part:
     # _assemble_final_answer's own comments (mirrors the original
     # single-question _all_products_for_priority_list handling).
     all_products_for_priority_list: list | None = None
+    # Only ever set for a "product_help" part (see _build_part).
+    help_articles: tuple[tuple[str, str], ...] = ()
+    handoff_available: bool = False
+    help_answered: bool = False
 
 
 def answer_question(
@@ -339,7 +360,10 @@ def answer_question(
     scope_label = (
         "Combined across: " + ", ".join(b.name for b in combined_businesses)
         if combined_businesses is not None
-        else business.name
+        # The business type tells the model whether it's talking to e.g. a
+        # bike shop or a cafe, so its wording fits — it never changes which
+        # numbers are fetched.
+        else f"{business.name} ({template_label(business.template)})"
     )
 
     classify_list = _classify_intent(
@@ -352,11 +376,37 @@ def answer_question(
     # one-category weather intent. This deterministic recovery only fires
     # when both a fixed weather bucket and a ranking request are explicit.
     classify_list = [_recover_weather_sales_analysis(item, question) for item in classify_list]
+    classify_list = [_recover_product_help(item, question) for item in classify_list]
 
     if len(classify_list) == 1 and classify_list[0].intent == "provider_unavailable":
+        # A how-to question can still be answered with zero AI while the
+        # provider is down: the best-matching help article's own reviewed
+        # summary and link (app/ai/support_lane.py::deterministic_pointer).
+        if support_lane.looks_like_how_to_question(question):
+            pointer = support_lane.deterministic_pointer(question)
+            if pointer.answered:
+                return AnswerResult(
+                    answer=pointer.answer, intent=support_lane.INTENT, grounded=True,
+                    intents=(support_lane.INTENT,), help_articles=pointer.articles, handoff_available=True,
+                    help_answered=True,
+                )
         return AnswerResult(
             answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False,
             intents=("provider_unavailable",),
+        )
+
+    if len(classify_list) == 1 and classify_list[0].intent == support_lane.INTENT:
+        # PR-5.7 support lane: answered only from the approved help
+        # knowledge base, verified deterministically, with a human handoff
+        # when it can't be — still at most classify + explain (ADR-028).
+        support = support_lane.answer_from_help(
+            request_repo, business_id=business_id, user_id=user_id, question=question,
+            previous_question=previous_question, previous_answer=previous_answer, previous_intent=previous_intent,
+        )
+        return AnswerResult(
+            answer=support.answer, intent=support_lane.INTENT, grounded=support.grounded,
+            intents=(support_lane.INTENT,), help_articles=support.articles, handoff_available=True,
+            help_answered=support.answered,
         )
 
     previous_intents_tuple = tuple(previous_intents) if previous_intents else ()
@@ -377,7 +427,9 @@ def answer_question(
         # same fast paths this module already had for a single question,
         # now composed across up to _MAX_SUBINTENTS of them.
         final_answer = _join_parts_for_display([p.resolved_answer for p in parts])
-        return AnswerResult(answer=final_answer, intent=parts[0].intent, grounded=True, intents=all_intents)
+        return AnswerResult(
+            answer=final_answer, intent=parts[0].intent, grounded=True, intents=all_intents, **_help_fields(parts)
+        )
 
     if len(parts) == 1:
         # Single-intent path — the overwhelming majority of real
@@ -461,7 +513,7 @@ def answer_question(
         # stripped either way so a stray one is never shown to the user.
         cleaned = _PART_MARKER_PATTERN.sub("", answer_text).strip()
         result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
-        ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
+        ai_text = _clean_ai_text(cleaned, merged_context) if result.grounded else _UNGROUNDED_FALLBACK
         if not result.grounded:
             logger.warning(
                 "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
@@ -474,6 +526,7 @@ def answer_question(
         links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts) else ()
         return AnswerResult(
             answer=final_answer, intent=parts[0].intent, grounded=result.grounded, links=links, intents=all_intents,
+            **_help_fields(parts),
         )
 
     ai_text_by_index: dict[int, str] = {}
@@ -502,7 +555,36 @@ def answer_question(
     )
     return AnswerResult(
         answer=final_answer, intent=parts[0].intent, grounded=not any_segment_failed, links=links, intents=all_intents,
+        **_help_fields(parts),
     )
+
+
+def _help_fields(parts: list["_Part"]) -> dict[str, Any]:
+    """The support-lane fields of a multi-part answer: every help article
+    any product_help part linked to (de-duplicated, in question order), and
+    the handoff offer if any part was a help question."""
+    articles: dict[str, str] = {}
+    for part in parts:
+        for slug, title in part.help_articles:
+            articles.setdefault(slug, title)
+    return {
+        "help_articles": tuple(articles.items()),
+        "handoff_available": any(p.handoff_available for p in parts),
+        "help_answered": any(p.help_answered for p in parts),
+    }
+
+
+def _recover_product_help(classify: ClassifyResult, question: str) -> ClassifyResult:
+    """Defence in depth against classifier variance, same posture as
+    _recover_out_of_scope_intent: only ever promotes an out_of_scope verdict
+    to the support lane, and only when the question is how-to shaped AND the
+    help content has a confident match for it — so a genuinely off-topic
+    question still gets the plain refusal, never a guessed help answer."""
+    if classify.intent != "out_of_scope":
+        return classify
+    if support_lane.looks_like_how_to_question(question) and support_lane.confident_match(question):
+        return ClassifyResult(intent=support_lane.INTENT)
+    return classify
 
 
 _INTENT_FOCUS_LABELS = {
@@ -615,6 +697,17 @@ def _build_part(
     if intent == "metric_definition":
         definition = get_definition(classify_item.metric) if classify_item.metric else None
         return _Part(intent="metric_definition", resolved_answer=definition or _SAFE_FALLBACK)
+
+    if intent == support_lane.INTENT:
+        # Help part of a compound question ("what's my revenue and how do I
+        # undo an import?"): answered with zero AI from the best article's
+        # reviewed summary + link, so the shared explain call stays a pure
+        # business-data call and the support lane never mixes with it.
+        pointer = support_lane.deterministic_pointer(support_lane.how_to_clause(question))
+        return _Part(
+            intent=intent, resolved_answer=pointer.answer, help_articles=pointer.articles, handoff_available=True,
+            help_answered=pointer.answered,
+        )
 
     if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
         context, early_result = _dispatch_lookup(
@@ -758,6 +851,66 @@ def _split_multi_part_answer(answer_text: str, *, expected_parts: int) -> dict[i
     return result
 
 
+_LOW_COST_COVERAGE_PCT = 50
+
+
+def _with_margin_coverage_note(context: dict) -> dict:
+    """Found live: with no cost prices on sales, the margin product lists
+    are empty and ORLA told the user "no products are hurting your margin"
+    — stating an absence of data as a fact. When most revenue has no known
+    cost, the context now says so plainly, so the answer can too."""
+    coverage = (context.get("gross_margin") or {}).get("cost_data_coverage_pct")
+    try:
+        low = coverage is None or Decimal(str(coverage)) < _LOW_COST_COVERAGE_PCT
+    except (ArithmeticError, ValueError):
+        low = True
+    if low:
+        context["margin_data_warning"] = (
+            "Most sales in this period have no cost price recorded, so product margins cannot be ranked and "
+            "it is unknown which products hurt margin. Say this instead of saying no products hurt margin. "
+            "Costs come from a stock-count or purchases upload with a unit cost column."
+        )
+    return context
+
+
+_SNAKE_CASE_TOKEN = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+# A sentence (10-300 chars) immediately followed by itself, e.g.
+# "You have 5 in stock.You have 5 in stock." — bounded so the backtracking
+# stays cheap on a short chat answer.
+_REPEATED_SENTENCE = re.compile(r"(\S.{9,299}?[.!?])\s*\1")
+
+
+def _context_field_names(obj: Any, out: set[str]) -> set[str]:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(key, str) and "_" in key:
+                out.add(key)
+            _context_field_names(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _context_field_names(value, out)
+    return out
+
+
+def _clean_ai_text(text: str, context: dict | None) -> str:
+    """Deterministic clean-up of an already guardrail-checked AI answer.
+    The guardrail only verifies numbers, so two live failure shapes got
+    through: lines leaking raw data-field names ("- suggested_reorder_
+    quantity: 49 units") and a sentence repeated back to back. Drops any
+    line naming a field from the context it was given, then collapses
+    exact repeats. Never returns empty — falls back to the original text."""
+    field_names = _context_field_names(context, set()) if context else set()
+    kept: list[str] = []
+    for line in text.split("\n"):
+        if field_names and any(token in field_names for token in _SNAKE_CASE_TOKEN.findall(line)):
+            continue
+        if line.strip() and kept and line.strip() == kept[-1].strip():
+            continue
+        kept.append(line)
+    cleaned = _REPEATED_SENTENCE.sub(r"\1", "\n".join(kept)).strip()
+    return cleaned or text
+
+
 def _assemble_final_answer(
     parts: list[_Part], ai_text_by_index: dict[int, str], *, question: str, previous_intent: str | None,
 ) -> tuple[str, tuple[str, ...]]:
@@ -780,7 +933,7 @@ def _assemble_final_answer(
         if part.resolved_answer is not None:
             texts.append(part.resolved_answer)
             continue
-        text = ai_text_by_index[i]
+        text = _clean_ai_text(ai_text_by_index[i], part.context)
         if part.intent == "forecast" and wants_reorder_list and part.all_products_for_priority_list:
             built = _build_priority_order_list(
                 part.all_products_for_priority_list, group_by_business=_looks_like_branch_split_question(question)
@@ -1397,7 +1550,7 @@ def _fetch_context(
             return context
         else:
             summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
-        return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+        return _with_margin_coverage_note(FinancialPerformanceOut.model_validate(summary).model_dump(mode="json"))
     if intent == "retail_operations":
         if combined_businesses is not None:
             summary = get_retail_operations_for_group(
@@ -1407,7 +1560,7 @@ def _fetch_context(
             summary = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_retail_operations(RetailOperationsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "workshop_performance":
-        if business.template != "bicycle_shop":
+        if not template_supports_repairs(business.template):
             return None
         if combined_businesses is not None:
             summary = get_workshop_performance_for_group(
@@ -1659,8 +1812,8 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "(gross vs net revenue, how much was refunded, return rate). Use period \"explicit_date\" for a "
     'question naming a specific day or date range (e.g. "revenue on the 24th of June", "sales last '
     'Tuesday").\n'
-    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (bike-shop businesses '
-    'only). Not for one specific repair by reference — that\'s "repair_lookup".\n'
+    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (only businesses that '
+    'run a repair or service workshop). Not for one specific repair by reference — that\'s "repair_lookup".\n'
     '- "latest_report": the most recent generated weekly/monthly report.\n'
     '- "product_lookup": detail about ONE specific product by name or SKU — its current stock, cost, or '
     'sell price (e.g. "how much stock of Chain Lube do I have"). Not for "what are my top sellers" or a '
@@ -1698,11 +1851,17 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "a demand-quantity/reorder-number projection with no weather link at all. Different from "
     '"findings_recommendations": a weather pattern may exist in that intent\'s data too, but buried in a '
     "general list among unrelated issues and possibly cut off by a display cap — use \"weather_outlook\" "
-    "for a direct, dedicated answer about weather specifically.\n\n"
+    "for a direct, dedicated answer about weather specifically.\n"
+    '- "product_help": how to USE the ORLA app itself, not this business\'s figures — uploading or importing '
+    "files, column mapping, undo/re-import, invoice PDFs, generating/downloading reports or why one is missing, "
+    "setting reorder points, managing suppliers, notifications, branches, staff/invites/roles, billing, the free "
+    'pilot, login/password/account, or contacting support (e.g. "how do I upload my stock count?", "why did '
+    'my report disappear?", "how do I add an employee?"). A question about this business\'s own numbers is '
+    "never product_help.\n\n"
     'Use "metric_definition" when the question asks what a term/metric means, not for one of its numbers. '
     'Use "out_of_scope" for anything not about this business\'s revenue, retail/workshop performance, '
-    'forecast, recommendations, reports, or a specific product/purchase/repair — never invent an intent '
-    "outside the list above. "
+    "forecast, recommendations, reports, a specific product/purchase/repair, or how to use ORLA — never "
+    "invent an intent outside the list above. "
     'Use "default_recent" as the period unless the question clearly asks about last week, last month, or '
     'names a specific date or date range (use "explicit_date" for that last case). '
     "If a previous question/answer in this conversation is shown to you: when the new question is a short "
@@ -1771,8 +1930,10 @@ def _classify_intent(
         # 1400 is sized against that live failure; live-verify again and
         # raise further if truncation shows up. See app/settings/
         # config.py's openrouter_model comment.
+        # Raised again 1400 -> 1600 when the product_help intent's
+        # description was added (PR-5.7), for the same reason as above.
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=1400, temperature=0.0
+            messages=messages, response_format={"type": "json_object"}, max_tokens=1600, temperature=0.0
         )
     except AIProviderError as exc:
         logger.warning("AI classify call failed business=%s error=%s", business_id, exc)

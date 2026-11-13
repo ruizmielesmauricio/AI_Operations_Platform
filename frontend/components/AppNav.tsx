@@ -63,7 +63,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
       return;
     }
     apiGet<SubscriptionStatus>(`/businesses/${businessId}/billing/subscription`)
-      .then((s) => setSubscriptionStatus(s.status))
+      .then((s) => setSubscriptionStatus(s.access))
       .catch(() => setSubscriptionStatus(null));
   }, [businessId]);
 
@@ -158,7 +158,8 @@ export function AppNav({ businessId }: { businessId?: string }) {
     };
   }, [businessId]);
 
-  const canUpload = subscriptionStatus === "active";
+  // Paid subscription OR free pilot window (SubscriptionStatus.access).
+  const canUpload = subscriptionStatus !== null;
 
   async function handleLogout() {
     await supabase?.auth.signOut();
@@ -214,7 +215,7 @@ export function AppNav({ businessId }: { businessId?: string }) {
           belongs in this one top nav, never repeated per business row. */}
       {businessId && (
         <>
-          <a href={`/products${suffix}`}>Thresholds</a>
+          <a href={`/products${suffix}`}>Reorder rules</a>
           <a href={`/suppliers${suffix}`}>Suppliers</a>
           <a href={`/transactions${suffix}`}>Transactions</a>
         </>
@@ -243,6 +244,10 @@ export function AppNav({ businessId }: { businessId?: string }) {
           Profile above having no businessId suffix. Login email lives on
           the Supabase Auth identity itself, not any one business. */}
       <a href="/account">Account</a>
+      {/* Help centre (PR-5.7) — readable for every role and every
+          business, so it's always shown; the business suffix only lets
+          "Contact support" know which business the question is about. */}
+      <a href={`/help${suffix}`}>Help</a>
         </div>
       {identityLabel && <span className="app-nav__identity">Signed in as {identityLabel}</span>}
       <button className="app-nav__logout" type="button" onClick={handleLogout}>
@@ -270,7 +275,9 @@ export function AppNav({ businessId }: { businessId?: string }) {
           <div>
             <span className="app-business-header__eyebrow">Current business</span>
             <strong>{logoInfo.companyName}</strong>
-            <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+            {logoInfo.selectedBusinessName && logoInfo.selectedBusinessName !== logoInfo.companyName && (
+              <span className="app-business-header__meta">{logoInfo.selectedBusinessName}</span>
+            )}
           </div>
         </div>
       )}

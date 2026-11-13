@@ -43,6 +43,7 @@ from app.repositories.ai_request import AIRequestRepository
 from app.repositories.report import MAX_ATTEMPTS, ReportRepository
 from app.repositories.sale import SaleRepository
 from app.repositories.subscription import SubscriptionRepository
+from app.billing.pilot import pilot_access_active
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
         # noise, not a real reminder. Matches the ORLA Notification
         # Centre's own "when expected" framing.
         subscription = subscriptions.get_by_business_id(business.id)
-        if subscription is not None and subscription.status == "active":
+        if (subscription is not None and subscription.status == "active") or pilot_access_active(business, resolved_now):
             try:
                 check_data_freshness(db, business=business, now=resolved_now)
                 db.commit()
@@ -178,7 +179,8 @@ def run_tick(db: Session, *, now: datetime | None = None) -> dict[str, int]:
                         resolve_report_delayed(db, business_id=business.id, report_type=report_type, period_start=start_date)
                         recommendation_count = len(report.payload.get("findings", {}).get("recommendations", []))
                         notify_orla_insights(
-                            db, business_id=business.id, report_id=report.id, recommendation_count=recommendation_count
+                            db, business_id=business.id, report_id=report.id, recommendation_count=recommendation_count,
+                            report_type=report_type,
                         )
                         # Weekly-only (ORLA Notifications/Security/Retention
                         # prompt, sections 1+2) — this codebase has no

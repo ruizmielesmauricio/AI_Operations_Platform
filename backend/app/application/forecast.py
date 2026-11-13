@@ -202,7 +202,11 @@ def get_forecast(
         result = _quantize_forecast_result(result, _quantize_units)
 
         current_stock = stock_by_product.get(product_id, 0)
-        suggested_reorder_quantity = max(0, math.ceil(result.total_high) - current_stock)
+        # Negative derived stock means the stock count is out of date (sales
+        # recorded beyond what was ever counted or purchased), not a real
+        # shortfall to buy back — treat it as zero on hand. Found live: a
+        # -499 stock figure inflated a suggested order to 533 units.
+        suggested_reorder_quantity = max(0, math.ceil(result.total_high) - max(current_stock, 0))
         daily_rate = result.total_point / horizon_days
         # 0, not a negative number, when there's no stock at all — same
         # convention as compute_stock_cover_days in app/analytics/retail.py

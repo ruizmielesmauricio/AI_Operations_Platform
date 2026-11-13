@@ -41,6 +41,14 @@ class ChatRequest(BaseModel):
     previous_intents: list[str] | None = Field(default=None, max_length=3)
 
 
+class HelpArticleLink(BaseModel):
+    """A help article an answer links to — slug/title come from the
+    approved knowledge base (app/support/), never from model text."""
+
+    slug: str
+    title: str
+
+
 class ChatResponse(BaseModel):
     answer: str
     # The first (or only) sub-question's intent — kept singular so an
@@ -63,3 +71,10 @@ class ChatResponse(BaseModel):
     # for a compound one ("what's my revenue and what should I reorder").
     # Echo this back as the next request's previous_intents.
     intents: list[str] = []
+    # Support lane (PR-5.7): help articles to link to (/help/{slug}), and
+    # whether to offer the "Contact support" handoff button.
+    help_articles: list[HelpArticleLink] = []
+    handoff_available: bool = False
+    # True when `answer` came from the help content; False for a refusal
+    # that only suggests related articles and the handoff.
+    help_answered: bool = False

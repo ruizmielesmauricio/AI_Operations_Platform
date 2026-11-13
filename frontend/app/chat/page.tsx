@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiPost } from "@/lib/api/client";
+import { ApiError, apiPost } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { AppNav } from "@/components/AppNav";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
-import type { ChatResponse } from "@/types";
+import type { ChatResponse, HelpArticleLink, SupportRequest } from "@/types";
 
 // Stage E19-E24 — PR-5.6's business-data Q&A lane. Last-exchange-only
 // memory: each question resends just the immediately preceding
@@ -28,6 +28,15 @@ interface ChatMessage {
   text: string;
   grounded?: boolean;
   links?: string[];
+  // Support lane (PR-5.7): help articles to link to, and the "Contact
+  // support" handoff for the question that produced this answer.
+  helpArticles?: HelpArticleLink[];
+  handoff?: {
+    question: string;
+    answered: boolean;
+    state: "idle" | "sending" | "sent" | "error";
+    error?: string;
+  };
 }
 
 // The only two pages `links` can ever reference (app/schemas/ai.py's
@@ -109,7 +118,16 @@ export default function ChatPage() {
       });
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", text: response.answer, grounded: response.grounded, links: response.links },
+        {
+          role: "assistant",
+          text: response.answer,
+          grounded: response.grounded,
+          links: response.links,
+          helpArticles: response.help_articles,
+          handoff: response.handoff_available
+            ? { question: trimmed, answered: response.help_answered, state: "idle" }
+            : undefined,
+        },
       ]);
       setLastExchange({
         question: trimmed, answer: response.answer, intent: response.intent, intents: response.intents,
@@ -118,6 +136,34 @@ export default function ChatPage() {
       setError("Could not reach the assistant. Your dashboard and reports are unaffected — try again shortly.");
     } finally {
       setSending(false);
+    }
+  }
+
+  // "Contact support" (PR-5.7): sends the question exactly as the user
+  // typed it, plus ORLA's reply and the articles shown, so the ORLA team
+  // has the context without asking again. One request per message.
+  async function handleContactSupport(index: number) {
+    const message = messages[index];
+    if (!message?.handoff || !businessId || message.handoff.state === "sending" || message.handoff.state === "sent") {
+      return;
+    }
+    const update = (handoff: ChatMessage["handoff"]) =>
+      setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, handoff } : m)));
+    update({ ...message.handoff, state: "sending" });
+    try {
+      await apiPost<SupportRequest>(`/businesses/${businessId}/support/requests`, {
+        question: message.handoff.question,
+        source: "chat",
+        orla_answer: message.text,
+        article_slugs: (message.helpArticles ?? []).map((a) => a.slug),
+      });
+      update({ ...message.handoff, state: "sent" });
+    } catch (err) {
+      update({
+        ...message.handoff,
+        state: "error",
+        error: err instanceof ApiError ? err.message : "Could not send this to support. Try again shortly.",
+      });
     }
   }
 
@@ -155,8 +201,10 @@ export default function ChatPage() {
       <p className="hint">
         ORLA can answer questions about your revenue, retail or workshop performance, forecast, recommendations, or
         your latest report — and can answer a few of these at once if you ask them together (e.g. "what's my
-        revenue and what should I reorder?"). Not a general chatbot — answers are grounded only in your own
-        calculated data, and questions outside that scope get a plain "I can't help with that" response rather
+        revenue and what should I reorder?"). It also answers how-to questions about ORLA itself (e.g. "how do I
+        upload my stock count?") from the <a href="/help">help articles</a>, and offers to pass anything they don&apos;t
+        cover to the ORLA team. Not a general chatbot — answers are grounded only in your own calculated data or
+        the help articles, and questions outside that scope get a plain "I can't help with that" response rather
         than a guess. ORLA remembers your last question and answer, so a follow-up like "what about the previous
         period?" works — but only one exchange back, not the whole conversation.
       </p>
@@ -215,6 +263,39 @@ export default function ChatPage() {
                   );
                 })}
               </>
+            )}
+            {m.helpArticles && m.helpArticles.length > 0 && (
+              <span className="chat-help-links">
+                {m.handoff?.answered ? "Help " : "Related help "}
+                {m.helpArticles.length > 1 ? "articles" : "article"}:{" "}
+                {m.helpArticles.map((article, j) => (
+                  <span key={article.slug}>
+                    {j > 0 && " · "}
+                    <a href={`/help/${encodeURIComponent(article.slug)}`}>{article.title} →</a>
+                  </span>
+                ))}
+              </span>
+            )}
+            {m.handoff && (
+              <span className="chat-handoff">
+                {m.handoff.state === "sent" ? (
+                  <span className="status-ok" role="status">
+                    Sent to the ORLA team — they will follow up at your login email address.
+                  </span>
+                ) : (
+                  <>
+                    {m.handoff.answered && <span className="hint">Still stuck?</span>}
+                    <button
+                      type="button"
+                      onClick={() => handleContactSupport(i)}
+                      disabled={m.handoff.state === "sending"}
+                    >
+                      {m.handoff.state === "sending" ? "Sending…" : "Contact support"}
+                    </button>
+                    {m.handoff.state === "error" && <span className="status-error">{m.handoff.error}</span>}
+                  </>
+                )}
+              </span>
             )}
           </p>
         ))}

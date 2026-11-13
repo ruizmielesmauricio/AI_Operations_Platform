@@ -21,6 +21,7 @@ from app.models.return_ import Return
 from app.models.sale import Sale, SaleItem
 from app.models.subscription import ProcessedStripeEvent, Subscription
 from app.models.supplier import ProductSupplier, Supplier
+from app.models.support_request import SupportRequest
 from app.models.upload import Upload
 from app.models.user import User
 from app.models.weather_observation import WeatherObservation
@@ -57,6 +58,7 @@ __all__ = [
     "SaleItem",
     "Subscription",
     "Supplier",
+    "SupportRequest",
     "Upload",
     "User",
     "WeatherObservation",

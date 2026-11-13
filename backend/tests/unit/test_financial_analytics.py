@@ -197,3 +197,20 @@ def test_rank_products_by_margin_top_and_bottom_dont_overlap_with_enough_product
     assert {row.product_id for row in top}.isdisjoint({row.product_id for row in bottom})
     # Bottom is ascending (worst first)
     assert bottom[0].gross_profit <= bottom[1].gross_profit <= bottom[2].gross_profit
+
+
+def test_returns_only_product_is_not_counted_as_missing_cost():
+    # Found live: a product whose only activity in the period was a refund
+    # (negative revenue, cost known) was reported as "excluded — no
+    # recorded cost price".
+    aggregates = [
+        _aggregate(_P1, units_sold=10, revenue="1000", revenue_with_known_cost="1000", cogs="800"),
+        _aggregate(_P2, units_sold=-1, revenue="-24.99", revenue_with_known_cost="-24.99", cogs="-9"),
+        _aggregate(_P3, units_sold=3, revenue="300", revenue_with_known_cost="0", cogs="0"),  # genuinely no cost
+    ]
+    products_by_id = {_P1: "Chain", _P2: "Bottle Cage", _P3: "Mystery Item"}
+
+    top, bottom, excluded_count, all_rows = rank_products_by_margin(aggregates, products_by_id, top_n=5)
+
+    assert excluded_count == 1  # only the product that sold without a cost
+    assert {row.product_id for row in all_rows} == {_P1}

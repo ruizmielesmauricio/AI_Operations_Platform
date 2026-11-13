@@ -213,12 +213,18 @@ def validate_and_parse_row(row_number: int, mapped_values: dict[str, object]) ->
             # maps price + tax + total together should see this mismatch
             # mostly disappear, since tax was the actual explanation for
             # it, not a data problem.
-            expected_before_tax = unit_price_val * quantity
-            expected = (expected_before_tax + (tax_amount or Decimal("0"))).quantize(
-                _CENTS, rounding=ROUND_HALF_UP
-            )
+            # Both pricing conventions are legitimate: a VAT-inclusive unit
+            # price (normal for EU/Irish retail POS exports, where total ==
+            # price × qty and the VAT column is just the tax component of
+            # it) and a VAT-exclusive one (total == price × qty + VAT). Only
+            # a total matching neither is a real mismatch — checking only
+            # the second flagged every row of a VAT-inclusive file.
+            price_times_qty = (unit_price_val * quantity).quantize(_CENTS, rounding=ROUND_HALF_UP)
+            candidates = [price_times_qty]
+            if tax_amount is not None:
+                candidates.append((price_times_qty + tax_amount).quantize(_CENTS, rounding=ROUND_HALF_UP))
             actual = total_amount_val.quantize(_CENTS, rounding=ROUND_HALF_UP)
-            mismatch = abs(expected - actual) > _MISMATCH_TOLERANCE
+            mismatch = all(abs(expected - actual) > _MISMATCH_TOLERANCE for expected in candidates)
     else:
         # unit_price_val is guaranteed non-None here (else missing_price above).
         final_unit_price = unit_price_val
@@ -452,10 +458,19 @@ class ProductMatcher:
     def __init__(self, existing_products) -> None:
         self._by_sku: dict[str, object] = {}
         self._by_name: dict[str, object] = {}
+        self._by_id: dict[object, object] = {}
         for product in existing_products:
             if product.sku:
                 self._by_sku[normalize_sku(product.sku)] = product
             self._by_name[normalize_product_name(product.name)] = product
+            self._by_id[product.id] = product
+
+    def known_cost_price(self, product_id) -> Decimal | None:
+        """The product's recorded cost (from an earlier stock-count or
+        purchases import) — the sale line's cost snapshot when the sales
+        file itself has no cost column, which is the norm for POS exports."""
+        product = self._by_id.get(product_id)
+        return getattr(product, "cost_price", None) if product is not None else None
 
     def resolve(self, *, sku: str | None, product_name: str | None) -> ProductMatch:
         if sku:
@@ -481,6 +496,7 @@ class ProductMatcher:
         if product.sku:
             self._by_sku[normalize_sku(product.sku)] = product
         self._by_name[normalize_product_name(product.name)] = product
+        self._by_id[product.id] = product
 
 
 # --- Category matching -------------------------------------------------
@@ -526,14 +542,38 @@ class SupplierMatcher:
 
     def __init__(self, existing_suppliers) -> None:
         self._by_name: dict[str, object] = {}
+        # Second, looser key with company-form suffixes removed ("Ltd",
+        # "Limited", ...) — found live: an invoice from "Parts Hub Ireland
+        # Ltd" proposed a duplicate of the existing "Parts Hub Ireland".
+        # Only used when the exact name misses, and only when exactly one
+        # supplier shares the stripped name (never a guess between two).
+        self._by_base: dict[str, list[object]] = {}
         for supplier in existing_suppliers:
-            self._by_name[normalize_supplier_name(supplier.name)] = supplier
+            self._index(supplier)
+
+    def _index(self, supplier) -> None:
+        self._by_name[normalize_supplier_name(supplier.name)] = supplier
+        self._by_base.setdefault(_supplier_base_name(supplier.name), []).append(supplier)
 
     def resolve(self, name: str):
-        return self._by_name.get(normalize_supplier_name(name))
+        exact = self._by_name.get(normalize_supplier_name(name))
+        if exact is not None:
+            return exact
+        candidates = self._by_base.get(_supplier_base_name(name), [])
+        return candidates[0] if len(candidates) == 1 else None
 
     def register_created(self, supplier) -> None:
-        self._by_name[normalize_supplier_name(supplier.name)] = supplier
+        self._index(supplier)
+
+
+_COMPANY_SUFFIXES = {"ltd", "limited", "plc", "llc", "inc", "teo", "dac", "clg", "uc", "gmbh", "co", "company"}
+
+
+def _supplier_base_name(name: str) -> str:
+    words = normalize_supplier_name(name).replace(".", "").replace(",", "").split()
+    while len(words) > 1 and words[-1] in _COMPANY_SUFFIXES:
+        words.pop()
+    return " ".join(words)
 
 
 # --- Inventory reconciliation (pure, no DB) ------------------------------
@@ -655,7 +695,7 @@ _WARNING_MESSAGE_TEMPLATES = {
     # warning) — it only affects which row's unit_cost becomes the
     # product's recorded cost price.
     "duplicate_product_cost_overwritten": (
-        "the same product appeared on more than one purchase line — only the last unit cost was kept "
+        "the same product was bought at different unit costs in this file — only the last unit cost was kept "
         "as this product's recorded cost (every line's quantity was still added to stock)"
     ),
     # Purchases-specific, informational only — the row is imported
@@ -895,13 +935,22 @@ def _write_sales(
                     business_id=upload.business_id, product_id=product_id, sell_price=row.unit_price
                 )
 
+            # The file's own cost wins; otherwise snapshot the product's
+            # recorded cost. Found live: without this fallback, a shop whose
+            # POS export has no cost column (most of them) got 0% cost
+            # coverage and no margin figures at all, even though its stock
+            # count and purchases files had already set every product's cost.
+            cost_price_at_sale = row.cost_price_at_sale
+            if cost_price_at_sale is None and product_id is not None:
+                cost_price_at_sale = matcher.known_cost_price(product_id)
+
             item = sale_item_repo.create(
                 business_id=upload.business_id,
                 sale_id=sale.id,
                 product_id=product_id,
                 quantity=row.quantity,
                 unit_price=row.unit_price,
-                cost_price_at_sale=row.cost_price_at_sale,
+                cost_price_at_sale=cost_price_at_sale,
                 tax_amount=row.tax_amount,
             )
             if row.is_return:
@@ -1116,7 +1165,8 @@ def write_purchases_batch(
 
     rows_imported = 0
     touched_product_ids: set[uuid.UUID] = set()
-    cost_updated_products: set[uuid.UUID] = set()
+    # product_id -> the unit cost an earlier row in this file already set.
+    cost_updated_products: dict[uuid.UUID, Decimal] = {}
     duplicate_rejections: list[RejectedRow] = []
     for row in parsed_rows:
         match = matcher.resolve(sku=row.sku, product_name=row.product_name)
@@ -1176,12 +1226,16 @@ def write_purchases_batch(
                     {"row_number": row.row_number, "product_name": row.product_name}
                 )
             if row.unit_cost is not None:
-                if product_id in cost_updated_products:
+                # Only a genuinely different cost is worth a warning — found
+                # live: normal restocks of a product at the same price across
+                # several dates flagged 54 of 66 rows as a problem.
+                previous_cost = cost_updated_products.get(product_id)
+                if previous_cost is not None and previous_cost != row.unit_cost:
                     warnings["duplicate_product_cost_overwritten"].append({"row_number": row.row_number})
                 product_repo.update_cost_price(
                     business_id=upload.business_id, product_id=product_id, cost_price=row.unit_cost
                 )
-                cost_updated_products.add(product_id)
+                cost_updated_products[product_id] = row.unit_cost
 
         movement_repo.create(
             business_id=upload.business_id,

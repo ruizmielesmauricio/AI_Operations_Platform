@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # that test address, so a real deployment is never silently sending
     # from an address nobody configured on purpose.
     resend_from_email: str = ""
+    # Where "Contact support" requests (PR-5.7) are emailed for the ORLA
+    # team. Empty by default: requests are still recorded (support_requests
+    # table + owner notification) and read with scripts/support_requests.py;
+    # setting this together with the two Resend values above turns the
+    # operator email on with no other change.
+    support_inbox_email: str = ""
 
     # Address validation + geocoding for app/geocoding/client.py — empty by
     # default (never committed), matching every other optional provider key

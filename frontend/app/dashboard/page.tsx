@@ -6,7 +6,7 @@ import { AppNav } from "@/components/AppNav";
 import { Chart } from "@/components/Chart";
 import { CategoryLabel, RecommendationList, Section, Stat } from "@/components/Section";
 import { formatMoney, formatPct, formatRate, grossMarginDisplay, severityClass, workshopMarginDisplay } from "@/lib/format";
-import { marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
+import { categoryRevenueBarOption, marginBarOption, revenueForecastLineOption, stockCoverBarOption } from "@/lib/chartOptions";
 import { businessDisplayLabel } from "@/lib/businessLabel";
 import { buildFindingByKey, splitRecommendations } from "@/lib/findings";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
@@ -15,6 +15,8 @@ import type {
   Alert,
   DeadStockRow,
   Findings,
+  CategoryBreakdown,
+  CategoryBreakdownRow,
   FinancialPerformance,
   Forecast,
   ProductCategory,
@@ -59,8 +61,14 @@ export default function DashboardPage() {
   // timezone (app/application/business_group.py) — surfaced as a plain
   // 409 error below, not silently worked around.
   const [allBranches, setAllBranches] = useState(false);
+  // Workshop Performance only applies to business types that track repairs
+  // (backend/app/templates) — hidden rather than shown as an empty section.
+  const showWorkshop = allBranches
+    ? businesses.some((b) => b.supports_repairs)
+    : businesses.find((b) => b.id === businessId)?.supports_repairs ?? false;
 
   const [financial, setFinancial] = useState<FinancialPerformance | null>(null);
+  const [categoryRevenue, setCategoryRevenue] = useState<CategoryBreakdownRow[] | null>(null);
   const [retail, setRetail] = useState<RetailOperations | null>(null);
   const [workshop, setWorkshop] = useState<WorkshopPerformance | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
@@ -88,6 +96,20 @@ export default function DashboardPage() {
       .then(setCategories)
       .catch(() => setCategories([]));
   }, [businessId]);
+
+  // Revenue by category for the Financial Performance chart. Its own effect
+  // on purpose: it depends only on the business and date range, never on
+  // the section's category filter (direct request — the chart always shows
+  // every category). Not available in the combined "All branches" view.
+  useEffect(() => {
+    if (!businessId || allBranches) {
+      setCategoryRevenue(null);
+      return;
+    }
+    apiGet<CategoryBreakdown>(`/businesses/${businessId}/analytics/category-breakdown${periodQuery(startDate, endDate)}`)
+      .then((data) => setCategoryRevenue(data.rows))
+      .catch(() => setCategoryRevenue(null));
+  }, [businessId, startDate, endDate, allBranches]);
 
   useEffect(() => {
     if (!businessId) return;
@@ -191,7 +213,7 @@ export default function DashboardPage() {
           <nav aria-label="Dashboard sections">
             <a href="#financial">Financial performance</a>
             <a href="#retail">Retail operations</a>
-            <a href="#workshop">Workshop performance</a>
+            {showWorkshop && <a href="#workshop">Workshop performance</a>}
             <a href="#forecast">Forecast</a>
             <a href="#findings">Recommendations</a>
             <a href="#alerts">Active alerts</a>
@@ -248,9 +270,9 @@ export default function DashboardPage() {
       </div>
       </div>
 
-          <div id="financial"><FinancialSection data={financial} error={errors.financial} categories={categories} categoryId={financialCategoryId} setCategoryId={setFinancialCategoryId} /></div>
+          <div id="financial"><FinancialSection data={financial} error={errors.financial} categories={categories} categoryId={financialCategoryId} setCategoryId={setFinancialCategoryId} categoryRevenue={categoryRevenue} allBranches={allBranches} /></div>
           <div id="retail"><RetailSection data={retail} error={errors.retail} categories={categories} categoryId={retailCategoryId} setCategoryId={setRetailCategoryId} businessId={businessId} /></div>
-          <div id="workshop"><WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} /></div>
+          {showWorkshop && <div id="workshop"><WorkshopSection data={workshop} error={errors.workshop} businessId={businessId} /></div>}
           <div id="forecast"><ForecastSection data={forecast} error={errors.forecast} horizonDays={horizonDays} setHorizonDays={setHorizonDays} categories={categories} categoryId={forecastCategoryId} setCategoryId={setForecastCategoryId} /></div>
           <div id="findings"><FindingsSection data={findings} error={errors.findings} categories={categories} categoryId={findingsCategoryId} setCategoryId={setFindingsCategoryId} /></div>
           <div id="alerts"><AlertsSection alerts={alerts} error={errors.alerts} /></div>
@@ -268,13 +290,25 @@ function FinancialSection({
   categories,
   categoryId,
   setCategoryId,
+  categoryRevenue,
+  allBranches,
 }: {
   data: FinancialPerformance | null;
   error?: string;
   categories: ProductCategory[];
   categoryId: string;
   setCategoryId: (id: string) => void;
+  // Every category's revenue for the period — never filtered by categoryId.
+  categoryRevenue: CategoryBreakdownRow[] | null;
+  allBranches: boolean;
 }) {
+  const categoryChart = allBranches ? (
+    <p className="hint">Revenue by category is shown per branch — pick one branch to see it.</p>
+  ) : categoryRevenue && categoryRevenue.some((r) => Number(r.revenue) !== 0) ? (
+    <Chart option={categoryRevenueBarOption(categoryRevenue, categoryId || undefined)} />
+  ) : categoryRevenue ? (
+    <p className="hint">No sales in this period to break down by category yet.</p>
+  ) : null;
   const categoryFilter = <CategoryFilterSelect id="financial-category" categories={categories} categoryId={categoryId} setCategoryId={setCategoryId} />;
   if (error) return <Section title="Financial Performance">{categoryFilter}<p className="status-error">{error}</p></Section>;
   if (!data) return <Section title="Financial Performance">{categoryFilter}<p>Loading…</p></Section>;
@@ -310,6 +344,7 @@ function FinancialSection({
           {data.products_excluded_from_ranking} product(s) excluded from ranking — no recorded cost price.
         </p>
       )}
+      {categoryChart}
       {marginRows.length > 0 ? (
         <Chart option={marginBarOption(marginRows, "Gross profit by product (€)")} />
       ) : (

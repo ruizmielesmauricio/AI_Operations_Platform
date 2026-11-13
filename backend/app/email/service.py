@@ -78,3 +78,30 @@ def send_employee_invite_email(*, to_email: str, business_name: str, registratio
     except EmailProviderError as exc:
         logger.warning("Invite email failed to send: to=%s error=%s", to_email, exc)
         return False
+
+
+def send_support_request_email(
+    *, to_email: str, business_name: str, requester_email: str, question: str, request_id: str
+) -> bool:
+    """Tells the ORLA team a customer used "Contact support" (PR-5.7).
+    Never raises, same posture as the invite email: the request is already
+    recorded before this is called, so a missing or failing email provider
+    can never lose it. Returns whether it actually sent."""
+    subject = f"ORLA support request from {business_name}"
+    html = (
+        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif;">'
+        f"<p><strong>Business:</strong> {html_lib.escape(business_name)}</p>"
+        f"<p><strong>From:</strong> {html_lib.escape(requester_email)}</p>"
+        f'<p><strong>Question:</strong></p><p style="white-space: pre-wrap;">{html_lib.escape(question)}</p>'
+        f"<p style=\"color: #69716c; font-size: 13px;\">Request id {html_lib.escape(request_id)} — "
+        "mark it resolved with scripts/support_requests.py.</p></div>"
+    )
+    try:
+        client.send_email(to=to_email, subject=subject, html=html)
+        return True
+    except EmailNotConfigured:
+        logger.info("Support request email not sent (email provider not configured): id=%s", request_id)
+        return False
+    except EmailProviderError as exc:
+        logger.warning("Support request email failed to send: id=%s error=%s", request_id, exc)
+        return False

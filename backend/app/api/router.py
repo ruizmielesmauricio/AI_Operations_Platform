@@ -7,9 +7,11 @@ from app.api import (
     analytics,
     audit_logs,
     billing,
+    business_templates,
     businesses,
     employee_seats,
     health,
+    help,
     imports,
     invoices,
     notifications,
@@ -17,6 +19,7 @@ from app.api import (
     products,
     reports,
     search,
+    support,
     suppliers,
     transactions,
     uploads,
@@ -25,6 +28,7 @@ from app.api import (
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(account_security.router)
+api_router.include_router(business_templates.router)
 api_router.include_router(businesses.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(employee_seats.router)
@@ -43,3 +47,5 @@ api_router.include_router(products.router)
 api_router.include_router(suppliers.router)
 api_router.include_router(transactions.router)
 api_router.include_router(search.router)
+api_router.include_router(help.router)
+api_router.include_router(support.router)
