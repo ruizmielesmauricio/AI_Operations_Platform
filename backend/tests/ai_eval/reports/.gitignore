@@ -1,0 +1,3 @@
+# Per-run JSON detail (raw model output, every call) is large and regenerated
+# on every run; the Markdown reports are the committed record.
+*.json

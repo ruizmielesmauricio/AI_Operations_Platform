@@ -91,6 +91,11 @@ def create_support_request(
         source=source,
         orla_answer=(orla_answer or None),
         article_slugs=known_slugs or None,
+        # Same clock as the duplicate/rate-limit windows above — the column
+        # default is the wall clock, which made those windows disagree with
+        # `now` (test_rate_limited_per_business_per_day failed for a day
+        # after its fixed date).
+        created_at=now,
     )
     # No question text in the audit trail: it is customer free text and the
     # audit log is a security record, not a content store.

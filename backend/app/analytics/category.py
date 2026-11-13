@@ -134,3 +134,23 @@ def compute_category_breakdown(
 
     rows.sort(key=lambda row: row.revenue, reverse=True)
     return rows
+
+
+@dataclass(frozen=True)
+class CategoryBreakdownTotals:
+    revenue: Decimal
+    expenses: Decimal
+    stock_value: Decimal
+
+
+def compute_category_breakdown_totals(rows: list[CategoryBreakdownRow]) -> CategoryBreakdownTotals:
+    """All-category totals for one breakdown — the figure Ask ORLA needs for
+    "how much did I spend on stock in total?" (found by the ORLA-91 eval:
+    only per-category rows existed, so a correct total could only come from
+    the AI adding them up, which the core rule forbids). Summed from every
+    row, never from a display-capped subset."""
+    return CategoryBreakdownTotals(
+        revenue=_quantize_money(sum((r.revenue for r in rows), Decimal("0"))),
+        expenses=_quantize_money(sum((r.expenses for r in rows), Decimal("0"))),
+        stock_value=_quantize_money(sum((r.stock_value for r in rows), Decimal("0"))),
+    )

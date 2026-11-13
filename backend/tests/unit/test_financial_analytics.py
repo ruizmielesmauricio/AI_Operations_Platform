@@ -214,3 +214,11 @@ def test_returns_only_product_is_not_counted_as_missing_cost():
 
     assert excluded_count == 1  # only the product that sold without a cost
     assert {row.product_id for row in all_rows} == {_P1}
+
+
+def test_revenue_change_amount_is_signed_and_quantized():
+    from app.analytics.financial import compute_revenue_change_amount
+
+    assert compute_revenue_change_amount(Decimal("37995.40"), Decimal("30961.78")) == Decimal("7033.62")
+    assert compute_revenue_change_amount(Decimal("1939.00"), Decimal("2222.00")) == Decimal("-283.00")
+    assert compute_revenue_change_amount(Decimal("0"), Decimal("0")) == Decimal("0.00")

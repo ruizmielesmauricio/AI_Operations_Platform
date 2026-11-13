@@ -118,6 +118,9 @@ _SYNONYMS = {
 }
 
 _WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+# Words skipped when matching an article's key phrases against a question
+# (see KnowledgeBase._score_passages).
+_PHRASE_FILLER_WORDS = frozenset({"my", "our", "your", "the", "a", "an", "their", "this", "these", "those", "all"})
 
 
 def _strip_suffix(word: str) -> str:
@@ -339,8 +342,16 @@ class KnowledgeBase:
         if not query_tokens:
             return []
         normalised_query = f" {_normalise_phrase(query)} "
+        # Found by the ORLA-91 eval: "how do I upload sales?" matched the
+        # "upload sales" phrase but "how do I upload my sales?" did not, and
+        # fell below the confidence floor (refused with a handoff). A
+        # possessive/determiner between a phrase's words never changes what
+        # is being asked, so phrases are also tried with those removed.
+        compact_query = " " + " ".join(w for w in normalised_query.split() if w not in _PHRASE_FILLER_WORDS) + " "
         phrase_hits = {
-            slug: sum(1 for phrase in phrases if phrase and f" {phrase} " in normalised_query)
+            slug: sum(
+                1 for phrase in phrases if phrase and (f" {phrase} " in normalised_query or f" {phrase} " in compact_query)
+            )
             for slug, phrases in self._phrases_by_slug.items()
         }
         scored: list[tuple[float, _IndexedPassage]] = []

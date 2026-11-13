@@ -177,3 +177,18 @@ def test_article_slug_must_match_file_name(tmp_path):
     )
     with pytest.raises(HelpContentError):
         load_articles(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_slug"),
+    [
+        # ORLA-91 eval: a possessive inside a key phrase dropped these
+        # below the confidence floor ("upload sales" vs "upload my sales").
+        ("How do I upload my sales?", "upload-sales"),
+        ("How do I upload my repairs?", "upload-repairs"),
+    ],
+)
+def test_possessives_inside_a_key_phrase_still_match_confidently(kb, question, expected_slug):
+    passages = kb.retrieve(question)
+    assert is_confident(passages)
+    assert passages[0].article_slug == expected_slug

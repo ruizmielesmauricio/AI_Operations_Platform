@@ -241,3 +241,21 @@ def test_short_follow_up_reuses_the_previous_help_question_for_retrieval(db_sess
 
     explain_system = provider.calls[1][0]["content"]
     assert "undo-and-reimport#" in explain_system
+
+
+def test_business_part_may_cite_a_number_from_the_help_part(db_session, business_id, monkeypatch):
+    # ORLA-91 eval: the revenue part repeated the help summary's "7 days"
+    # and the whole part was rejected as ungrounded.
+    provider = _FakeProvider(
+        classify=_canned(json.dumps({"intents": [
+            {"intent": "financial_performance", "period": "default_recent"},
+            {"intent": "product_help"},
+        ]})),
+        explain=_canned("⟦PART_1⟧\nRevenue was 0.00. Reports disappear after 7 days, as the help article says."),
+    )
+    monkeypatch.setattr(client, "chat_completion", provider)
+
+    result = _ask(db_session, business_id, "What is my revenue, and how do I download a report?")
+
+    assert result.grounded is True
+    assert "7 days" in result.answer

@@ -150,6 +150,14 @@ def compute_revenue_change(current: Decimal, previous: Decimal) -> RevenueTrend:
     return RevenueTrend(current=_quantize_money(current), previous=_quantize_money(previous), change_pct=change_pct)
 
 
+def compute_revenue_change_amount(current: Decimal, previous: Decimal) -> Decimal:
+    """Signed money difference between two periods' revenue (current minus
+    previous). Ask ORLA states "up €7,033.62" from this — found by the
+    ORLA-91 eval, the model otherwise subtracted the two figures itself,
+    which the core rule forbids and the guardrail rightly rejected."""
+    return _quantize_money(Decimal(str(current)) - Decimal(str(previous)))
+
+
 def compute_returns_summary(net_revenue: Decimal, returns_amount: Decimal, return_count: int) -> ReturnsSummary:
     """net_revenue is Sale.total_amount summed as-is (already includes
     negative-quantity return rows) — gross_revenue is derived from it
