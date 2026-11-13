@@ -127,3 +127,24 @@ def test_unknown_category_id_falls_back_to_uncategorized_name():
         revenue_aggs, [], {}, {_PRODUCT_A1: stray_category_id}, {}, {}
     )
     assert rows[0].category_name == "Uncategorized"
+
+
+def test_category_breakdown_totals_sum_every_row():
+    from app.analytics.category import CategoryBreakdownRow, compute_category_breakdown_totals
+
+    rows = [
+        CategoryBreakdownRow(
+            category_id=None, category_name=name, revenue=Decimal(rev), expenses=Decimal(exp),
+            expenses_data_coverage_pct=None, stock_value=Decimal(stock), products_excluded_from_stock_value=0,
+        )
+        for name, rev, exp, stock in [("Bikes", "26770.00", "9530.00", "0.00"), ("Accessories", "5713.81", "1694.00", "824.67")]
+    ]
+    totals = compute_category_breakdown_totals(rows)
+    assert (totals.revenue, totals.expenses, totals.stock_value) == (Decimal("32483.81"), Decimal("11224.00"), Decimal("824.67"))
+
+
+def test_category_breakdown_totals_of_no_rows_are_zero():
+    from app.analytics.category import compute_category_breakdown_totals
+
+    totals = compute_category_breakdown_totals([])
+    assert (totals.revenue, totals.expenses, totals.stock_value) == (Decimal("0.00"), Decimal("0.00"), Decimal("0.00"))

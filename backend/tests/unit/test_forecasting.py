@@ -146,3 +146,15 @@ def test_total_is_sum_of_daily_points_and_variance_adds_before_sqrt():
     assert result.total_point == Decimal("11") * horizon_days
     assert result.total_high == result.total_point + expected_total_std
     assert result.total_low == result.total_point - expected_total_std
+
+
+def test_net_negative_history_never_forecasts_negative_demand():
+    # Found live: a product whose only activity was returns forecast -0.3
+    # units, outside its own 0.0-0.2 range.
+    daily = _window(MIN_HISTORY_DAYS, lambda d: Decimal("-1") if d.day % 5 == 0 else Decimal("0"))
+    result = compute_baseline_forecast(daily, horizon_days=7, today=_TODAY)
+
+    assert result.total_point >= 0
+    for day in result.daily:
+        assert day.point >= 0
+        assert day.low <= day.point <= day.high

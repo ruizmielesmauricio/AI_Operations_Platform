@@ -6,6 +6,7 @@ service.py and app/imports/r2_client.py <-> service.py splits already
 used in this codebase.
 """
 
+import json
 import time
 
 import httpx
@@ -44,6 +45,54 @@ def _headers() -> dict[str, str]:
         "HTTP-Referer": settings.app_base_url,
         "X-Title": "AI Operations Platform",
     }
+
+
+_OVERRIDABLE = frozenset(
+    {"reasoning_effort", "classify_max_tokens", "explain_max_tokens", "multi_part_explain_max_tokens", "support_max_tokens"}
+)
+
+
+def ai_setting(name: str):
+    """An AI setting for the configured primary model: its entry in
+    `ai_model_overrides` if it has one, else the global `ai_<name>`
+    setting. A malformed overrides value is ignored (globals apply) rather
+    than taking Ask ORLA down."""
+    settings = get_settings()
+    if name not in _OVERRIDABLE:
+        raise KeyError(name)
+    try:
+        overrides = json.loads(settings.ai_model_overrides or "{}").get(settings.openrouter_model) or {}
+    except (ValueError, AttributeError):
+        overrides = {}
+    if isinstance(overrides, dict) and name in overrides:
+        return overrides[name]
+    return getattr(settings, f"ai_{name}")
+
+
+def system_message(static: str, dynamic: str) -> dict:
+    """A system message whose long, never-changing instructions come first
+    and whatever changes per call (date, data, passages) last. Providers
+    with automatic prefix caching benefit from the order alone; with
+    `ai_prompt_cache_breakpoints` on, the static part is also marked as a
+    cache breakpoint, which providers with explicit caching (Anthropic)
+    need. ORLA-91 cost work."""
+    if not get_settings().ai_prompt_cache_breakpoints:
+        return {"role": "system", "content": static + dynamic}
+    return {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": dynamic},
+        ],
+    }
+
+
+def message_text(message: dict) -> str:
+    """A message's text whether its content is a string or text parts."""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return content or ""
 
 
 def chat_completion(
@@ -91,6 +140,14 @@ def chat_completion(
         # a stated approximation rather than a real currency conversion.
         "usage": {"include": True},
     }
+    effort = ai_setting("reasoning_effort")
+    if effort:
+        # Shortens a reasoning model's hidden working-out (billed as output)
+        # — per primary model, see ai_model_overrides (ORLA-91).
+        body["reasoning"] = {"effort": effort}
+    if settings.openrouter_require_zdr:
+        # Zero data retention: only endpoints that keep nothing (ORLA-91).
+        body["provider"]["zdr"] = True
     if len(models) > 1:
         # OpenRouter tries these in order if the first fails/times out —
         # free fallback behaviour, no custom retry logic needed here.

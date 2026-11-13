@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.ai.service import answer_question
 from app.api.deps import get_db
 from app.models.membership import Membership
-from app.schemas.ai import ChatRequest, ChatResponse
+from app.schemas.ai import ChatRequest, ChatResponse, HelpArticleLink
 from app.security.tenant import get_current_membership
 
 router = APIRouter(prefix="/businesses/{business_id}/ai", tags=["ai"])
@@ -29,4 +29,7 @@ def chat(
     return ChatResponse(
         answer=result.answer, intent=result.intent, grounded=result.grounded, links=list(result.links),
         intents=list(result.intents),
+        help_articles=[HelpArticleLink(slug=slug, title=title) for slug, title in result.help_articles],
+        handoff_available=result.handoff_available,
+        help_answered=result.help_answered,
     )

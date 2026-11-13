@@ -99,7 +99,13 @@ RECOMMENDATION_LIBRARY: dict[str, RecommendationTemplate] = {
     ),
     "low_stock": RecommendationTemplate(
         title="Reorder soon",
-        description="At the recent sales rate, this product is projected to run out shortly.",
+        description="At the recent sales rate, this product has run out or will run out shortly.",
+    ),
+    "negative_stock": RecommendationTemplate(
+        title="Upload a fresh stock count",
+        description="Some products show more units sold than were ever counted or purchased, so their stock "
+        "figures are below zero. Your last stock count or purchases upload is probably out of date — stock, "
+        "cover and reorder figures for these products aren't reliable until you upload a current count.",
     ),
     "dead_stock": RecommendationTemplate(
         title="Consider a markdown or return to supplier",
@@ -374,6 +380,30 @@ def evaluate_low_stock(
     return findings
 
 
+def evaluate_negative_stock(stock_cover: list[StockCoverRow]) -> list[Finding]:
+    """One whole-business data-quality finding when any product's derived
+    stock is below zero — a stale stock count, not a real shortfall. Found
+    live: products at -499 units were shown as ordinary stock figures with
+    no warning at all."""
+    negative = sorted((row for row in stock_cover if row.stock_on_hand < 0), key=lambda r: r.stock_on_hand)
+    if not negative:
+        return []
+    names = ", ".join(row.name for row in negative[:5])
+    more = f" and {len(negative) - 5} more" if len(negative) > 5 else ""
+    return [
+        Finding(
+            type="negative_stock",
+            severity="warning",
+            message=f"{len(negative)} product(s) show negative stock ({names}{more}) — your stock count looks out of date.",
+            evidence={
+                "product_count": len(negative),
+                "products": [{"name": row.name, "stock_on_hand": row.stock_on_hand} for row in negative],
+            },
+            rule_id="negative_stock",
+        )
+    ]
+
+
 def evaluate_dead_stock(dead_stock: list[DeadStockEntry]) -> list[Finding]:
     findings = []
     for entry in dead_stock:
@@ -413,6 +443,7 @@ def evaluate_all(
         *evaluate_products_at_loss(top_margin_products + bottom_margin_products),
         *evaluate_thin_margin_high_revenue(all_margin_products, gross_margin.gross_margin_pct),
         *evaluate_low_stock(stock_cover),
+        *evaluate_negative_stock(stock_cover),
         *evaluate_dead_stock(dead_stock),
         *evaluate_high_return_rate(returns),
     ]
@@ -448,6 +479,10 @@ def _impact_score(finding: Finding) -> Decimal:
         return value_at_cost if value_at_cost is not None else Decimal(evidence["stock_on_hand"])
     if finding.type == "high_return_rate":
         return evidence["returns_amount"]
+    if finding.type == "negative_stock":
+        # Count-based magnitude proxy (no money figure), same convention as
+        # dead_stock's stock_on_hand fallback.
+        return Decimal(sum(abs(p["stock_on_hand"]) for p in evidence["products"]))
     if finding.type == "weather_pattern_insight":
         # Not dollar-denominated (this finding has no revenue/cost figure
         # of its own) — a documented magnitude proxy, same convention as

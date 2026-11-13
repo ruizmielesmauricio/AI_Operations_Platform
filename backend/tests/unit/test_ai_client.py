@@ -116,12 +116,17 @@ def test_chat_completion_includes_every_fallback_model_in_the_request_body(monke
         return _response(200, {"choices": [{"message": {"content": "ok"}}]})
 
     monkeypatch.setattr(httpx, "post", _fake_post)
+    # Pinned rather than read from the defaults, which change with the
+    # chosen models (ORLA-91: launch is a 2-model chain).
+    chain_settings = client.get_settings().model_copy(
+        update={"openrouter_model": "a/primary", "openrouter_fallback_models": "b/backup,c/second-backup"}
+    )
+    monkeypatch.setattr(client, "get_settings", lambda: chain_settings)
 
     client.chat_completion(messages=[{"role": "user", "content": "test"}])
 
     models = captured_bodies[0]["models"]
-    assert len(models) == 3
-    assert len({m.split("/")[0] for m in models}) == 3  # 3 distinct providers
+    assert models == ["a/primary", "b/backup", "c/second-backup"]
 
 
 def test_chat_completion_never_sends_more_models_than_openrouter_allows(monkeypatch):
@@ -143,3 +148,21 @@ def test_chat_completion_never_sends_more_models_than_openrouter_allows(monkeypa
     client.chat_completion(messages=[{"role": "user", "content": "test"}])
 
     assert len(captured_bodies[0]["models"]) == client._MAX_MODELS_PER_REQUEST
+
+
+def test_zero_data_retention_is_requested_only_when_configured(monkeypatch):
+    # ORLA-91: live ORLA should route only to endpoints that keep nothing.
+    captured_bodies = []
+
+    def _fake_post(*args, **kwargs):
+        captured_bodies.append(kwargs["json"])
+        return _response(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    client.chat_completion(messages=[{"role": "user", "content": "test"}])
+    zdr_settings = client.get_settings().model_copy(update={"openrouter_require_zdr": True})
+    monkeypatch.setattr(client, "get_settings", lambda: zdr_settings)
+    client.chat_completion(messages=[{"role": "user", "content": "test"}])
+
+    assert "zdr" not in captured_bodies[0]["provider"]
+    assert captured_bodies[1]["provider"] == {"data_collection": "deny", "zdr": True}

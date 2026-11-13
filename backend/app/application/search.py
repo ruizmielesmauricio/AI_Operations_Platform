@@ -28,6 +28,7 @@ from app.schemas.search import (
     SearchResultOut,
     SupplierSearchResultOut,
 )
+from app.templates import template_supports_repairs
 
 # Below this, a query is almost always the start of a word still being
 # typed — running it would just churn the database for results the user
@@ -111,7 +112,7 @@ def global_search(db: Session, *, business_id: uuid.UUID, query: str, limit: int
     # invented fresh, so a coffee-shop-template business never sees an
     # empty "Repairs" group implying a feature it doesn't have.
     repair_results: list[RepairSearchResultOut] = []
-    if business.template == "bicycle_shop":
+    if template_supports_repairs(business.template):
         repairs = ProductionEventRepository(db).search_repairs(business_id, stripped, limit=clamped_limit)
         repair_results = [
             RepairSearchResultOut(

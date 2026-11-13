@@ -79,7 +79,7 @@ def test_full_pipeline_classifies_fetches_and_explains(db_session, business_id, 
     # DATA prefix and forgets to fold the files back in) would silently
     # strip every grounding/scope rule and the tone layer without any
     # other test noticing, since nothing else asserts on prompt content.
-    explain_system_prompt = calls[1][0]["content"]
+    explain_system_prompt = client.message_text(calls[1][0])
     assert "ORLA Constitution" in explain_system_prompt
     assert "ORLA Personality" in explain_system_prompt
     assert "DATA:" in explain_system_prompt
@@ -508,7 +508,7 @@ def test_purchase_lookup_last_order_phrasing_narrows_a_multi_order_history_to_ju
     def _fake_chat_completion(*, messages, response_format=None, max_tokens=500, temperature=0.2):
         if response_format is not None:
             return _classify_response("purchase_lookup", search_term="E-Motion Trail 500 3")
-        captured_context["system_prompt"] = messages[0]["content"]
+        captured_context["system_prompt"] = client.message_text(messages[0])
         return _canned_response("Your last order of E-Motion Trail 500 3 was on 2026-05-18.")
 
     monkeypatch.setattr(client, "chat_completion", _fake_chat_completion)
@@ -566,7 +566,7 @@ def test_purchase_history_question_recovers_and_reaches_the_explain_call(db_sess
     assert result.intent == "purchase_history"
     assert result.grounded is True
     assert "Expensive Hub" in result.answer
-    explain_prompt = calls[1][0]["content"]
+    explain_prompt = client.message_text(calls[1][0])
     assert "recent_purchases" in explain_prompt
     assert "most_expensive_unit_purchases" in explain_prompt
     assert explain_prompt.index("Expensive Hub") < explain_prompt.index("Cheap Chain")

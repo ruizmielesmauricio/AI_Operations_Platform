@@ -49,6 +49,9 @@ METRIC_DEFINITIONS: dict[str, str] = {
 ALLOWED_METRIC_KEYS = tuple(METRIC_DEFINITIONS.keys())
 
 _DEFINITION_TRIGGER_WORDS = ("what does", "define", "explain what", "meaning of")
+# Clause boundaries of a compound question (same shape as
+# app/ai/support_lane.py's splitter).
+_CLAUSE_SPLIT = re.compile(r"[?.!;]+|,?\s+\b(?:and|also|plus|then)\b\s+|,\s+")
 
 _METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "revenue": ("revenue",),
@@ -91,6 +94,13 @@ def match_definition_question(question: str) -> str | None:
     if re.search(r"\bwhat(?: is|'s)\s+(?:my|our|the)\b", lowered):
         return None
     if not any(trigger in lowered for trigger in _DEFINITION_TRIGGER_WORDS):
+        return None
+    # Found by the ORLA-91 eval: "how much stock of Chain Lube do I have,
+    # and what does gross margin mean?" took this shortcut and answered only
+    # the definition, silently dropping the stock question. A compound
+    # question goes to the classifier, which splits it into its parts.
+    clauses = [c for c in _CLAUSE_SPLIT.split(lowered) if len(c.split()) >= 2]
+    if len(clauses) > 1:
         return None
     for key, aliases in _METRIC_ALIASES.items():
         if any(alias in lowered for alias in aliases):

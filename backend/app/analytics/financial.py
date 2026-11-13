@@ -150,6 +150,14 @@ def compute_revenue_change(current: Decimal, previous: Decimal) -> RevenueTrend:
     return RevenueTrend(current=_quantize_money(current), previous=_quantize_money(previous), change_pct=change_pct)
 
 
+def compute_revenue_change_amount(current: Decimal, previous: Decimal) -> Decimal:
+    """Signed money difference between two periods' revenue (current minus
+    previous). Ask ORLA states "up €7,033.62" from this — found by the
+    ORLA-91 eval, the model otherwise subtracted the two figures itself,
+    which the core rule forbids and the guardrail rightly rejected."""
+    return _quantize_money(Decimal(str(current)) - Decimal(str(previous)))
+
+
 def compute_returns_summary(net_revenue: Decimal, returns_amount: Decimal, return_count: int) -> ReturnsSummary:
     """net_revenue is Sale.total_amount summed as-is (already includes
     negative-quantity return rows) — gross_revenue is derived from it
@@ -194,7 +202,14 @@ def rank_products_by_margin(
     excluded_count = 0
     for aggregate in aggregates:
         if aggregate.revenue_with_known_cost <= 0:
-            excluded_count += 1
+            # Only a product that actually sold without a known cost counts
+            # as "excluded — no recorded cost price". A product whose only
+            # activity in the period was a refund (zero/negative revenue)
+            # has nothing to rank either, but isn't missing cost data —
+            # found live: a returns-only product was reported as having no
+            # cost even though its cost was known.
+            if aggregate.revenue > 0:
+                excluded_count += 1
             continue
         gross_profit = aggregate.revenue_with_known_cost - aggregate.cogs
         margin_pct = _quantize_pct(gross_profit / aggregate.revenue_with_known_cost * 100)

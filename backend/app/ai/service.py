@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -22,11 +22,13 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.ai import client
+from app.ai import client, support_lane
 from app.ai.exceptions import AIProviderError
 from app.ai.glossary import ALLOWED_METRIC_KEYS, get_definition, match_definition_question
 from app.ai.guardrail import validate_grounded
-from app.analytics.period import compute_report_period
+from app.analytics.category import compute_category_breakdown_totals
+from app.analytics.financial import compute_revenue_change_amount
+from app.analytics.period import DEFAULT_WINDOW_DAYS, compute_report_period, resolve_period
 from app.application.business_group import (
     MixedTimezoneGroup,
     NotGroupMember,
@@ -55,6 +57,7 @@ from app.repositories.business import list_businesses_for_user
 from app.repositories.inventory_movement import InventoryMovementRepository
 from app.repositories.product import ProductCategoryRepository
 from app.repositories.report import ReportRepository
+from app.repositories.sale_item import SaleItemRepository
 from app.schemas.analytics import (
     CategoryBreakdownOut,
     FinancialPerformanceOut,
@@ -64,6 +67,7 @@ from app.schemas.analytics import (
     WorkshopPerformanceOut,
 )
 from app.settings.config import get_settings
+from app.templates import template_label, template_supports_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +104,10 @@ ALLOWED_INTENTS = (
     "weather_pattern_lookup",
     "weather_sales_analysis",
     "weather_outlook",
+    # PR-5.7 support lane (ADR-028): how to use the ORLA app itself —
+    # answered only from the approved help knowledge base
+    # (app/ai/support_lane.py), never from business data.
+    "product_help",
     "out_of_scope",
 )
 # explicit_date added alongside the lookup intents — a question naming a
@@ -137,15 +145,31 @@ _WEATHER_RANK_DIRECTIONS = frozenset({"top", "bottom", "both"})
 # uncapped here — it has a bigger budget and benefits from full fidelity.
 _CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS = 500
 
+
 _LANE = "business_qa"
 _PROVIDER = "openrouter"
 
 _SAFE_FALLBACK = (
     "I can help with questions about your revenue, retail and workshop performance, forecast, "
-    "weather-linked sales, recommendations, or your latest weekly/monthly report — try asking about one of those."
+    "weather-linked sales, recommendations, or your latest weekly/monthly report, and with how to use ORLA "
+    "itself — try asking about one of those."
 )
 _UNAVAILABLE_MESSAGE = "ORLA is temporarily unavailable — your dashboard and reports are unaffected. Try again shortly."
 _USAGE_LIMIT_MESSAGE = "This business has reached its question limit with ORLA for today. Try again tomorrow."
+_MONTHLY_LIMIT_MESSAGE = (
+    "This business has used its Ask ORLA allowance for this month. Your dashboard and reports are unaffected — "
+    "Ask ORLA is available again from {resumes}."
+)
+
+
+def _calendar_month(business_timezone: str, now: datetime) -> tuple[datetime, date]:
+    """(UTC start of the current calendar month in the business's timezone,
+    first day of next month as a local date)."""
+    tz = ZoneInfo(business_timezone)
+    local_today = now.astimezone(tz).date()
+    first = local_today.replace(day=1)
+    next_first = (first + timedelta(days=32)).replace(day=1)
+    return datetime.combine(first, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc), next_first
 _UNGROUNDED_FALLBACK = "I couldn't confidently answer that from your actual data — try rephrasing, or check the dashboard directly."
 
 
@@ -171,6 +195,17 @@ class AnswerResult:
     # answer can still recover via _CONTINUABLE_INTENTS against any part
     # of it, not just the first.
     intents: tuple[str, ...] = ()
+    # Support lane (PR-5.7): (slug, title) of help articles the answer
+    # draws on, built by code from the knowledge base — never from model
+    # text. The frontend links each to /help/{slug}.
+    help_articles: tuple[tuple[str, str], ...] = ()
+    # True when the frontend should offer the "Contact support" handoff —
+    # every product_help answer, most importantly when the help content
+    # could not answer the question.
+    handoff_available: bool = False
+    # True when the answer itself came from the help content (False for a
+    # refusal that only offers related articles and the handoff).
+    help_answered: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +241,9 @@ class ClassifyResult:
     entity_type: str | None = None
     rank_direction: str | None = None
     limit: int | None = None
+    # True when the classify call produced no content at all — a provider
+    # failure, not a scope decision (see _classify_intent).
+    no_classification: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,6 +265,10 @@ class _Part:
     # _assemble_final_answer's own comments (mirrors the original
     # single-question _all_products_for_priority_list handling).
     all_products_for_priority_list: list | None = None
+    # Only ever set for a "product_help" part (see _build_part).
+    help_articles: tuple[tuple[str, str], ...] = ()
+    handoff_available: bool = False
+    help_answered: bool = False
 
 
 def answer_question(
@@ -299,6 +341,19 @@ def answer_question(
     if business is None:
         return AnswerResult(answer=_SAFE_FALLBACK, intent="out_of_scope", grounded=True)
 
+    # Monthly AI cost cap (ORLA-91): a hard ceiling on what one shop's
+    # questions can cost per calendar month in its own timezone, from the
+    # real per-call cost already logged in ai_requests. Only Ask ORLA pauses
+    # — dashboards, reports and the free definition answers above don't go
+    # through here.
+    month_start, next_month = _calendar_month(business.timezone, resolved_now)
+    spent = request_repo.sum_cost_since(business_id, since=month_start)
+    if spent >= Decimal(str(settings.ai_monthly_cost_cap_eur)):
+        return AnswerResult(
+            answer=_MONTHLY_LIMIT_MESSAGE.format(resumes=f"{next_month.day} {next_month:%B}"),
+            intent="usage_limit_reached", grounded=True,
+        )
+
     # A question naming one of the account's own branches by name always
     # wins, even under all_branches — see _detect_named_business's own
     # docstring. Only ever matches a business the caller is actually a
@@ -307,7 +362,18 @@ def answer_question(
     own_businesses = [b for b, _membership in list_businesses_for_user(db, user_id=user_id)]
     named_business = _detect_named_business(question, own_businesses)
     combined_businesses: list[Business] | None = None
-    requested_all_branches = all_branches or _looks_like_all_branches_question(question)
+    # A branch-split follow-up ("split that by branch") to an all-branches
+    # question stays all-branches — found by the ORLA-91 eval, where it was
+    # answered for the one business and said no branch breakdown existed.
+    requested_all_branches = (
+        all_branches
+        or _looks_like_all_branches_question(question)
+        or (
+            bool(previous_question)
+            and _looks_like_all_branches_question(previous_question)
+            and (_looks_like_branch_split_question(question) or _looks_like_short_follow_up(question))
+        )
+    )
     if named_business is not None:
         business = named_business
     elif requested_all_branches:
@@ -339,7 +405,10 @@ def answer_question(
     scope_label = (
         "Combined across: " + ", ".join(b.name for b in combined_businesses)
         if combined_businesses is not None
-        else business.name
+        # The business type tells the model whether it's talking to e.g. a
+        # bike shop or a cafe, so its wording fits — it never changes which
+        # numbers are fetched.
+        else f"{business.name} ({template_label(business.template)})"
     )
 
     classify_list = _classify_intent(
@@ -352,11 +421,43 @@ def answer_question(
     # one-category weather intent. This deterministic recovery only fires
     # when both a fixed weather bucket and a ranking request are explicit.
     classify_list = [_recover_weather_sales_analysis(item, question) for item in classify_list]
+    classify_list = [_recover_product_help(item, question) for item in classify_list]
+    if len(classify_list) == 1:
+        classify_list = [
+            _recover_reorder_follow_up(classify_list[0], question, previous_intent, tuple(previous_intents or ()))
+        ]
+    classify_list = [_keep_previous_period(item, question, previous_question) for item in classify_list]
+    classify_list = [_drop_unasked_fixed_period(item, question, previous_question) for item in classify_list]
 
     if len(classify_list) == 1 and classify_list[0].intent == "provider_unavailable":
+        # A how-to question can still be answered with zero AI while the
+        # provider is down: the best-matching help article's own reviewed
+        # summary and link (app/ai/support_lane.py::deterministic_pointer).
+        if support_lane.looks_like_how_to_question(question):
+            pointer = support_lane.deterministic_pointer(question)
+            if pointer.answered:
+                return AnswerResult(
+                    answer=pointer.answer, intent=support_lane.INTENT, grounded=True,
+                    intents=(support_lane.INTENT,), help_articles=pointer.articles, handoff_available=True,
+                    help_answered=True,
+                )
         return AnswerResult(
             answer=_UNAVAILABLE_MESSAGE, intent="provider_unavailable", grounded=False,
             intents=("provider_unavailable",),
+        )
+
+    if len(classify_list) == 1 and classify_list[0].intent == support_lane.INTENT:
+        # PR-5.7 support lane: answered only from the approved help
+        # knowledge base, verified deterministically, with a human handoff
+        # when it can't be — still at most classify + explain (ADR-028).
+        support = support_lane.answer_from_help(
+            request_repo, business_id=business_id, user_id=user_id, question=question,
+            previous_question=previous_question, previous_answer=previous_answer, previous_intent=previous_intent,
+        )
+        return AnswerResult(
+            answer=support.answer, intent=support_lane.INTENT, grounded=support.grounded,
+            intents=(support_lane.INTENT,), help_articles=support.articles, handoff_available=True,
+            help_answered=support.answered,
         )
 
     previous_intents_tuple = tuple(previous_intents) if previous_intents else ()
@@ -367,6 +468,7 @@ def answer_question(
         )
         for item in classify_list
     ]
+    parts = [replace(p, context=_without_internal_fields(p.context)) if p.context is not None else p for p in parts]
     all_intents = tuple(p.intent for p in parts)
     ai_parts = [(i, p) for i, p in enumerate(parts) if p.resolved_answer is None]
 
@@ -377,7 +479,9 @@ def answer_question(
         # same fast paths this module already had for a single question,
         # now composed across up to _MAX_SUBINTENTS of them.
         final_answer = _join_parts_for_display([p.resolved_answer for p in parts])
-        return AnswerResult(answer=final_answer, intent=parts[0].intent, grounded=True, intents=all_intents)
+        return AnswerResult(
+            answer=final_answer, intent=parts[0].intent, grounded=True, intents=all_intents, **_help_fields(parts)
+        )
 
     if len(parts) == 1:
         # Single-intent path — the overwhelming majority of real
@@ -407,6 +511,9 @@ def answer_question(
                 "Ungrounded AI answer rejected business=%s intent=%s unsupported=%s",
                 business_id, part.intent, result.unsupported_claims,
             )
+            list_only = _reorder_list_only_answer(part, question, previous_intent)
+            if list_only is not None:
+                return AnswerResult(answer=list_only, intent=part.intent, grounded=True, intents=(part.intent,))
             return AnswerResult(answer=_UNGROUNDED_FALLBACK, intent=part.intent, grounded=False, intents=(part.intent,))
 
         final_answer, links = _assemble_final_answer(
@@ -461,7 +568,7 @@ def answer_question(
         # stripped either way so a stray one is never shown to the user.
         cleaned = _PART_MARKER_PATTERN.sub("", answer_text).strip()
         result = validate_grounded(cleaned, merged_context, question=question, previous_answer=previous_answer)
-        ai_text = cleaned if result.grounded else _UNGROUNDED_FALLBACK
+        ai_text = _clean_ai_text(cleaned, merged_context) if result.grounded else _UNGROUNDED_FALLBACK
         if not result.grounded:
             logger.warning(
                 "Ungrounded multi-part AI answer rejected (coarse fallback) business=%s intents=%s unsupported=%s",
@@ -474,6 +581,7 @@ def answer_question(
         links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts) else ()
         return AnswerResult(
             answer=final_answer, intent=parts[0].intent, grounded=result.grounded, links=links, intents=all_intents,
+            **_help_fields(parts),
         )
 
     ai_text_by_index: dict[int, str] = {}
@@ -486,7 +594,15 @@ def answer_question(
             ai_text_by_index[part_index] = _UNGROUNDED_FALLBACK
             any_segment_failed = True
             continue
-        result = validate_grounded(segment_text, part.context, question=question, previous_answer=previous_answer)
+        # The explain call is shown the deterministic answers of the other
+        # parts (_already_answered) and may refer to them — found by the
+        # ORLA-91 eval: a revenue part mentioning the help article's "7 days"
+        # was rejected as ungrounded. Those texts are code-written, so their
+        # numbers are as grounded as the part's own data.
+        result = validate_grounded(
+            segment_text, {"data": part.context, "already_answered": already_answered},
+            question=question, previous_answer=previous_answer,
+        )
         if result.grounded:
             ai_text_by_index[part_index] = segment_text
         else:
@@ -502,7 +618,124 @@ def answer_question(
     )
     return AnswerResult(
         answer=final_answer, intent=parts[0].intent, grounded=not any_segment_failed, links=links, intents=all_intents,
+        **_help_fields(parts),
     )
+
+
+def _help_fields(parts: list["_Part"]) -> dict[str, Any]:
+    """The support-lane fields of a multi-part answer: every help article
+    any product_help part linked to (de-duplicated, in question order), and
+    the handoff offer if any part was a help question."""
+    articles: dict[str, str] = {}
+    for part in parts:
+        for slug, title in part.help_articles:
+            articles.setdefault(slug, title)
+    return {
+        "help_articles": tuple(articles.items()),
+        "handoff_available": any(p.handoff_available for p in parts),
+        "help_answered": any(p.help_answered for p in parts),
+    }
+
+
+_NAMED_DATE_PATTERN = re.compile(
+    r"\d|\b(?:yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|"
+    r"april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|"
+    r"nov|dec)\b",
+    re.IGNORECASE,
+)
+
+
+def _period_named_in(question: str) -> str | None:
+    """The fixed period a question names, or None when it names a specific
+    date (which only classify can resolve)."""
+    lowered = question.lower()
+    if re.search(r"\b(?:last|previous|past) month\b", lowered):
+        return "last_completed_month"
+    if re.search(r"\b(?:last|previous|past) week\b", lowered):
+        return "last_completed_week"
+    if _NAMED_DATE_PATTERN.search(question):
+        return None
+    return "default_recent"
+
+
+def _keep_previous_period(classify: ClassifyResult, question: str, previous_question: str | None) -> ClassifyResult:
+    """Found by the ORLA-91 eval: after "how is the workshop doing?" (the
+    default last 30 days), "what was it in the previous period?" was
+    classified as last_completed_month, so ORLA answered with the period
+    before *last month* — a different figure from the comparison period of
+    the answer the user was looking at. "The previous period" means the
+    comparison period of the previous question's own period, so that period
+    is kept whenever the previous question named a fixed one."""
+    if not previous_question or classify.intent not in _CONTINUABLE_INTENTS:
+        return classify
+    if not _looks_like_a_period_follow_up_question(question):
+        return classify
+    period = _period_named_in(previous_question)
+    if period is None or period == classify.period:
+        return classify
+    return replace(classify, period=period, start_date=None, end_date=None)
+
+
+_WEEK_OR_MONTH_PATTERN = re.compile(
+    r"\b(?:week|weeks|weekly|month|months|monthly|january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+    re.IGNORECASE,
+)
+
+
+def _drop_unasked_fixed_period(
+    classify: ClassifyResult, question: str, previous_question: str | None
+) -> ClassifyResult:
+    """Found by the ORLA-91 eval: "is revenue up or down compared with the
+    previous period?" — no week or month mentioned — was classified as
+    last_completed_month and answered for October, not the usual last 30
+    days the user sees on the dashboard. A completed week/month is only
+    used when the question (or, for a follow-up, the question before it)
+    actually talks about a week or month."""
+    if classify.period not in ("last_completed_week", "last_completed_month"):
+        return classify
+    if _WEEK_OR_MONTH_PATTERN.search(question):
+        return classify
+    if previous_question and _WEEK_OR_MONTH_PATTERN.search(previous_question):
+        return classify
+    return replace(classify, period="default_recent")
+
+
+_URGENCY_WORDS = ("urgent", "priority", "prioritise", "prioritize", "first")
+_BACK_REFERENCE_PATTERN = re.compile(r"\b(?:those|these|them|which one|which of|that list|the list)\b", re.IGNORECASE)
+
+
+def _recover_reorder_follow_up(
+    classify: ClassifyResult, question: str, previous_intent: str | None, previous_intents: tuple[str, ...]
+) -> ClassifyResult:
+    """Found by the ORLA-91 eval: after a reorder list, "which one of those
+    is the most urgent?" was classified as a product_lookup of one product,
+    and the explain call — seeing only that product — named a different
+    one from the previous answer as most urgent. Urgency is an ordering of
+    the reorder list, which only the forecast data has (sorted soonest-out-
+    of-stock first), so an urgency question pointing back at a reorder
+    answer stays on the forecast."""
+    if classify.intent in ("forecast", "provider_unavailable"):
+        return classify
+    if previous_intent != "forecast" and "forecast" not in previous_intents:
+        return classify
+    lowered = question.lower()
+    if any(word in lowered for word in _URGENCY_WORDS) and _BACK_REFERENCE_PATTERN.search(question):
+        return ClassifyResult(intent="forecast", period=classify.period, horizon_days=classify.horizon_days)
+    return classify
+
+
+def _recover_product_help(classify: ClassifyResult, question: str) -> ClassifyResult:
+    """Defence in depth against classifier variance, same posture as
+    _recover_out_of_scope_intent: only ever promotes an out_of_scope verdict
+    to the support lane, and only when the question is how-to shaped AND the
+    help content has a confident match for it — so a genuinely off-topic
+    question still gets the plain refusal, never a guessed help answer."""
+    if classify.intent != "out_of_scope":
+        return classify
+    if support_lane.looks_like_how_to_question(question) and support_lane.confident_match(question):
+        return ClassifyResult(intent=support_lane.INTENT)
+    return classify
 
 
 _INTENT_FOCUS_LABELS = {
@@ -574,10 +807,43 @@ def _recover_out_of_scope_intent(
     # other unresolved out_of_scope, never guessed.
     continuable = _first_continuable_intent(previous_intent, previous_intents)
     if continuable is not None and (
-        _looks_like_a_period_follow_up_question(question) or _looks_like_aggregate_follow_up_question(question)
+        _looks_like_a_period_follow_up_question(question)
+        or _looks_like_aggregate_follow_up_question(question)
+        or _looks_like_short_follow_up(question)
     ):
         return continuable
     return None
+
+
+# Found by the ORLA-91 eval: after "what was my revenue last month?", the
+# follow-up "and the month before?" came back from classify as prose (the
+# model answered the conversation instead of classifying it) and was
+# refused. A short question opening like a continuation is about the
+# previous topic.
+_SHORT_FOLLOW_UP_PATTERN = re.compile(
+    r"^\s*(?:and\b|what about\b|how about\b|same for\b|and what about\b)|\b(?:month|week|period|day) before\b|"
+    r"\bbefore that\b",
+    re.IGNORECASE,
+)
+_SHORT_FOLLOW_UP_MAX_WORDS = 8
+
+
+def _looks_like_short_follow_up(question: str) -> bool:
+    return len(question.split()) <= _SHORT_FOLLOW_UP_MAX_WORDS and bool(_SHORT_FOLLOW_UP_PATTERN.search(question))
+
+
+def _follow_up_period(question: str, classified_period: str) -> str:
+    """The period a recovered follow-up most plausibly means when classify
+    gave none: "the month before" is about last month's comparison
+    period, so answer from last month's data (it carries both)."""
+    if classified_period != "default_recent":
+        return classified_period
+    lowered = question.lower()
+    if "month" in lowered:
+        return "last_completed_month"
+    if "week" in lowered:
+        return "last_completed_week"
+    return classified_period
 
 
 def _build_part(
@@ -600,6 +866,8 @@ def _build_part(
 
     if intent == "out_of_scope":
         recovered = _recover_out_of_scope_intent(question, previous_intent, previous_intents)
+        if recovered is None and classify_item.no_classification:
+            return _Part(intent="provider_unavailable", resolved_answer=_UNAVAILABLE_MESSAGE)
         if recovered is None:
             return _Part(intent="out_of_scope", resolved_answer=_SAFE_FALLBACK)
         # Only period/start_date/end_date carry over — metric/search_term/
@@ -607,14 +875,49 @@ def _build_part(
         # classify originally, wrongly, picked, and don't necessarily
         # mean anything for the recovered one.
         classify_item = ClassifyResult(
-            intent=recovered, period=classify_item.period, start_date=classify_item.start_date,
-            end_date=classify_item.end_date,
+            intent=recovered, period=_follow_up_period(question, classify_item.period),
+            start_date=classify_item.start_date, end_date=classify_item.end_date,
         )
         intent = recovered
+
+    # (A product_lookup with no search term at all can't run either —
+    # purchase/repair lookups can, by date alone.)
+    if (intent in ("product_lookup", "purchase_lookup", "repair_lookup") and _is_pronoun_search_term(
+        classify_item.search_term
+    )) or (intent == "product_lookup" and not classify_item.search_term):
+        # Found by the ORLA-91 eval: after a reorder list, "which one of
+        # those is the most urgent?" came back as a product_lookup for the
+        # search term "those" — answered "couldn't find anything matching
+        # 'those'". A pronoun is a reference back to the previous answer,
+        # never a product/PO/repair name: continue the previous topic when
+        # it is one of the safe _CONTINUABLE_INTENTS, same net as the
+        # out_of_scope recovery above.
+        continuable = _first_continuable_intent(previous_intent, previous_intents)
+        if continuable is not None:
+            classify_item = ClassifyResult(
+                intent=continuable, period=classify_item.period, start_date=classify_item.start_date,
+                end_date=classify_item.end_date,
+            )
+            intent = continuable
 
     if intent == "metric_definition":
         definition = get_definition(classify_item.metric) if classify_item.metric else None
         return _Part(intent="metric_definition", resolved_answer=definition or _SAFE_FALLBACK)
+
+    if intent == support_lane.INTENT:
+        # Help part of a compound question ("what's my revenue and how do I
+        # undo an import?"): answered with zero AI from the best article's
+        # reviewed summary + link, so the shared explain call stays a pure
+        # business-data call and the support lane never mixes with it.
+        pointer = support_lane.deterministic_pointer(support_lane.how_to_clause(question))
+        return _Part(
+            intent=intent, resolved_answer=pointer.answer, help_articles=pointer.articles, handoff_available=True,
+            help_answered=pointer.answered,
+        )
+
+    if intent in ("purchase_lookup", "repair_lookup"):
+        intent = _lookup_kind_with_matches(db, business, intent, classify_item)
+        classify_item = replace(classify_item, intent=intent)
 
     if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
         context, early_result = _dispatch_lookup(
@@ -626,6 +929,8 @@ def _build_part(
             # "out_of_scope" specifically (see _dispatch_lookup), not
             # "product_lookup" — preserve whichever it actually is.
             return _Part(intent=early_result.intent, resolved_answer=early_result.answer)
+        if intent == "product_lookup" and isinstance(context, dict) and context.get("product_id"):
+            context = {**context, "sales": _product_sales_in_period(db, business, context["product_id"], classify_item, now)}
         return _Part(intent=intent, context=context)
 
     if intent == "weather_pattern_lookup":
@@ -715,7 +1020,24 @@ def _build_part(
     # cost-driven cap as what actually goes in the prompt (see
     # _MAX_CONTEXT_ROWS).
     all_products = context.pop("_all_products_for_priority_list", None)
+    context = _with_period_labels(context, business.timezone, include_comparison=_asks_for_comparison(question))
     return _Part(intent=intent, context=context, all_products_for_priority_list=all_products)
+
+
+_PRONOUN_SEARCH_TERMS = frozenset(
+    {
+        "it", "that", "this", "those", "these", "them", "they", "one", "which", "which one", "that one", "this one",
+        "those ones", "these ones", "one of those", "one of them", "the one", "the most urgent", "most urgent",
+    }
+)
+
+
+def _is_pronoun_search_term(search_term: str | None) -> bool:
+    if not search_term:
+        return False
+    cleaned = re.sub(r"[^a-z ]", "", search_term.lower()).strip()
+    cleaned = re.sub(r"^(?:which|what)\s+", "", cleaned) if cleaned not in _PRONOUN_SEARCH_TERMS else cleaned
+    return cleaned in _PRONOUN_SEARCH_TERMS
 
 
 def _join_parts_for_display(texts: list[str]) -> str:
@@ -758,6 +1080,147 @@ def _split_multi_part_answer(answer_text: str, *, expected_parts: int) -> dict[i
     return result
 
 
+_LOW_COST_COVERAGE_PCT = 50
+
+
+def _with_margin_coverage_note(context: dict) -> dict:
+    """Found live: with no cost prices on sales, the margin product lists
+    are empty and ORLA told the user "no products are hurting your margin"
+    — stating an absence of data as a fact. When most revenue has no known
+    cost, the context now says so plainly, so the answer can too."""
+    coverage = (context.get("gross_margin") or {}).get("cost_data_coverage_pct")
+    try:
+        low = coverage is None or Decimal(str(coverage)) < _LOW_COST_COVERAGE_PCT
+    except (ArithmeticError, ValueError):
+        low = True
+    if low:
+        context["margin_data_warning"] = (
+            "Most sales in this period have no cost price recorded, so product margins cannot be ranked and "
+            "it is unknown which products hurt margin. Say this instead of saying no products hurt margin. "
+            "Costs come from a stock-count or purchases upload with a unit cost column."
+        )
+    return context
+
+
+def _local_date_label(start_iso: str, end_iso: str, tz: ZoneInfo) -> str:
+    """'1 Oct 2026 to 31 Oct 2026' for a half-open UTC [start, end) period.
+    Each boundary is rounded to the nearest local midnight: a comparison
+    period computed as "the same span before" across a clock change is an
+    hour off midnight (MetricPeriod.previous works in UTC), and labelling
+    that hour as a whole extra day would be wrong."""
+
+    def _nearest_local_midnight(iso: str) -> date:
+        moment = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(tz)
+        return moment.date() + timedelta(days=1) if moment.hour >= 12 else moment.date()
+
+    start = _nearest_local_midnight(start_iso)
+    end = _nearest_local_midnight(end_iso) - timedelta(days=1)
+    # The ISO form too, so an answer stating dates either way stays
+    # grounded (the guardrail reads "2026-01-04" as 2026, 1 and 4). The
+    # weekday is given, not left to the model: asked about "last Tuesday",
+    # it was handed 10 Nov 2026 and replied that it "was a Monday" and that
+    # it had no Tuesday figure (ORLA-91 eval).
+    return (
+        f"{start:%a} {start.day} {start:%b %Y} to {end:%a} {end.day} {end:%b %Y} "
+        f"({start.isoformat()} to {end.isoformat()})"
+    )
+
+
+_COMPARISON_PATTERN = re.compile(
+    r"\b(?:compar\w*|vs\.?|versus|previous|prior|before|earlier|change[ds]?|up or down|increas\w*|decreas\w*|"
+    r"trend\w*|grow\w*|growth|drop\w*|fell|fall\w*|rose|rise|better|worse|doing|going|perform\w*|than|last time)\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_comparison(question: str) -> bool:
+    """Whether a question wants the comparison period at all. Found by the
+    ORLA-91 eval: even with both periods labelled by date, the answering
+    model kept stating the comparison period's revenue for "what was my
+    revenue last month?" (5 of 5 times). A question that doesn't ask for a
+    comparison or trend now isn't given the comparison figure, so it can't
+    be mistaken for the answer."""
+    return bool(_COMPARISON_PATTERN.search(question))
+
+
+def _with_period_labels(context: dict, business_timezone: str, *, include_comparison: bool = True) -> dict:
+    """Found by the ORLA-91 eval, the single most common wrong answer: asked
+    "what was my revenue last month?", the model was given the right month
+    (revenue.current) but stated revenue.previous — the comparison period
+    before it — because "last month" reads like "previous". It is a number
+    in the context, so the guardrail can't catch it. The periods were also
+    only UTC timestamps ("2026-09-30T23:00:00Z" for 1 October in Dublin), so
+    a correct "1 Oct to 31 Oct" was either mis-stated or rejected.
+
+    Deterministic fix, in the data rather than the prompt: each period
+    becomes a plain business-local date label, and revenue.previous is
+    renamed to say what it is — the comparison period's revenue, with that
+    period's own dates beside it."""
+    tz = ZoneInfo(business_timezone)
+    period = context.get("period")
+    if not (isinstance(period, dict) and "start" in period and "end" in period):
+        return context
+    labelled = {"period_asked_about": _local_date_label(period["start"], period["end"], tz)}
+    labelled.update((k, v) for k, v in context.items() if k != "period")
+    revenue = labelled.get("revenue")
+    previous = labelled.pop("previous_period", None)
+    if isinstance(revenue, dict) and "previous" in revenue and not include_comparison:
+        labelled["revenue"] = {"current": revenue.get("current")}
+    elif isinstance(revenue, dict) and "previous" in revenue:
+        if not (isinstance(previous, dict) and "start" in previous):
+            start = datetime.fromisoformat(period["start"].replace("Z", "+00:00"))
+            end = datetime.fromisoformat(period["end"].replace("Z", "+00:00"))
+            previous = {"start": (start - (end - start)).isoformat(), "end": start.isoformat()}
+        labelled["revenue"] = {
+            "current": revenue.get("current"),
+            "comparison_period": _local_date_label(previous["start"], previous["end"], tz),
+            "comparison_period_revenue": revenue.get("previous"),
+            "change_pct_vs_comparison_period": revenue.get("change_pct"),
+            "change_amount_vs_comparison_period": str(
+                compute_revenue_change_amount(revenue.get("current") or 0, revenue.get("previous") or 0)
+            ),
+        }
+    return labelled
+
+
+_SNAKE_CASE_TOKEN = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+# A sentence (10-300 chars) immediately followed by itself, e.g.
+# "You have 5 in stock.You have 5 in stock." — bounded so the backtracking
+# stays cheap on a short chat answer.
+_REPEATED_SENTENCE = re.compile(r"(\S.{9,299}?[.!?])\s*\1")
+
+
+def _context_field_names(obj: Any, out: set[str]) -> set[str]:
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(key, str) and "_" in key:
+                out.add(key)
+            _context_field_names(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _context_field_names(value, out)
+    return out
+
+
+def _clean_ai_text(text: str, context: dict | None) -> str:
+    """Deterministic clean-up of an already guardrail-checked AI answer.
+    The guardrail only verifies numbers, so two live failure shapes got
+    through: lines leaking raw data-field names ("- suggested_reorder_
+    quantity: 49 units") and a sentence repeated back to back. Drops any
+    line naming a field from the context it was given, then collapses
+    exact repeats. Never returns empty — falls back to the original text."""
+    field_names = _context_field_names(context, set()) if context else set()
+    kept: list[str] = []
+    for line in text.split("\n"):
+        if field_names and any(token in field_names for token in _SNAKE_CASE_TOKEN.findall(line)):
+            continue
+        if line.strip() and kept and line.strip() == kept[-1].strip():
+            continue
+        kept.append(line)
+    cleaned = _REPEATED_SENTENCE.sub(r"\1", "\n".join(kept)).strip()
+    return cleaned or text
+
+
 def _assemble_final_answer(
     parts: list[_Part], ai_text_by_index: dict[int, str], *, question: str, previous_intent: str | None,
 ) -> tuple[str, tuple[str, ...]]:
@@ -771,16 +1234,14 @@ def _assemble_final_answer(
     reused unchanged, just now over every part's context rather than one.
     For a single part this reduces to exactly the original single-
     question assembly, byte-for-byte."""
-    wants_reorder_list = _looks_like_a_reorder_question(question) or (
-        _looks_like_branch_split_question(question) and previous_intent == "forecast"
-    )
+    wants_reorder_list = _wants_reorder_list(question, previous_intent)
     texts: list[str] = []
     contexts_for_links: list[dict] = []
     for i, part in enumerate(parts):
         if part.resolved_answer is not None:
             texts.append(part.resolved_answer)
             continue
-        text = ai_text_by_index[i]
+        text = _clean_ai_text(ai_text_by_index[i], part.context)
         if part.intent == "forecast" and wants_reorder_list and part.all_products_for_priority_list:
             built = _build_priority_order_list(
                 part.all_products_for_priority_list, group_by_business=_looks_like_branch_split_question(question)
@@ -806,6 +1267,35 @@ def _assemble_final_answer(
     joined = _append_truncation_disclosure(joined, contexts_for_links)
     links = ("dashboard", "reports") if _find_shown_of_total_notes(contexts_for_links) else ()
     return joined, links
+
+
+def _wants_reorder_list(question: str, previous_intent: str | None) -> bool:
+    return (
+        _looks_like_a_reorder_question(question)
+        or any(word in question.lower() for word in _URGENCY_WORDS)
+        or (_looks_like_branch_split_question(question) and previous_intent == "forecast")
+    )
+
+
+_REORDER_LIST_ONLY_INTRO = (
+    "Here is your reorder list, most urgent first — I couldn't confidently add more detail than this from your data."
+)
+
+
+def _reorder_list_only_answer(part: "_Part", question: str, previous_intent: str | None) -> str | None:
+    """When the guardrail rejects the model's text for a reorder question,
+    the deterministic priority list is still a correct answer to it — found
+    by the ORLA-91 eval: "if I had €2,000 to spend on restocking, what should
+    I prioritise?" lost the whole answer to one invented number. Every
+    figure here comes from the forecast, none from the model."""
+    if part.intent != "forecast" or not part.all_products_for_priority_list:
+        return None
+    if not _wants_reorder_list(question, previous_intent):
+        return None
+    built = _build_priority_order_list(
+        part.all_products_for_priority_list, group_by_business=_looks_like_branch_split_question(question)
+    )
+    return f"{_REORDER_LIST_ONLY_INTRO}\n\n{built[0]}" if built is not None else None
 
 
 def _find_shown_of_total_notes(context: Any) -> list[str]:
@@ -953,21 +1443,74 @@ def _detect_named_business(question: str, businesses: list[Business]) -> Busines
     too large for its own token budget, so this never touches it.
 
     Whole-word, case-insensitive matching (not a bare substring) against
-    each business's real `name` — guards against a short/generic name
-    accidentally matching inside an unrelated word. Returns None (no
-    override) if zero or more than one distinct business matches; an
-    ambiguous match falls through to whatever scope was already
-    selected rather than guessing between two real candidates.
+    each business's aliases (see _business_aliases) — guards against a
+    short/generic name accidentally matching inside an unrelated word. A
+    match inside a longer match is dropped first (found by the ORLA-91
+    eval: "Debug Bike Shop Cork" also contains the parent's name "Debug
+    Bike Shop", so naming the branch in full was treated as ambiguous and
+    answered with the parent's figures). Returns None (no override) if zero
+    or more than one distinct business is still named; an ambiguous match
+    falls through to whatever scope was already selected rather than
+    guessing between two real candidates.
     """
     lowered = question.lower()
-    matches = [
-        business
-        for business in businesses
-        if business.name and re.search(rf"\b{re.escape(business.name.lower())}\b", lowered)
+    found: list[tuple[int, int, Business]] = []
+    for business in businesses:
+        for alias in _business_aliases(business, businesses):
+            for match in re.finditer(rf"\b{re.escape(alias)}\b", lowered):
+                found.append((match.start(), match.end(), business))
+    outermost = [
+        (start, end, business)
+        for start, end, business in found
+        if not any(s <= start and end <= e and (e - s) > (end - start) for s, e, _b in found)
     ]
-    if len(matches) == 1:
-        return matches[0]
+    named = {id(business): business for _s, _e, business in outermost}
+    if len(named) == 1:
+        return next(iter(named.values()))
     return None
+
+
+# Words that never identify one branch on their own.
+_GENERIC_BRANCH_WORDS = frozenset(
+    {"shop", "store", "branch", "the", "and", "of", "ltd", "limited", "co", "company", "bike", "bikes", "cafe"}
+)
+
+
+def _business_aliases(business: Business, businesses: list[Business]) -> list[str]:
+    """How a question can name this business: its full name, its city /
+    location label, and — found by the ORLA-91 eval, where "the Cork
+    branch" never matched "Debug Bike Shop Cork" — the part of its name that
+    sets it apart from the account's other businesses ("Cork"), i.e. what
+    is left after removing the words it shares at the start or end with a
+    sibling's name. Generic words and very short remainders are never
+    aliases on their own."""
+    aliases: list[str] = []
+    if business.name:
+        aliases.append(business.name.lower())
+    for label in (business.city, business.location_label):
+        if label and len(label.strip()) >= 3:
+            aliases.append(label.strip().lower())
+    own = (business.name or "").lower().split()
+    for other in businesses:
+        if other is business or not other.name:
+            continue
+        theirs = other.name.lower().split()
+        prefix = 0
+        while prefix < min(len(own), len(theirs)) and own[prefix] == theirs[prefix]:
+            prefix += 1
+        suffix = 0
+        while (
+            suffix < min(len(own), len(theirs)) - prefix
+            and own[len(own) - 1 - suffix] == theirs[len(theirs) - 1 - suffix]
+        ):
+            suffix += 1
+        if prefix == 0 and suffix == 0:
+            continue
+        remainder = [w for w in own[prefix : len(own) - suffix] if w not in _GENERIC_BRANCH_WORDS]
+        distinctive = " ".join(remainder)
+        if len(distinctive) >= 3 and distinctive not in aliases:
+            aliases.append(distinctive)
+    return aliases
 
 
 _ALL_BRANCHES_PATTERNS = (
@@ -1062,7 +1605,14 @@ def _resolve_dates(business: Business, classify: ClassifyResult, now: datetime) 
         return compute_report_period(business.timezone, "weekly", now=now)
     if classify.period == "last_completed_month":
         return compute_report_period(business.timezone, "monthly", now=now)
-    return None, None  # default_recent — same unset-range default the dashboard uses
+    # default_recent — the same trailing window the dashboard uses when no
+    # range is set, but anchored on this question's `now` rather than left
+    # unset (an unset range is resolved against the wall clock deep in each
+    # calc function, so answer_question(now=...) used to be ignored for
+    # these figures while forecast/reports honoured it — found by the
+    # ORLA-91 eval, which answers as of a fixed date to stay repeatable).
+    today = _today_in_timezone(business.timezone, now)
+    return today - timedelta(days=DEFAULT_WINDOW_DAYS - 1), today
 
 
 # One example phrasing per lookup intent, used only to fill in the
@@ -1136,7 +1686,10 @@ def _dispatch_lookup(
             rows = rows[:1]
         if len(rows) == 1:
             return rows[0], None
-        return {"matches": rows}, None
+        # The count is supplied so the model never counts rows itself
+        # (ORLA-91 eval: "you ordered 8 different items" was rightly
+        # rejected by the guardrail as an unsupported number).
+        return {"number_of_lines": len(rows), "matches": rows}, None
 
     # Live-reproduced real bug: find_purchases's own "search term matched
     # several products, which one?" branch (app/application/lookups.py)
@@ -1175,6 +1728,54 @@ def _dispatch_lookup(
         return None, AnswerResult(answer=message, intent=intent, grounded=True)
 
     return result.matches[0], None
+
+
+def _lookup_has_matches(db: Session, business: Business, intent: str, classify: ClassifyResult) -> bool:
+    if intent == "purchase_lookup":
+        result = find_purchases(
+            db, business_id=business.id, search_term=classify.search_term,
+            start_date=classify.start_date, end_date=classify.end_date,
+        )
+    else:
+        result = find_repairs(
+            db, business_id=business.id, business_timezone=business.timezone, search_term=classify.search_term,
+            start_date=classify.start_date, end_date=classify.end_date,
+        )
+    return bool(result.match_labels) or result.resolved_rows is not None
+
+
+def _lookup_kind_with_matches(db: Session, business: Business, intent: str, classify: ClassifyResult) -> str:
+    """Found by the ORLA-91 model comparison: "what was on invoice
+    INV-2026-1188?" (a supplier invoice — a purchase) was classified as a
+    repair lookup by two of five models (the classify prompt also lists
+    "invoice reference" for repairs) and answered "couldn't find anything".
+    A reference that matches nothing of the classified kind but does match
+    the other kind is that other kind — decided by the data, never guessed.
+    Costs one extra DB query, only when the first lookup found nothing."""
+    if not classify.search_term or _lookup_has_matches(db, business, intent, classify):
+        return intent
+    other = "purchase_lookup" if intent == "repair_lookup" else "repair_lookup"
+    return other if _lookup_has_matches(db, business, other, classify) else intent
+
+
+def _product_sales_in_period(
+    db: Session, business: Business, product_id: str, classify: ClassifyResult, now: datetime
+) -> dict:
+    """One product's units sold and revenue for the question's period
+    (default: the usual trailing 30 days). Found by the ORLA-91 eval: "how
+    many Inner Tube 29x2.2 did I sell?" fitted no intent — product_lookup
+    only had stock and prices — so the classifier deliberated past its token
+    budget and the question was refused. Same aggregate query the
+    retail/financial figures use (SaleItemRepository), no new formula."""
+    start, end = _resolve_dates(business, classify, now)
+    period = resolve_period(business.timezone, start, end)
+    aggregates = SaleItemRepository(db).aggregate_by_product_in_range(business.id, period.start, period.end)
+    row = next((a for a in aggregates if str(a.product_id) == str(product_id)), None)
+    return {
+        "period": _local_date_label(period.start.isoformat(), period.end.isoformat(), ZoneInfo(business.timezone)),
+        "units_sold": row.units_sold if row else 0,
+        "revenue": str(row.revenue.quantize(Decimal("0.01"))) if row else "0.00",
+    }
 
 
 def _json_safe(value: Any) -> Any:
@@ -1397,7 +1998,7 @@ def _fetch_context(
             return context
         else:
             summary = get_financial_performance(db, business_id=business_id, start_date=start_date, end_date=end_date)
-        return FinancialPerformanceOut.model_validate(summary).model_dump(mode="json")
+        return _with_margin_coverage_note(FinancialPerformanceOut.model_validate(summary).model_dump(mode="json"))
     if intent == "retail_operations":
         if combined_businesses is not None:
             summary = get_retail_operations_for_group(
@@ -1407,7 +2008,7 @@ def _fetch_context(
             summary = get_retail_operations(db, business_id=business_id, start_date=start_date, end_date=end_date)
         return _trim_retail_operations(RetailOperationsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "workshop_performance":
-        if business.template != "bicycle_shop":
+        if not template_supports_repairs(business.template):
             return None
         if combined_businesses is not None:
             summary = get_workshop_performance_for_group(
@@ -1438,7 +2039,12 @@ def _fetch_context(
         return _trim_findings(FindingsOut.model_validate(summary).model_dump(mode="json"))
     if intent == "category_breakdown":
         summary = get_category_breakdown(db, business_id=business_id, start_date=start_date, end_date=end_date)
-        return _trim_category_breakdown(CategoryBreakdownOut.model_validate(summary).model_dump(mode="json"))
+        context = _trim_category_breakdown(CategoryBreakdownOut.model_validate(summary).model_dump(mode="json"))
+        # "How much did I spend in total?" — a deterministic total, so the
+        # model never has to add the rows up itself (ORLA-91).
+        totals = _json_safe(asdict(compute_category_breakdown_totals(summary.rows)))
+        context["totals_all_categories"] = totals
+        return _plain_category_names(context)
     if intent == "purchase_history":
         return _purchase_history_context(db, businesses=combined_businesses or [business])
     if intent == "latest_report":
@@ -1557,9 +2163,12 @@ def _trim_forecast(forecast: dict) -> dict:
     # Already sorted soonest-out-of-stock first (get_forecast's own
     # docstring) — capping keeps the most urgent, not an arbitrary slice.
     _cap_rows(trimmed, "products")
+    # urgency_rank states the existing soonest-out-of-stock order outright —
+    # found by the ORLA-91 eval: asked which product was most urgent, the
+    # model ranked by the biggest reorder quantity instead.
     trimmed["products"] = [
-        {**p, "result": _trim_forecast_result(p["result"])} if isinstance(p.get("result"), dict) else p
-        for p in trimmed["products"]
+        {"urgency_rank": rank, **({**p, "result": _trim_forecast_result(p["result"])} if isinstance(p.get("result"), dict) else p)}
+        for rank, p in enumerate(trimmed["products"], start=1)
     ]
     return trimmed
 
@@ -1583,6 +2192,14 @@ def _trim_findings(findings: dict) -> dict:
     # arbitrary slice.
     _cap_rows(trimmed, "findings")
     _cap_rows(trimmed, "recommendations")
+    # Cost cut (ORLA-91): each finding's evidence is repeated in full by its
+    # recommendation. Findings keep their type, severity and plain-language
+    # message (which states the key figure); recommendations keep the
+    # evidence the answer cites.
+    trimmed["findings"] = [
+        {k: v for k, v in f.items() if k in ("type", "severity", "message")} if isinstance(f, dict) else f
+        for f in trimmed["findings"]
+    ]
     return trimmed
 
 
@@ -1595,10 +2212,80 @@ def _trim_category_breakdown(breakdown: dict) -> dict:
     return trimmed
 
 
+_CATEGORY_FIELD_NAMES = {
+    "expenses": "spent_buying_stock",
+    "expenses_data_coverage_pct": "spent_buying_stock_cost_coverage_pct",
+    "stock_value": "value_of_stock_on_hand_at_sell_price",
+}
+
+
+def _plain_category_names(context: dict) -> dict:
+    """Found by the ORLA-91 eval: asked "how much did I spend on stock in
+    total last month?", the model answered with the total *stock value*
+    (`stock_value`) instead of the total spent buying stock (`expenses`) —
+    both read as "stock money". The explain context names each figure for
+    what it is."""
+
+    def _rename(row: dict) -> dict:
+        return {_CATEGORY_FIELD_NAMES.get(k, k): v for k, v in row.items()}
+
+    renamed = dict(context)
+    if isinstance(renamed.get("rows"), list):
+        renamed["rows"] = [_rename(r) if isinstance(r, dict) else r for r in renamed["rows"]]
+    if isinstance(renamed.get("totals_all_categories"), dict):
+        renamed["totals_all_categories"] = _rename(renamed["totals_all_categories"])
+    return renamed
+
+
+_UUID_VALUE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Internal bookkeeping the model never needs to explain anything.
+_INTERNAL_KEYS = frozenset({"rule_id", "rule_version"})
+
+
+def _without_internal_fields(value: Any) -> Any:
+    """Cost cut (ORLA-91): every id (product_id, category_id, business_id,
+    purchase_id, ...) and rule bookkeeping is removed from what the explain
+    call is sent. A UUID costs ~20-25 tokens and the model never states one —
+    the latest-report prompt carried 99 of them, purchase history 90."""
+    if isinstance(value, dict):
+        return {
+            k: _without_internal_fields(v)
+            for k, v in value.items()
+            if k not in _INTERNAL_KEYS
+            and not ((k == "id" or k.endswith("_id")) and (v is None or (isinstance(v, str) and _UUID_VALUE.match(v))))
+        }
+    if isinstance(value, list):
+        return [_without_internal_fields(v) for v in value]
+    return value
+
+
+# The stored report's sub-lists are capped harder than a direct question's
+# (_MAX_CONTEXT_ROWS): a report question is a summary, and the report payload
+# carried ~8,800 tokens (ORLA-91) — the single most expensive prompt.
+_REPORT_MAX_ROWS = 5
+
+
+def _cap_report_lists(value: Any) -> Any:
+    if isinstance(value, dict):
+        capped: dict = {}
+        for key, item in value.items():
+            if isinstance(item, list) and len(item) > _REPORT_MAX_ROWS and all(isinstance(i, dict) for i in item):
+                capped[f"{key}_shown_of_total"] = f"{_REPORT_MAX_ROWS} of {len(item)}"
+                capped[key] = [_cap_report_lists(i) for i in item[:_REPORT_MAX_ROWS]]
+            elif key not in capped:
+                capped[key] = _cap_report_lists(item)
+        return capped
+    if isinstance(value, list):
+        return [_cap_report_lists(v) for v in value]
+    return value
+
+
 def _trim_report_payload(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
         return payload
-    trimmed = dict(payload)
+    # Capped first, against the stored lists' real lengths, so each
+    # "_shown_of_total" note states the true total.
+    trimmed = _cap_report_lists(payload)
     if isinstance(trimmed.get("forecast"), dict):
         trimmed["forecast"] = _trim_forecast(trimmed["forecast"])
     if isinstance(trimmed.get("retail_operations"), dict):
@@ -1619,9 +2306,7 @@ def _trim_report_payload(payload: dict | None) -> dict | None:
 # real year without being told what "today" actually is.
 _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "You are an intent classifier for a small business's operations assistant. "
-    "Today's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
-    'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
-    "on or before today, unless a year is stated; \"last Tuesday\"/\"yesterday\" resolve the same way).\n"
+    "Today's date and the previous seven days are given at the end of these instructions.\n"
     "Read the user's question and respond with ONLY a JSON object (no prose, no markdown fences) of the exact "
     'shape {{"intents": [ ... ]}} — a list of 1 to 3 objects, one per distinct question actually being asked. '
     "Almost every question is a single ask — return a one-element list unless the question genuinely contains "
@@ -1659,11 +2344,12 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "(gross vs net revenue, how much was refunded, return rate). Use period \"explicit_date\" for a "
     'question naming a specific day or date range (e.g. "revenue on the 24th of June", "sales last '
     'Tuesday").\n'
-    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (bike-shop businesses '
-    'only). Not for one specific repair by reference — that\'s "repair_lookup".\n'
+    '- "workshop_performance": repairs/workshop revenue and margin, in aggregate (only businesses that '
+    'run a repair or service workshop). Not for one specific repair by reference — that\'s "repair_lookup".\n'
     '- "latest_report": the most recent generated weekly/monthly report.\n'
-    '- "product_lookup": detail about ONE specific product by name or SKU — its current stock, cost, or '
-    'sell price (e.g. "how much stock of Chain Lube do I have"). Not for "what are my top sellers" or a '
+    '- "product_lookup": detail about ONE specific product by name or SKU — its current stock, cost, '
+    'sell price, or how many of it sold and for how much in a period (e.g. "how much stock of Chain Lube do I '
+    'have", "how many Chain Lube did I sell last month"). Not for "what are my top sellers" or a '
     "stock overview across products — that's \"retail_operations\".\n"
     '- "purchase_history": list-style purchase/order history questions — latest/last/recent orders, recent '
     'purchases, order history, or "most expensive things/items I ordered by unit cost".\n'
@@ -1698,13 +2384,23 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "a demand-quantity/reorder-number projection with no weather link at all. Different from "
     '"findings_recommendations": a weather pattern may exist in that intent\'s data too, but buried in a '
     "general list among unrelated issues and possibly cut off by a display cap — use \"weather_outlook\" "
-    "for a direct, dedicated answer about weather specifically.\n\n"
+    "for a direct, dedicated answer about weather specifically.\n"
+    '- "product_help": how to USE the ORLA app itself, not this business\'s figures — uploading or importing '
+    "files, column mapping, undo/re-import, invoice PDFs, generating/downloading reports or why one is missing, "
+    "setting reorder points, managing suppliers, notifications, branches, staff/invites/roles, billing, the free "
+    'pilot, login/password/account, or contacting support (e.g. "how do I upload my stock count?", "why did '
+    'my report disappear?", "how do I add an employee?"). A question about this business\'s own numbers is '
+    "never product_help.\n\n"
     'Use "metric_definition" when the question asks what a term/metric means, not for one of its numbers. '
     'Use "out_of_scope" for anything not about this business\'s revenue, retail/workshop performance, '
-    'forecast, recommendations, reports, or a specific product/purchase/repair — never invent an intent '
-    "outside the list above. "
+    "forecast, recommendations, reports, a specific product/purchase/repair, or how to use ORLA — never "
+    "invent an intent outside the list above. "
     'Use "default_recent" as the period unless the question clearly asks about last week, last month, or '
-    'names a specific date or date range (use "explicit_date" for that last case). '
+    'names a specific date or date range (use "explicit_date" for that last case). "default_recent" already '
+    'means the last 30 days up to today — use it for "the last 30 days", "recently", "lately" or "at the '
+    'moment", never an explicit_date range for those. A comparison ("last month compared with the month before", '
+    '"is revenue up or down") uses the period being asked about (e.g. "last_completed_month"), never one range '
+    "spanning both periods — that period's data already includes the comparison period before it. "
     "If a previous question/answer in this conversation is shown to you: when the new question is a short "
     'follow-up that only makes sense in light of it (a pronoun, "that", "those", "the previous period", '
     '"and last month?", "why", "what about..."), it is almost always about the SAME topic as the previous '
@@ -1712,13 +2408,39 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "search_term the new wording implies, rather than falling back to \"out_of_scope\". For example, if the "
     'previous answer was about revenue and the new question asks "what was the previous period?", classify '
     'it "financial_performance" (its own data already includes both the current and previous-period figures) '
-    'rather than treating it as unrelated. If the previous answer gave a branch/shop/location breakdown and '
+    "rather than treating it as unrelated, keeping the previous question's period (\"default_recent\" if it named "
+    'none) — "the previous period" is the comparison period inside that data. If the previous answer gave a branch/shop/location breakdown and '
     'the new question says "merge", "combine", "total", "overall", "together", "full business", or '
     '"whole business", classify it as the same intent as the previous exchange so the combined figure can '
     "be answered from the current data. "
     "Only ignore the previous exchange, and classify on the new "
     "question's own merits, when it clearly stands alone or changes topic."
 )
+# Everything above is identical on every call; the date part below changes
+# daily. Static first, changing last, so providers can cache the long
+# static prefix (ORLA-91 cost work) — see app/ai/client.py::system_message.
+_CLASSIFY_SYSTEM_PROMPT_STATIC = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format()
+_CLASSIFY_DATE_TEMPLATE = (
+    "\n\nToday's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
+    'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
+    'on or before today, unless a year is stated; "last Tuesday"/"yesterday" resolve the same way). '
+    "The previous seven days were: {recent_days}."
+)
+
+
+_CLASSIFY_JSON_REMINDER = (
+    'Classify the last user question only. Do not answer it. Respond with ONLY the JSON object {"intents": [...]} '
+    "described above."
+)
+
+
+def _recent_days_text(today: date) -> str:
+    """'Thursday 2026-11-12, Wednesday 2026-11-11, ...' — the classify
+    model is given the last seven dates with their weekdays rather than
+    working them out (ORLA-91 model comparison: gpt-oss-120b resolved "last
+    Tuesday" to Monday 9 Nov). About 60 extra prompt tokens."""
+    days = [today - timedelta(days=offset) for offset in range(1, 8)]
+    return ", ".join(f"{d:%A} {d.isoformat()}" for d in days)
 
 
 def _today_in_timezone(business_timezone: str, now: datetime) -> date:
@@ -1736,8 +2458,10 @@ def _classify_intent(
     _parse_intent_json for how the classify call's "intents" array gets
     validated into this."""
     today = _today_in_timezone(business_timezone, now)
-    system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat(), weekday=today.strftime("%A"))
-    messages = [{"role": "system", "content": system_prompt}]
+    date_text = _CLASSIFY_DATE_TEMPLATE.format(
+        today=today.isoformat(), weekday=today.strftime("%A"), recent_days=_recent_days_text(today)
+    )
+    messages = [client.system_message(_CLASSIFY_SYSTEM_PROMPT_STATIC, date_text)]
     if previous_question and previous_answer:
         # Last-exchange-only memory, given as real prior turns rather than
         # spliced into the system prompt as text — the standard shape for
@@ -1752,6 +2476,13 @@ def _classify_intent(
         messages.append({"role": "user", "content": previous_question})
         messages.append({"role": "assistant", "content": previous_answer[:_CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS]})
     messages.append({"role": "user", "content": question})
+    if previous_question and previous_answer:
+        # Found by the ORLA-91 eval: with a prose prior turn in the
+        # conversation, the model sometimes *answered* the follow-up in
+        # prose (inventing a figure) instead of classifying it. A fixed
+        # closing system line restates the output contract; it carries no
+        # user text, so it adds no injection surface.
+        messages.append({"role": "system", "content": _CLASSIFY_JSON_REMINDER})
     try:
         # max_tokens=1400 (raised from 1000 after adding the two weather
         # intents' description paragraphs to the classify prompt): the
@@ -1771,8 +2502,19 @@ def _classify_intent(
         # 1400 is sized against that live failure; live-verify again and
         # raise further if truncation shows up. See app/settings/
         # config.py's openrouter_model comment.
+        # Raised again 1400 -> 1600 when the product_help intent's
+        # description was added (PR-5.7), for the same reason as above.
+        # Raised 1600 -> 4000 by the ORLA-91 eval: on a question that sits
+        # between two intents the model that actually answers
+        # (cohere/north-mini-code:free) reasons for 1,800-3,400 tokens and
+        # returned empty content in ~1 of 3 classify calls, which reached
+        # the user as an "out of scope" refusal. A typical classify still
+        # uses ~130 tokens; this is a ceiling, not a cost, and it is still
+        # one call (OpenRouter's reasoning-effort control is ignored by
+        # this model — tested live).
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=1400, temperature=0.0
+            messages=messages, response_format={"type": "json_object"}, max_tokens=client.ai_setting("classify_max_tokens"),
+            temperature=0.0,
         )
     except AIProviderError as exc:
         logger.warning("AI classify call failed business=%s error=%s", business_id, exc)
@@ -1787,10 +2529,21 @@ def _classify_intent(
         return [ClassifyResult(intent="provider_unavailable")]
 
     content, tokens_in, tokens_out, model, cost = _extract_message(response)
+    empty = content is None or not content.strip()
     _log_request(
         request_repo, business_id=business_id, user_id=user_id, model=model,
-        tokens_in=tokens_in, tokens_out=tokens_out, cost_eur=cost, success=content is not None,
+        tokens_in=tokens_in, tokens_out=tokens_out, cost_eur=cost, success=not empty,
     )
+    if empty:
+        # Found by the ORLA-91 eval: the free model sometimes returns an
+        # empty completion (budget exhausted, or just empty), and that used
+        # to reach the user as "I can only help with questions about your
+        # revenue..." for a perfectly in-scope question. It still goes
+        # through the deterministic out_of_scope recoveries (they rescue
+        # most follow-ups), but if none applies the user is told to try
+        # again rather than that the topic is out of scope (_build_part).
+        logger.warning("Classify call returned empty content business=%s tokens_out=%s", business_id, tokens_out)
+        return [ClassifyResult(intent="out_of_scope", no_classification=True)]
     return _parse_intent_json(content, today=today)
 
 
@@ -1803,19 +2556,10 @@ def _parse_explicit_dates(raw_start: Any, raw_end: Any, *, today: date) -> tuple
     1900 or 3000) can't slip through. Returns (None, None) on any
     failure — the caller falls back to "default_recent", exactly like
     an unparseable period does today."""
-    if not isinstance(raw_start, str):
+    start_date = _parse_model_date(raw_start)
+    if start_date is None:
         return None, None
-    try:
-        start_date = date.fromisoformat(raw_start)
-    except ValueError:
-        return None, None
-
-    end_date = start_date
-    if isinstance(raw_end, str):
-        try:
-            end_date = date.fromisoformat(raw_end)
-        except ValueError:
-            end_date = start_date
+    end_date = _parse_model_date(raw_end) or start_date
 
     if start_date > end_date:
         return None, None
@@ -1826,6 +2570,26 @@ def _parse_explicit_dates(raw_start: Any, raw_end: Any, *, today: date) -> tuple
         return None, None
 
     return start_date, end_date
+
+
+_LOOSE_ISO_DATE = re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$")
+
+
+def _parse_model_date(raw: Any) -> date | None:
+    """A YYYY-MM-DD date from the classify call, also accepting unpadded
+    months/days ("2026-11-1") — the ORLA-91 eval saw the classify model
+    emit unpadded dates, which failed strict parsing and silently fell back
+    to the default last-30-days window. Anything else still fails closed
+    (None)."""
+    if not isinstance(raw, str):
+        return None
+    match = _LOOSE_ISO_DATE.match(raw)
+    if match is None:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
 
 
 def _parse_one_intent(data: dict, *, today: date) -> ClassifyResult:
@@ -1911,8 +2675,12 @@ def _parse_intent_json(content: str | None, *, today: date) -> list[ClassifyResu
     try:
         data = json.loads(content)
     except (json.JSONDecodeError, TypeError):
-        logger.warning("Classify call returned non-JSON content, defaulting to out_of_scope: %r", content[:500])
-        return [ClassifyResult(intent="out_of_scope")]
+        salvaged = _salvage_intent_objects(content)
+        if not salvaged:
+            logger.warning("Classify call returned non-JSON content, defaulting to out_of_scope: %r", content[:500])
+            return [ClassifyResult(intent="out_of_scope")]
+        logger.warning("Classify call returned malformed JSON, salvaged %d intent(s): %r", len(salvaged), content[:500])
+        data = {"intents": salvaged}
     if not isinstance(data, dict):
         logger.warning("Classify call returned JSON that wasn't an object, defaulting to out_of_scope: %r", content[:500])
         return [ClassifyResult(intent="out_of_scope")]
@@ -1934,6 +2702,36 @@ def _parse_intent_json(content: str | None, *, today: date) -> list[ClassifyResu
         )
         return [ClassifyResult(intent="out_of_scope")]
     return parsed
+
+
+# Found by the ORLA-91 eval: the free classify model sometimes emits almost-
+# valid JSON — a stray word between fields ('"end_date": null, probably
+# "metric": null'), markdown fences, or a trailing comma — and the whole
+# question was refused as out_of_scope. The salvage reads only the known
+# keys with plain string/int values, one object per "intent" key; every
+# value still goes through _parse_one_intent's allow-list validation, so
+# this can never produce anything a well-formed reply couldn't.
+_SALVAGE_STRING_FIELD = re.compile(
+    r'"(intent|period|start_date|end_date|metric|search_term|weather_bucket|entity_type|rank_direction)"'
+    r'\s*:\s*"((?:[^"\\]|\\.)*)"'
+)
+_SALVAGE_INT_FIELD = re.compile(r'"(horizon_days|limit)"\s*:\s*(\d{1,3})\b')
+_SALVAGE_INTENT_KEY = re.compile(r'"intent"\s*:')
+
+
+def _salvage_intent_objects(content: str) -> list[dict]:
+    starts = [m.start() for m in _SALVAGE_INTENT_KEY.finditer(content)]
+    objects: list[dict] = []
+    for i, start in enumerate(starts[:_MAX_SUBINTENTS]):
+        segment = content[start : starts[i + 1] if i + 1 < len(starts) else len(content)]
+        obj: dict[str, Any] = {}
+        for match in _SALVAGE_STRING_FIELD.finditer(segment):
+            obj.setdefault(match.group(1), match.group(2))
+        for match in _SALVAGE_INT_FIELD.finditer(segment):
+            obj.setdefault(match.group(1), int(match.group(2)))
+        if "intent" in obj:
+            objects.append(obj)
+    return objects
 
 
 def _parse_horizon_days(raw: Any) -> int | None:
@@ -2013,8 +2811,11 @@ def _generate_answer(
         "otherwise do not claim to have a further per-branch/location breakdown.)\n"
     )
     multi_part_note = _MULTI_PART_INSTRUCTION if multi_part else ""
-    system_prompt = _EXPLAIN_SYSTEM_PROMPT_PREFIX + scope_note + multi_part_note + json.dumps(context, default=str)
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [
+        client.system_message(
+            _EXPLAIN_SYSTEM_PROMPT_PREFIX, scope_note + multi_part_note + json.dumps(context, default=str)
+        )
+    ]
     if previous_question and previous_answer:
         # Same last-exchange-only shape as _classify_intent above, given
         # as real prior turns — full previous_answer here, not truncated,
@@ -2041,9 +2842,13 @@ def _generate_answer(
         # digits of truncating outright, not a comfortable margin. Raised
         # to 1600 for real headroom rather than leaving it at a value one
         # slightly longer answer away from silently cutting a part off
-        # mid-word.
+        # mid-word. Now settings (ORLA-91): 800 left ERNIE 5.5 Flash no room
+        # after its reasoning — empty or cut-off answers on 12 of 107
+        # eval questions.
         response = client.chat_completion(
-            messages=messages, max_tokens=1600 if multi_part else 800, temperature=0.2
+            messages=messages,
+            max_tokens=client.ai_setting("multi_part_explain_max_tokens" if multi_part else "explain_max_tokens"),
+            temperature=0.2,
         )
     except AIProviderError as exc:
         logger.warning("AI explain call failed business=%s error=%s", business_id, exc)

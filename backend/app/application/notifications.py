@@ -33,6 +33,7 @@ CATEGORY_TEAM = "team"
 CATEGORY_BILLING = "billing"
 CATEGORY_BRANCHES = "branches"
 CATEGORY_SECURITY_ACCOUNT = "security_account"
+CATEGORY_SUPPORT = "support"
 
 SEVERITY_INFO = "info"
 SEVERITY_SUCCESS = "success"
@@ -583,7 +584,7 @@ def notify_weekly_business_performance(
         title=f"Weekly revenue {verb} {abs_change}%",
         body=(
             f"Revenue for the week of {period_start.isoformat()} {verb} {abs_change}% compared to the previous "
-            f"week (from €{revenue_previous} to €{revenue_current}). See the full report for details."
+            f"week (from €{Decimal(revenue_previous):,.2f} to €{Decimal(revenue_current):,.2f}). See the full report for details."
         ),
         action_label="View Report",
         action_url=f"/reports/{report_id}",
@@ -736,7 +737,14 @@ def notify_ai_insights_unavailable(db: Session, *, business_id: uuid.UUID, is_do
     )
 
 
-def notify_orla_insights(db: Session, *, business_id: uuid.UUID, report_id: uuid.UUID, recommendation_count: int) -> None:
+def notify_orla_insights(
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    report_id: uuid.UUID,
+    recommendation_count: int,
+    report_type: str | None = None,
+) -> None:
     """Reuses the count of recommendations the report itself already
     computed (app/application/findings.py, via app/application/report.py's
     own payload) — no new calculation, purely a second, insights-framed
@@ -750,8 +758,10 @@ def notify_orla_insights(db: Session, *, business_id: uuid.UUID, report_id: uuid
         category=CATEGORY_ORLA_INSIGHTS,
         type_key="new_recommendations",
         severity=SEVERITY_INFO,
-        title=f"ORLA found {recommendation_count} opportunit{plural}",
-        body=f"ORLA found {recommendation_count} opportunit{plural} that may improve your business, based on your latest report.",
+        # Names the report: weekly and monthly both generate on the same tick,
+        # and two identical "ORLA found N opportunities" rows read as a duplicate.
+        title=f"ORLA found {recommendation_count} opportunit{plural}" + (f" in your {report_type} report" if report_type else ""),
+        body=f"ORLA found {recommendation_count} opportunit{plural} that may improve your business, based on your {report_type or 'latest'} report.",
         action_label="View Report",
         action_url=f"/reports/{report_id}",
         related_entity_type="report",
@@ -770,6 +780,35 @@ def notify_orla_insights(db: Session, *, business_id: uuid.UUID, report_id: uuid
 # CATEGORY_BRANCHES below. Stock/data_uploads/reports/orla_insights stay
 # unrestricted (None) — those are the operational notifications staff
 # need for daily work.
+
+
+_SUPPORT_QUESTION_PREVIEW_CHARS = 200
+
+
+def notify_support_request_created(
+    db: Session, *, business_id: uuid.UUID, request_id: uuid.UUID, requester_label: str, question: str
+) -> None:
+    """Owner-only (PR-5.7): the shop owner sees every question their team
+    sent to ORLA support. One row per request — never grouped, each is a
+    distinct question. The question preview is the customer's own text,
+    shown as plain text, never as markup."""
+    preview = question if len(question) <= _SUPPORT_QUESTION_PREVIEW_CHARS else (
+        question[: _SUPPORT_QUESTION_PREVIEW_CHARS - 1].rstrip() + "…"
+    )
+    notify(
+        db,
+        business_id=business_id,
+        category=CATEGORY_SUPPORT,
+        type_key="support_request_created",
+        severity=SEVERITY_INFO,
+        title="Question sent to ORLA support",
+        body=f"{requester_label} asked the ORLA team: “{preview}” The team will follow up by email.",
+        action_label="View support requests",
+        action_url=f"/help?business={business_id}#support-requests",
+        related_entity_type="support_request",
+        related_entity_id=request_id,
+        visible_to_role="owner",
+    )
 
 
 def notify_employee_added(db: Session, *, business_id: uuid.UUID, seat_id: uuid.UUID, full_name: str) -> None:
@@ -866,7 +905,9 @@ def notify_employee_role_changed(
 # aren't a clear enough signal to word a message around without guessing,
 # so they deliberately notify nothing (never a fabricated status message).
 _SUBSCRIPTION_STATUS_MESSAGES = {
-    "active": (SEVERITY_SUCCESS, "renewed", "Your subscription has been successfully renewed."),
+    # Neutral wording: "active" fires for a first payment as well as a renewal
+    # (found live: a brand-new subscription said "renewed").
+    "active": (SEVERITY_SUCCESS, "active", "Your subscription is active and paid up."),
     "past_due": (
         SEVERITY_WARNING,
         "payment issue",

@@ -61,6 +61,17 @@ class AIRequestRepository:
         ).scalars().all()
         return list(rows)
 
+    def sum_cost_since(self, business_id: uuid.UUID, *, since: datetime) -> Decimal:
+        """Real AI spend for one business since `since` — the monthly cost
+        cap's input (ORLA-91). Every call's cost is logged as OpenRouter
+        reports it (USD, stored in cost_eur — see app/ai/service.py)."""
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(AIRequest.cost_eur), 0)).where(
+                AIRequest.business_id == business_id, AIRequest.created_at >= since
+            )
+        )
+        return Decimal(str(total or 0))
+
     def count_today_for_business(self, business_id: uuid.UUID, *, now: datetime) -> int:
         """PR-5.5's usage-cap check — a rolling 24-hour window ending
         "now" (not a calendar-day boundary, which would let a business

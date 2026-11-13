@@ -2,7 +2,7 @@
 // frontend/app/reports/[id]/page.tsx reuses the exact same chart
 // definitions (per Stage D17/D18's plan: "no new chart infrastructure").
 import type { EChartsOption } from "echarts";
-import type { DailyForecast, ProductMarginRow, StockCoverRow } from "@/types";
+import type { CategoryBreakdownRow, DailyForecast, ProductMarginRow, StockCoverRow } from "@/types";
 
 // Direct request: show each product's category beside its name — for a
 // chart's category-axis label, that means appending it to the label text
@@ -116,4 +116,53 @@ export function stockCoverBarOption(rows: StockCoverRow[]): EChartsOption {
       },
     ],
   };
+}
+
+// Revenue per category for the dashboard's Financial Performance section.
+// Always every category (the section's category filter never changes the
+// data — direct request); the filtered category, if any, is only
+// highlighted so it's easy to spot. Largest first, € labels, share of
+// total in the tooltip.
+export function categoryRevenueBarOption(rows: CategoryBreakdownRow[], highlightedCategoryId?: string): EChartsOption {
+  const sorted = [...rows].sort((a, b) => Number(a.revenue) - Number(b.revenue));
+  const total = sorted.reduce((sum, r) => sum + Number(r.revenue), 0);
+  const highlighting = Boolean(highlightedCategoryId);
+  return {
+    title: { text: "Revenue by category (€) — all categories", textStyle: { fontSize: 13 } },
+    grid: { left: 170, right: 90, top: 40, bottom: 20 },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: (params) => {
+        const p = Array.isArray(params) ? params[0] : params;
+        const value = Number(p.value);
+        const share = total > 0 ? ((value / total) * 100).toFixed(1) : "0.0";
+        return `${p.name}<br/>${_formatMoneyExact(value)} · ${share}% of revenue`;
+      },
+    },
+    xAxis: { type: "value" },
+    yAxis: { type: "category", data: sorted.map((r) => r.category_name) },
+    series: [
+      {
+        type: "bar",
+        label: {
+          show: true,
+          position: "right",
+          formatter: ({ value }) => _formatMoneyLabel(Number(value)),
+          color: "#34403a",
+          fontSize: 11,
+        },
+        data: sorted.map((r) => {
+          const value = Number(r.revenue);
+          const isHighlighted = highlighting && r.category_id === highlightedCategoryId;
+          const color = value < 0 ? "#cf222e" : highlighting && !isHighlighted ? "#9cc5a8" : "#1a7f37";
+          return { value, itemStyle: { color } };
+        }),
+      },
+    ],
+  };
+}
+
+function _formatMoneyExact(value: number): string {
+  return `${value < 0 ? "-" : ""}€${Math.abs(value).toLocaleString("en-IE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }

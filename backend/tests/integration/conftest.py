@@ -27,6 +27,7 @@ from app.models import (
     SaleItem,
     Subscription,
     Supplier,
+    SupportRequest,
     Upload,
     User,
     WeatherObservation,
@@ -56,6 +57,7 @@ def db_session(_engine):
     # deleting rows rather than relying on a rollback to undo everything.
     session.rollback()
     session.query(AIRequest).delete()
+    session.query(SupportRequest).delete()
     session.query(Report).delete()
     session.query(Notification).delete()
     session.query(Alert).delete()

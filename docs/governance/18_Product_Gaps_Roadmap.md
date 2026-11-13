@@ -10,6 +10,8 @@
 
 **Update, 10/08/2026 (v1.56):** Gaps 1, 4, and 5 below are now implemented — see `11_Development_Roadmap.md`'s v1.56 entry for the full change list. This document's per-gap build plans are kept as-written below (the actual build matched them closely) rather than rewritten after the fact, so they remain an accurate record of what was scoped before building. Two sub-pieces were explicitly deferred within the "implemented" gaps, per their own stated escape hatches: Gap 1's automatic scheduled threshold-recompute job (the calculation surface is built and callable; no new recurring job applies it automatically yet), and a dedicated AI "explain this recommendation" round-trip (judged unnecessary — the recommendation's `basis`/`lead_time_days`/`safety_buffer_days` fields are already self-explanatory without an AI call). Gap 2 was fixed in v1.55; Gap 3 remains explicitly out of scope, unchanged.
 
+**Update, 12/11/2026 (v1.86):** Gap 1's deferred weekly threshold-recompute job and lead-time-aware reorder quantities are now tracked as Jira ORLA-82. Reorder suggestions now treat negative derived stock as zero on hand and raise a `negative_stock` finding (ADR-027). Gap 4/5 shipped as described; Gap 3 stays out of scope.
+
 ---
 
 # Document Contract

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { apiGet } from "@/lib/api/client";
 import { businessDisplayLabel } from "@/lib/businessLabel";
-import { formatMoney } from "@/lib/format";
+import { formatDate, formatMoney } from "@/lib/format";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
 import type { PaginatedResult, PurchaseTransaction, RepairTransaction, SaleTransaction } from "@/types";
@@ -38,6 +38,11 @@ export default function TransactionsPage() {
   const [repairs, setRepairs] = useState<PaginatedResult<RepairTransaction> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Repairs tab only for business types that track repairs (backend/app/templates).
+  const supportsRepairs = businesses.find((b) => b.id === businessId)?.supports_repairs ?? false;
+  useEffect(() => {
+    if (businesses.length > 0 && txType === "repairs" && !supportsRepairs) setTxType("sales");
+  }, [businesses, txType, supportsRepairs]);
 
   function query(): string {
     const params = new URLSearchParams();
@@ -96,10 +101,15 @@ export default function TransactionsPage() {
         </button>{" "}
         <button type="button" onClick={() => switchType("purchases")} disabled={txType === "purchases"}>
           Purchases
-        </button>{" "}
-        <button type="button" onClick={() => switchType("repairs")} disabled={txType === "repairs"}>
-          Repairs
         </button>
+        {supportsRepairs && (
+          <>
+            {" "}
+            <button type="button" onClick={() => switchType("repairs")} disabled={txType === "repairs"}>
+              Repairs
+            </button>
+          </>
+        )}
       </p>
 
       {(productId || categoryId) && txType !== "repairs" && (
@@ -147,7 +157,7 @@ export default function TransactionsPage() {
           <tbody>
             {sales.items.map((row) => (
               <tr key={row.id}>
-                <td>{new Date(row.sold_at).toLocaleDateString()}</td>
+                <td>{formatDate(row.sold_at)}</td>
                 <td>
                   {row.product_name ?? "Unmatched product"}
                   {row.category_name && <span className="hint"> ({row.category_name})</span>}
@@ -206,7 +216,7 @@ export default function TransactionsPage() {
           <tbody>
             {repairs.items.map((row) => (
               <tr key={row.id}>
-                <td>{row.completed_at ? new Date(row.completed_at).toLocaleDateString() : "—"}</td>
+                <td>{row.completed_at ? formatDate(row.completed_at) : "—"}</td>
                 <td>{row.description ?? "—"}</td>
                 <td>{row.price_charged !== null ? formatMoney(row.price_charged) : "—"}</td>
                 <td>{row.labour_cost !== null ? formatMoney(row.labour_cost) : "—"}</td>

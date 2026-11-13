@@ -44,7 +44,13 @@ class Settings(BaseSettings):
     # question than a plain instruct model; fine for testing, but prefer
     # a non-reasoning model (Haiku/GPT-4o-mini/Gemini Flash-class) for a
     # real launch, per the stated E21/E22 cost goal.
-    openrouter_model: str = "openai/gpt-oss-20b:free"
+    # ORLA-91 (13/11/2026): openai/gpt-oss-20b:free no longer exists on
+    # OpenRouter (404 "unavailable for free"), so every call fell through
+    # to the fallbacks. Test default is now the model that actually answered
+    # them. Live launch config (decided 13/11/2026 from the eval):
+    # google/gemma-4-31b-it primary, anthropic/claude-haiku-5.5 fallback,
+    # openrouter_require_zdr=true.
+    openrouter_model: str = "cohere/north-mini-code:free"
     # Comma-separated OpenRouter model ids tried, in order, if the primary
     # model fails or times out (05_AI_Architecture.md's "fallback
     # behaviour"). Capped at 2 fallbacks (3 models total, including the
@@ -71,7 +77,7 @@ class Settings(BaseSettings):
     # return clean, valid JSON under both restrictions. Re-verify before
     # relying on this list long-term — OpenRouter's free catalog, and
     # which providers permit data_collection=deny, both change over time.
-    openrouter_fallback_models: str = "google/gemma-4-31b-it:free,cohere/north-mini-code:free"
+    openrouter_fallback_models: str = "google/gemma-4-31b-it:free"
     # PR-5.5 — per-tenant AI usage limit, enforced server-side. Raised
     # from 30 to 200 for the testing/pilot phase, per direct instruction:
     # the configured model is the `:free` OpenRouter tier (see
@@ -86,8 +92,48 @@ class Settings(BaseSettings):
     # tiered-downgrade design (cap tied to a fraction of the €80/month
     # plan's token budget, falling back to a free model past a usage
     # threshold rather than hard-blocking further questions).
-    ai_daily_request_limit_per_business: int = 200
+    # ORLA-91: lowered from 200 to 100 AI calls a day — about 50 questions,
+    # since a question is a classify call plus an explain call (questions
+    # answered with no AI at all don't count).
+    ai_daily_request_limit_per_business: int = 100
+    # ORLA-91: monthly AI cost cap per business, compared with the summed
+    # per-call cost OpenRouter reports (in USD; a dollar is worth less than a
+    # euro, so this errs on the safe side). €3 is the cost analysis's ceiling
+    # for AI per customer (08_Cost_Analysis.md, founder one-pager).
+    ai_monthly_cost_cap_eur: float = 3.0
     ai_request_timeout_seconds: int = 20
+    # ORLA-91: route only to OpenRouter endpoints with zero data retention
+    # (provider.zdr) — stricter than data_collection="deny", which only
+    # rules out training/retention for training. Off by default because
+    # the free test models have no ZDR endpoints; turn it on with the paid
+    # launch model.
+    openrouter_require_zdr: bool = False
+    # Output-token ceilings per AI call (hidden reasoning counts against
+    # them). Ceilings, not costs: a call is billed for what it writes. Set
+    # per model from the eval (scripts/eval_ask_orla.py) — too low and a
+    # reasoning model's answer is cut off or empty (ERNIE 5.5 at 800).
+    ai_classify_max_tokens: int = 4000
+    ai_explain_max_tokens: int = 2500
+    ai_multi_part_explain_max_tokens: int = 4000
+    ai_support_max_tokens: int = 1400
+    # "low" | "medium" | "high", or "" to send nothing. Sent as OpenRouter's
+    # reasoning.effort. Not safe as one global value — measured (ORLA-91):
+    # "low" removes Haiku 5.5's hidden reasoning and halves its output, but
+    # switches reasoning ON for Gemma 4 31B (+400 tokens). So the default is
+    # off and models opt in through ai_model_overrides.
+    ai_reasoning_effort: str = ""
+    # Per-model overrides of the AI settings above, keyed by the PRIMARY
+    # model (openrouter_model): one request carries one value for its whole
+    # fallback chain, so the primary decides. JSON object; allowed keys:
+    # reasoning_effort, classify_max_tokens, explain_max_tokens,
+    # multi_part_explain_max_tokens, support_max_tokens.
+    ai_model_overrides: str = (
+        '{"anthropic/claude-haiku-5.5": {"reasoning_effort": "low"}, '
+        '"cohere/north-mini-code:free": {"reasoning_effort": "low"}}'
+    )
+    # Mark the static part of each system prompt as a cache breakpoint
+    # (see app/ai/client.py::system_message).
+    ai_prompt_cache_breakpoints: bool = True
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
@@ -115,6 +161,12 @@ class Settings(BaseSettings):
     # that test address, so a real deployment is never silently sending
     # from an address nobody configured on purpose.
     resend_from_email: str = ""
+    # Where "Contact support" requests (PR-5.7) are emailed for the ORLA
+    # team. Empty by default: requests are still recorded (support_requests
+    # table + owner notification) and read with scripts/support_requests.py;
+    # setting this together with the two Resend values above turns the
+    # operator email on with no other change.
+    support_inbox_email: str = ""
 
     # Address validation + geocoding for app/geocoding/client.py — empty by
     # default (never committed), matching every other optional provider key

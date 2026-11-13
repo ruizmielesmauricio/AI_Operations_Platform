@@ -9,6 +9,7 @@ import { AppNav } from "@/components/AppNav";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useBusinessSelector } from "@/lib/hooks/useBusinessSelector";
 import { useRequireSession } from "@/lib/supabase/useRequireSession";
+import { formatDateTime } from "@/lib/format";
 import type {
   ConfirmMappingResponse,
   DetectMappingResponse,
@@ -202,6 +203,12 @@ export default function UploadsPage() {
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [freshness, setFreshness] = useState<UploadFreshnessEntry[]>([]);
   const [entityType, setEntityType] = useState(ENTITY_TYPES[0].value);
+  // Repairs uploads only for business types that track repairs.
+  const supportsRepairs = businesses.find((b) => b.id === businessId)?.supports_repairs ?? false;
+  const entityTypeOptions = ENTITY_TYPES.filter((t) => t.value !== "repairs" || supportsRepairs);
+  useEffect(() => {
+    if (entityType === "repairs" && !supportsRepairs) setEntityType(ENTITY_TYPES[0].value);
+  }, [entityType, supportsRepairs]);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -301,7 +308,8 @@ export default function UploadsPage() {
     });
   }, [businesses]);
 
-  const subscribedBusinesses = businesses.filter((b) => subscriptions[b.id]?.status === "active");
+  // Paid or free-pilot businesses can upload (SubscriptionStatus.access).
+  const subscribedBusinesses = businesses.filter((b) => subscriptions[b.id]?.access != null);
 
   // Once subscriptions are known, a selection that isn't actually
   // subscribed — the default-to-first-business pick from
@@ -695,7 +703,7 @@ export default function UploadsPage() {
             <label htmlFor="entity-type">What does this file contain?</label>
             <br />
             <select id="entity-type" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
-              {ENTITY_TYPES.map((t) => (
+              {entityTypeOptions.map((t) => (
                 <option key={t.value} value={t.value}>
                   {t.label}
                 </option>
@@ -856,7 +864,7 @@ export default function UploadsPage() {
                     {draft.status === "needs_review" ? "needs review" : draft.status}
                     {draft.status === "failed" && draft.failure_reason ? ` (${draft.failure_reason})` : ""}
                   </span>{" "}
-                  ({new Date(draft.created_at).toLocaleString()})
+                  ({formatDateTime(draft.created_at)})
                 </div>
                 <div className="upload-record__actions">
                   {draft.status === "needs_review" && (
@@ -890,7 +898,7 @@ export default function UploadsPage() {
                 <div className="upload-record__details">
                   {u.original_filename} —{" "}
                   <span className={u.status === "imported" ? "status-ok" : ""}>{u.status}</span>{" "}
-                  ({new Date(u.created_at).toLocaleString()})
+                  ({formatDateTime(u.created_at)})
                 </div>
                 <div className="upload-record__actions">
                 {u.status === "uploaded" && !mappingUploadId && (
@@ -928,7 +936,7 @@ export default function UploadsPage() {
                 {record && record.status === "reversed" && (
                   <div className="status-warn">
                     Reversed
-                    {record.reversed_at ? ` on ${new Date(record.reversed_at).toLocaleString()}` : ""}
+                    {record.reversed_at ? ` on ${formatDateTime(record.reversed_at)}` : ""}
                   </div>
                 )}
                 {rowError && <div className="status-error">{rowError}</div>}
