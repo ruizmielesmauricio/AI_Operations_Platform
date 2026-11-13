@@ -283,8 +283,10 @@ def _revenue_previous(env: FactEnv, period: Any = "recent", also_calendar_month:
 @_resolver("revenue_change_pct")
 def _revenue_change_pct(env: FactEnv, period: Any = "recent") -> list[Fact]:
     start, end = local_dates(env, period)
-    change = _financial_app(env, None, start, end).revenue.change_pct
-    return [Fact(label="revenue change %", number=abs(change))]
+    revenue = _financial_app(env, None, start, end).revenue
+    # "By how much?" is answered correctly by the % or by the € difference.
+    amount = abs(revenue.current - revenue.previous)
+    return [Fact(label="revenue change (% or €)", number=abs(revenue.change_pct), alternatives=(amount,))]
 
 
 @_resolver("gross_margin_pct")

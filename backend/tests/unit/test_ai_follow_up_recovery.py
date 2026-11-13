@@ -102,3 +102,19 @@ def test_completed_week_or_month_needs_a_week_or_month_in_the_question():
     assert _drop_unasked_fixed_period(month, "And the one before?", "What was revenue last month?") is month
     explicit = ClassifyResult(intent="financial_performance", period="explicit_date", start_date=date(2026, 10, 1))
     assert _drop_unasked_fixed_period(explicit, "Revenue on 1 October?", None) is explicit
+
+
+def test_month_name_counts_as_asking_for_a_month():
+    from app.ai.service import _drop_unasked_fixed_period
+
+    month = ClassifyResult(intent="category_breakdown", period="last_completed_month")
+    asked = "Which category did I spend the most on in October 2026?"
+    assert _drop_unasked_fixed_period(month, asked, None) is month
+
+
+def test_classify_prompt_lists_the_last_seven_days_with_weekdays():
+    from app.ai.service import _recent_days_text
+
+    text = _recent_days_text(date(2026, 11, 13))
+    assert text.startswith("Thursday 2026-11-12, Wednesday 2026-11-11, Tuesday 2026-11-10")
+    assert text.endswith("Friday 2026-11-06")

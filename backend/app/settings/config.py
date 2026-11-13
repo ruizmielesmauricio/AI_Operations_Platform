@@ -88,6 +88,20 @@ class Settings(BaseSettings):
     # threshold rather than hard-blocking further questions).
     ai_daily_request_limit_per_business: int = 200
     ai_request_timeout_seconds: int = 20
+    # ORLA-91: route only to OpenRouter endpoints with zero data retention
+    # (provider.zdr) — stricter than data_collection="deny", which only
+    # rules out training/retention for training. Off by default because
+    # the free test models have no ZDR endpoints; turn it on with the paid
+    # launch model.
+    openrouter_require_zdr: bool = False
+    # Output-token ceilings per AI call (hidden reasoning counts against
+    # them). Ceilings, not costs: a call is billed for what it writes. Set
+    # per model from the eval (scripts/eval_ask_orla.py) — too low and a
+    # reasoning model's answer is cut off or empty (ERNIE 5.5 at 800).
+    ai_classify_max_tokens: int = 4000
+    ai_explain_max_tokens: int = 2500
+    ai_multi_part_explain_max_tokens: int = 4000
+    ai_support_max_tokens: int = 1400
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

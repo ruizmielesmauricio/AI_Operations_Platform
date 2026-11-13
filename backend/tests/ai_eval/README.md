@@ -24,6 +24,18 @@ docker compose exec backend python scripts/eval_ask_orla.py --only fin-02,fu-01
 docker compose exec backend python scripts/eval_ask_orla.py --failed-from tests/ai_eval/reports/<run>.json
 ```
 
+To evaluate a specific model exactly as live ORLA would call it (one model,
+no fallbacks, zero data retention, no automatic re-ask), override the
+settings for that run:
+
+```bash
+docker compose exec -e OPENROUTER_MODEL=google/gemma-4-31b-it -e OPENROUTER_FALLBACK_MODELS= \
+  -e OPENROUTER_REQUIRE_ZDR=true backend python scripts/eval_ask_orla.py --label live-gemma --retries 0 --pace 1
+```
+
+`--rescore <run>.json` re-scores a saved run's answers with the current
+scorer and facts, with zero AI calls.
+
 A full run is ~210 AI calls and takes about an hour on the free model. The
 runner paces calls (`--pace`, default 3.5s) for the free tier's per-minute
 limit, retries a question once if the provider is unavailable, and does

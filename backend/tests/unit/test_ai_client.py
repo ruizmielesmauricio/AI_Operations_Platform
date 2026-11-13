@@ -143,3 +143,21 @@ def test_chat_completion_never_sends_more_models_than_openrouter_allows(monkeypa
     client.chat_completion(messages=[{"role": "user", "content": "test"}])
 
     assert len(captured_bodies[0]["models"]) == client._MAX_MODELS_PER_REQUEST
+
+
+def test_zero_data_retention_is_requested_only_when_configured(monkeypatch):
+    # ORLA-91: live ORLA should route only to endpoints that keep nothing.
+    captured_bodies = []
+
+    def _fake_post(*args, **kwargs):
+        captured_bodies.append(kwargs["json"])
+        return _response(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    client.chat_completion(messages=[{"role": "user", "content": "test"}])
+    zdr_settings = client.get_settings().model_copy(update={"openrouter_require_zdr": True})
+    monkeypatch.setattr(client, "get_settings", lambda: zdr_settings)
+    client.chat_completion(messages=[{"role": "user", "content": "test"}])
+
+    assert "zdr" not in captured_bodies[0]["provider"]
+    assert captured_bodies[1]["provider"] == {"data_collection": "deny", "zdr": True}

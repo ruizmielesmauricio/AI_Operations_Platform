@@ -91,6 +91,9 @@ def chat_completion(
         # a stated approximation rather than a real currency conversion.
         "usage": {"include": True},
     }
+    if settings.openrouter_require_zdr:
+        # Zero data retention: only endpoints that keep nothing (ORLA-91).
+        body["provider"]["zdr"] = True
     if len(models) > 1:
         # OpenRouter tries these in order if the first fails/times out —
         # free fallback behaviour, no custom retry logic needed here.

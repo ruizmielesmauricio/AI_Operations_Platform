@@ -33,6 +33,7 @@ from app.ai.exceptions import AIProviderError
 from app.ai.support_guard import parse_support_output, verify_support_answer
 from app.repositories.ai_request import AIRequestRepository
 from app.support.knowledge_base import RetrievedPassage, get_knowledge_base, is_confident
+from app.settings.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +123,37 @@ def retrieval_query(question: str, *, previous_question: str | None, previous_in
     retrieval query — only when the previous turn was itself a help answer,
     so a business-data exchange never leaks into help retrieval."""
     if previous_intent == INTENT and previous_question and len(question.split()) <= 8:
-        return f"{previous_question} {question}"
+        swapped = _same_action_new_subject(question, previous_question)
+        return swapped if swapped is not None else f"{previous_question} {question}"
     return question
+
+
+# "And what about repairs?" after "How do I upload my sales?" asks the same
+# action about a new subject. Found by the ORLA-91 model comparison: adding
+# the whole previous question let its subject ("upload sales", a key
+# phrase) outrank the new one, so the repairs steps never reached the model
+# and it rightly refused.
+_NEW_SUBJECT_PATTERN = re.compile(
+    r"^\s*(?:and\s+)?(?:what|how)\s+about\s+(?P<subject>.+?)\s*[?.!]*\s*$|^\s*(?:and\s+)?(?:same\s+)?for\s+(?P<subject2>.+?)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_ACTION_WORDS = frozenset(
+    {
+        "upload", "import", "export", "undo", "reverse", "delete", "remove", "add", "invite", "change", "edit",
+        "update", "download", "generate", "set", "connect", "cancel", "map", "reimport", "re-import",
+    }
+)
+
+
+def _same_action_new_subject(question: str, previous_question: str) -> str | None:
+    match = _NEW_SUBJECT_PATTERN.match(question)
+    if match is None:
+        return None
+    subject = match.group("subject") or match.group("subject2")
+    actions = [w for w in re.findall(r"[a-z-]+", previous_question.lower()) if w in _ACTION_WORDS]
+    if not subject or not actions:
+        return None
+    return f"how do I {' '.join(dict.fromkeys(actions))} {subject}"
 
 
 def retrieve(query: str) -> list[RetrievedPassage]:
@@ -202,7 +232,8 @@ def answer_from_help(
         # used ~480 reasoning + ~70 visible tokens; 1400 leaves room for a
         # longer answer without silently truncating to no content.
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=1400, temperature=0.0
+            messages=messages, response_format={"type": "json_object"}, max_tokens=get_settings().ai_support_max_tokens,
+            temperature=0.0,
         )
     except AIProviderError as exc:
         logger.warning("AI support explain call failed business=%s error=%s", business_id, exc)

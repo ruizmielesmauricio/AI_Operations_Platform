@@ -123,3 +123,25 @@ def test_honest_no_data_phrasings_count_as_no_data():
     assert says_no_data("I'm sorry, but the supplied data doesn't contain any information about rent payments.")
     assert says_no_data("Nothing weather-notable stands out for the week ahead right now.")
     assert not says_no_data("Revenue was strong last month.")
+
+
+def test_typographic_spaces_hyphens_and_apostrophes_score_like_plain_text():
+    answer = "The Tyre Gravel 700x40 has the lowest margin at ‑12.0 %. I can’t confirm €99,999."
+    score = _score(
+        answer, expect={"forbid_numbers": ["99999"]},
+        facts=[Fact(label="worst", text="Tyre Gravel 700x40", number=Decimal("12.0"))],
+        context={"name": "Tyre Gravel 700x40", "pct": "-12.0"}, question="was it 99,999?",
+    )
+    assert score.checks["facts"] and score.checks["forbidden"], score.reasons
+
+
+def test_quantities_in_words_and_multiplication_signs_match_facts_but_not_grounding():
+    facts = [
+        Fact(label="helmets", text="Pro Helmet Aero", number=Decimal("19")),
+        Fact(label="tube", text="Inner Tube 29x2.2", number=Decimal("118")),
+    ]
+    score = _score(
+        "You ordered nineteen Pro Helmet Aero. The Inner Tube 29×2.2 sold 118 units.",
+        facts=facts, context={"a": 19, "b": 118, "name": "Inner Tube 29x2.2"},
+    )
+    assert score.checks["facts"], score.reasons

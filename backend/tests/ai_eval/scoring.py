@@ -52,6 +52,36 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 _REPEATED_SENTENCE = re.compile(r"(\S.{9,299}?[.!?])\s*\1")
 
 
+_SPACE_VARIANTS = re.compile("[     ]")
+_HYPHEN_VARIANTS = re.compile("[‐‑−]")
+_APOSTROPHE_VARIANTS = re.compile("[‘’]")
+
+
+def normalize_text(text: str) -> str:
+    """Typographic variants some models emit (gpt-oss writes "Tyre Gravel"
+    with narrow no-break spaces and non-breaking hyphens; others use curly
+    apostrophes) read the same to a person, so they must score the same."""
+    text = _SPACE_VARIANTS.sub(" ", text)
+    text = _HYPHEN_VARIANTS.sub("-", text)
+    text = re.sub(r"(?<=\d)×(?=\d)", "x", text)  # "29×2.2" is the name "29x2.2"
+    return _APOSTROPHE_VARIANTS.sub("'", text)
+
+
+_NUMBER_WORDS = {
+    w: str(i) for i, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+        "seventeen eighteen nineteen twenty".split()
+    )
+}
+_NUMBER_WORD_PATTERN = re.compile(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b", re.IGNORECASE)
+
+
+def _with_digits(text: str) -> str:
+    """For fact matching only (never grounding): "nineteen Pro Helmet Aero"
+    states the quantity 19 as plainly as the digits do."""
+    return _NUMBER_WORD_PATTERN.sub(lambda m: _NUMBER_WORDS[m.group(1).lower()], text)
+
+
 @dataclass
 class TurnScore:
     checks: dict[str, bool] = field(default_factory=dict)
@@ -160,6 +190,7 @@ def score_turn(
 ) -> TurnScore:
     score = TurnScore()
     behaviour = expect.get("behaviour", "answer")
+    answer = normalize_text(answer)
 
     allowed = expect.get("intent")
     if allowed:
@@ -192,7 +223,7 @@ def score_turn(
 
     for fact in facts:
         score.record(
-            "facts", fact_present(answer, fact),
+            "facts", fact_present(_with_digits(answer), fact),
             f"missing {fact.label}" + (f" ({fact.text}" if fact.text else " (") + (f" {fact.number})" if fact.number is not None else ")"),
         )
 

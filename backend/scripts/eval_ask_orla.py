@@ -182,8 +182,49 @@ def _turns(case: dict) -> list[dict]:
     return [{k: case[k] for k in ("question", "expect", "facts", "all_branches") if k in case}]
 
 
+def rescore(path: Path, dataset: dict) -> int:
+    """Re-scores a saved run's answers with the current scorer and facts —
+    zero AI calls. The grounded check needs the contexts the run saw, which
+    aren't saved, so its stored result is kept as-is."""
+    report = json.loads(path.read_text(encoding="utf-8"))
+    specs = {c["id"]: c for c in dataset["cases"]}
+    with SessionLocal() as db:
+        business, _user_id, group = _resolve_owner(db, dataset["business"])
+        env = FactEnv(db=db, business=business, group=group, now=datetime.fromisoformat(report["run"]["as_of"]))
+        for case in report["cases"]:
+            if case["status"] == "ERROR" or case["id"] not in specs:
+                continue
+            previous_answer = None
+            for turn, spec in zip(case["turns"], _turns(specs[case["id"]])):
+                expect = dict(spec.get("expect") or {})
+                facts = [f for s in spec.get("facts", []) for f in resolve_fact(env, s)]
+                forbid = [str(f.number) for s in expect.pop("forbid_facts", []) for f in resolve_fact(env, s)]
+                expect["forbid_numbers"] = [*expect.get("forbid_numbers", []), *forbid]
+                score = score_turn(
+                    expect=expect, facts=facts, answer=turn["answer"], intents=tuple(turn["intents"]),
+                    help_answered=turn["help_answered"], handoff_available=turn.get("handoff_available", False),
+                    grounding_context={}, question=turn["question"], previous_answer=previous_answer,
+                    ai_calls=len(turn["ai_calls"]),
+                )
+                score.checks["grounded"] = turn["checks"].get("grounded", True)
+                score.reasons = [r for r in score.reasons if not r.startswith("grounded:")]
+                turn.update(checks=score.checks, reasons=score.reasons, passed=score.passed)
+                previous_answer = turn["answer"]
+            case["status"] = "PASS" if all(t["passed"] for t in case["turns"]) else "FAIL"
+    report["run"]["label"] = f"{report['run']['label']}-rescored"
+    report["run"]["fact_integrity_issues"] = env.integrity_issues
+    stem = path.stem + "-rescored"
+    (path.parent / f"{stem}.json").write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
+    (path.parent / f"{stem}.md").write_text(render_markdown(report), encoding="utf-8")
+    passed = sum(c["status"] == "PASS" for c in report["cases"])
+    print(f"{passed}/{len(report['cases'])} passed after re-scoring — report: {stem}.md")
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     dataset = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+    if args.rescore:
+        return rescore(Path(args.rescore), dataset)
     cases = dataset["cases"]
     if args.only:
         wanted = set(args.only.split(","))
@@ -387,6 +428,7 @@ def main() -> None:
     parser.add_argument("--retry-wait", type=float, default=20.0)
     parser.add_argument("--dry-run", action="store_true", help="resolve expected facts only; no AI calls")
     parser.add_argument("--log-usage", action="store_true", help="count eval calls against the real daily cap/log")
+    parser.add_argument("--rescore", help="a previous run's JSON report — re-score its saved answers, no AI calls")
     raise SystemExit(run(parser.parse_args()))
 
 

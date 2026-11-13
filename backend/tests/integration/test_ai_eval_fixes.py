@@ -302,3 +302,34 @@ def test_empty_classify_reply_to_a_follow_up_is_still_recovered(db_session, busi
     )
 
     assert result.intent == "financial_performance"
+
+
+def test_invoice_reference_classified_as_a_repair_is_answered_as_the_purchase(db_session, business_id, monkeypatch):
+    product = Product(business_id=business_id, sku=None, name="Inner Tube")
+    db_session.add(product)
+    db_session.commit()
+    InventoryMovementRepository(db_session).create(
+        business_id=business_id, product_id=product.id, quantity_delta=100, reason="purchase",
+        purchase_reference="INV-2026-1188", event_date=_NOW.date(),
+    )
+    db_session.commit()
+
+    contexts = _capture_explain_context(
+        monkeypatch, {"intent": "repair_lookup", "search_term": "INV-2026-1188"}, "Invoice INV-2026-1188: 100 Inner Tube."
+    )
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="What was on invoice INV-2026-1188?", now=_NOW
+    )
+
+    assert result.intent == "purchase_lookup"
+    assert contexts[0]["quantity_received"] == 100
+
+
+def test_a_reference_found_nowhere_keeps_the_classified_lookup(db_session, business_id, monkeypatch):
+    _capture_explain_context(monkeypatch, {"intent": "repair_lookup", "search_term": "JOB-0000"}, "unused")
+    result = answer_question(
+        db_session, business_id=business_id, user_id="user-1", question="How much did JOB-0000 cost?", now=_NOW
+    )
+
+    assert result.intent == "repair_lookup"
+    assert "couldn't find anything" in result.answer

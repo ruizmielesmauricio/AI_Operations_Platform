@@ -259,3 +259,17 @@ def test_business_part_may_cite_a_number_from_the_help_part(db_session, business
 
     assert result.grounded is True
     assert "7 days" in result.answer
+
+
+def test_what_about_follow_up_keeps_the_action_and_switches_the_subject():
+    # ORLA-91: "upload sales" outranked repairs, so the repairs steps never
+    # reached the model.
+    query = support_lane.retrieval_query(
+        "And what about repairs?", previous_question="How do I upload my sales?", previous_intent="product_help"
+    )
+    assert query == "how do I upload repairs"
+    assert support_lane.retrieve(query)[0].article_slug == "upload-repairs"
+    # A follow-up that isn't "what about X" still uses the whole previous question.
+    assert support_lane.retrieval_query(
+        "and how do I reverse it?", previous_question="How do I import my purchases file?", previous_intent="product_help"
+    ) == "How do I import my purchases file? and how do I reverse it?"

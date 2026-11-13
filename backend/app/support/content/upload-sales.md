@@ -3,11 +3,19 @@ slug: upload-sales
 title: Upload your sales
 category: Uploading data
 order: 11
-summary: The columns ORLA looks for in a sales export, how returns, VAT and order numbers are handled, and why rows get skipped.
+summary: How to upload a sales export, the columns ORLA looks for, how returns, VAT and order numbers are handled, and why rows get skipped.
 keywords: [sales, sales export, sales file, transactions, till, pos, receipts, orders, revenue, returns, refunds, negative quantity, vat, tax, order number, receipt number, cost price, duplicate sales, upload sales]
-version: 1
+version: 2
 updated: 2026-11-13
 ---
+
+## How to upload your sales
+
+1. Export your sales or transactions from your till, POS or spreadsheet.
+2. Open Upload data and choose "Sales transactions" under "What does this file contain?".
+3. Select your file and select "Upload".
+4. Check the column matches under "Confirm what each column means" and select "Confirm mapping".
+5. Under "Past uploads", select "Run import".
 
 ## What a sales file needs
 

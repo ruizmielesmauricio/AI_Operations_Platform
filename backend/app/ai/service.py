@@ -144,8 +144,7 @@ _WEATHER_RANK_DIRECTIONS = frozenset({"top", "bottom", "both"})
 # max_tokens comment). The *explain* call gets the full previous_answer,
 # uncapped here — it has a bigger budget and benefits from full fidelity.
 _CLASSIFY_PREVIOUS_ANSWER_MAX_CHARS = 500
-# See _classify_intent's max_tokens comment.
-_CLASSIFY_MAX_TOKENS = 4000
+
 
 _LANE = "business_qa"
 _PROVIDER = "openrouter"
@@ -649,7 +648,11 @@ def _keep_previous_period(classify: ClassifyResult, question: str, previous_ques
     return replace(classify, period=period, start_date=None, end_date=None)
 
 
-_WEEK_OR_MONTH_PATTERN = re.compile(r"\b(?:week|weeks|weekly|month|months|monthly)\b", re.IGNORECASE)
+_WEEK_OR_MONTH_PATTERN = re.compile(
+    r"\b(?:week|weeks|weekly|month|months|monthly|january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+    re.IGNORECASE,
+)
 
 
 def _drop_unasked_fixed_period(
@@ -883,6 +886,10 @@ def _build_part(
             intent=intent, resolved_answer=pointer.answer, help_articles=pointer.articles, handoff_available=True,
             help_answered=pointer.answered,
         )
+
+    if intent in ("purchase_lookup", "repair_lookup"):
+        intent = _lookup_kind_with_matches(db, business, intent, classify_item)
+        classify_item = replace(classify_item, intent=intent)
 
     if intent in ("product_lookup", "purchase_lookup", "repair_lookup"):
         context, early_result = _dispatch_lookup(
@@ -1695,6 +1702,34 @@ def _dispatch_lookup(
     return result.matches[0], None
 
 
+def _lookup_has_matches(db: Session, business: Business, intent: str, classify: ClassifyResult) -> bool:
+    if intent == "purchase_lookup":
+        result = find_purchases(
+            db, business_id=business.id, search_term=classify.search_term,
+            start_date=classify.start_date, end_date=classify.end_date,
+        )
+    else:
+        result = find_repairs(
+            db, business_id=business.id, business_timezone=business.timezone, search_term=classify.search_term,
+            start_date=classify.start_date, end_date=classify.end_date,
+        )
+    return bool(result.match_labels) or result.resolved_rows is not None
+
+
+def _lookup_kind_with_matches(db: Session, business: Business, intent: str, classify: ClassifyResult) -> str:
+    """Found by the ORLA-91 model comparison: "what was on invoice
+    INV-2026-1188?" (a supplier invoice — a purchase) was classified as a
+    repair lookup by two of five models (the classify prompt also lists
+    "invoice reference" for repairs) and answered "couldn't find anything".
+    A reference that matches nothing of the classified kind but does match
+    the other kind is that other kind — decided by the data, never guessed.
+    Costs one extra DB query, only when the first lookup found nothing."""
+    if not classify.search_term or _lookup_has_matches(db, business, intent, classify):
+        return intent
+    other = "purchase_lookup" if intent == "repair_lookup" else "repair_lookup"
+    return other if _lookup_has_matches(db, business, other, classify) else intent
+
+
 def _product_sales_in_period(
     db: Session, business: Business, product_id: str, classify: ClassifyResult, now: datetime
 ) -> dict:
@@ -2192,7 +2227,8 @@ _CLASSIFY_SYSTEM_PROMPT_TEMPLATE = (
     "You are an intent classifier for a small business's operations assistant. "
     "Today's date is {today} ({weekday}), in the business's own timezone — use it to resolve any "
     'relative or named date in the question (e.g. "the 24th of June" means the most recent such date '
-    "on or before today, unless a year is stated; \"last Tuesday\"/\"yesterday\" resolve the same way).\n"
+    "on or before today, unless a year is stated; \"last Tuesday\"/\"yesterday\" resolve the same way). "
+    "The previous seven days were: {recent_days}.\n"
     "Read the user's question and respond with ONLY a JSON object (no prose, no markdown fences) of the exact "
     'shape {{"intents": [ ... ]}} — a list of 1 to 3 objects, one per distinct question actually being asked. '
     "Almost every question is a single ask — return a one-element list unless the question genuinely contains "
@@ -2310,6 +2346,15 @@ _CLASSIFY_JSON_REMINDER = (
 )
 
 
+def _recent_days_text(today: date) -> str:
+    """'Thursday 2026-11-12, Wednesday 2026-11-11, ...' — the classify
+    model is given the last seven dates with their weekdays rather than
+    working them out (ORLA-91 model comparison: gpt-oss-120b resolved "last
+    Tuesday" to Monday 9 Nov). About 60 extra prompt tokens."""
+    days = [today - timedelta(days=offset) for offset in range(1, 8)]
+    return ", ".join(f"{d:%A} {d.isoformat()}" for d in days)
+
+
 def _today_in_timezone(business_timezone: str, now: datetime) -> date:
     return now.astimezone(ZoneInfo(business_timezone)).date()
 
@@ -2325,7 +2370,9 @@ def _classify_intent(
     _parse_intent_json for how the classify call's "intents" array gets
     validated into this."""
     today = _today_in_timezone(business_timezone, now)
-    system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(today=today.isoformat(), weekday=today.strftime("%A"))
+    system_prompt = _CLASSIFY_SYSTEM_PROMPT_TEMPLATE.format(
+        today=today.isoformat(), weekday=today.strftime("%A"), recent_days=_recent_days_text(today)
+    )
     messages = [{"role": "system", "content": system_prompt}]
     if previous_question and previous_answer:
         # Last-exchange-only memory, given as real prior turns rather than
@@ -2378,7 +2425,7 @@ def _classify_intent(
         # one call (OpenRouter's reasoning-effort control is ignored by
         # this model — tested live).
         response = client.chat_completion(
-            messages=messages, response_format={"type": "json_object"}, max_tokens=_CLASSIFY_MAX_TOKENS,
+            messages=messages, response_format={"type": "json_object"}, max_tokens=get_settings().ai_classify_max_tokens,
             temperature=0.0,
         )
     except AIProviderError as exc:
@@ -2704,9 +2751,14 @@ def _generate_answer(
         # digits of truncating outright, not a comfortable margin. Raised
         # to 1600 for real headroom rather than leaving it at a value one
         # slightly longer answer away from silently cutting a part off
-        # mid-word.
+        # mid-word. Now settings (ORLA-91): 800 left ERNIE 5.5 Flash no room
+        # after its reasoning — empty or cut-off answers on 12 of 107
+        # eval questions.
+        settings = get_settings()
         response = client.chat_completion(
-            messages=messages, max_tokens=1600 if multi_part else 800, temperature=0.2
+            messages=messages,
+            max_tokens=settings.ai_multi_part_explain_max_tokens if multi_part else settings.ai_explain_max_tokens,
+            temperature=0.2,
         )
     except AIProviderError as exc:
         logger.warning("AI explain call failed business=%s error=%s", business_id, exc)
